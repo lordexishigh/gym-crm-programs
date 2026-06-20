@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: alpha_crm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
+      # Build-time placeholders (auth wiring lands in mvp-auth).
+      SUPABASE_JWT_SECRET: ci-test-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run migrations (fresh database)
+        run: npm run migrate
+
+      - name: Run migrations again (existing database — must be idempotent)
+        run: npm run migrate
+
+      - name: Build
+        run: npm run build
+
+      - name: Test (RLS isolation smoke tests + schema checks)
+        run: npm test

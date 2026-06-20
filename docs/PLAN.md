@@ -1,0 +1,232 @@
+# Build Plan
+
+## MVP — Deployed as one hosted Next.js application, a trainer at a gym can log in, add a member, build a training program, assign it to that member, and the invited member can log in on their phone and read it — with all data strictly isolated per gym by Postgres RLS.
+
+**Success criteria:**
+
+- The application is deployed to a hosted environment with secrets/JWT signing keys configured and database migrations run automatically.
+- tenant_id and user identity are derived server-side from the signed JWT and never trusted from the browser.
+- Postgres Row Level Security makes cross-tenant and cross-member reads/writes impossible even with a forged client request, verified by smoke-level isolation tests.
+- A trainer can authenticate, create a member, send an invite email via a provisioned transactional email provider, build a program (exercises with sets/reps/rest/notes), and assign it within their tenant.
+- An invited member can log in on a mobile browser and see exactly the program assigned to them, and nothing else.
+
+### mvp-platform-foundation — Platform foundation: deployment, DB schema, and RLS tenant isolation
+
+The thin, rock-solid foundation everything builds on. Stand up the Next.js App Router project, deploy it to a hosted environment with secret/JWT-signing-key config and automated database migrations on a basic CI pipeline, define the PostgreSQL 16 schema for the core tenanted models, and write the Row Level Security policies that enforce tenant and member isolation at the DB layer. Includes smoke-level isolation tests so the security keystone is verified from day one.
+
+- **mvp-platform-foundation-001** Bootstrap Next.js App Router project with Tailwind and TypeScript
+  - [ ] App builds and serves a responsive landing/login shell.
+  - [ ] Tailwind configured with mobile-first breakpoints.
+  - [ ] Project structure supports Route Handlers and Server Actions.
+- **mvp-platform-foundation-002** Deployment, environment/secret config, and automated migrations with basic CI
+  - [ ] The app deploys to a hosted URL from the main branch.
+  - [ ] Secrets and JWT signing keys are stored in the environment, not in source.
+  - [ ] Database migrations run automatically on deploy against a fresh and an existing database.
+  - [ ] Basic CI builds the app and runs the test suite on each change.
+- **mvp-platform-foundation-003** Create PostgreSQL 16 schema for core tenanted models
+  - [ ] Migration creates all seven core tables with tenant_id columns and FKs.
+  - [ ] Indexes exist on tenant_id and on assignment lookup columns.
+  - [ ] Schema applies cleanly from a fresh database.
+- **mvp-platform-foundation-004** Implement Row Level Security policies for tenant and member isolation
+  - [ ] RLS is enabled on every tenanted table.
+  - [ ] A query made with gym A's context cannot read or write gym B's rows.
+  - [ ] A member's context cannot read another member's rows.
+  - [ ] Policies are enforced at the DB layer regardless of application code.
+- **mvp-platform-foundation-005** RLS isolation smoke tests
+  - [ ] A test asserts a cross-tenant read of another gym's rows returns nothing / is rejected.
+  - [ ] A test asserts a cross-member read of another member's program is blocked.
+  - [ ] Tests run in CI and fail the build if isolation regresses.
+
+### mvp-auth — Authentication: staff and member login with server-side JWT identity _(depends on: mvp-platform-foundation)_
+
+Own the full identity surface for both audiences. Integrate Supabase Auth so a signed JWT carries user identity and tenant_id, derived server-side on every request. Build the staff sign-in flow and authenticated dashboard shell, and the member portal login/session handling so an invited member can authenticate on a mobile browser. Account *setup* from an invite lives in member-management; this task owns ongoing login and session for both roles.
+
+- **mvp-auth-001** Configure Supabase Auth and server-side JWT identity
+  - [ ] A verified JWT yields tenant_id and user id server-side.
+  - [ ] No code path accepts tenant_id from the browser/request payload.
+  - [ ] Unauthenticated requests to protected routes are rejected.
+- **mvp-auth-002** Staff login and dashboard shell
+  - [ ] A trainer can log in and reach the dashboard.
+  - [ ] Logged-in session resolves to the correct gym tenant.
+  - [ ] Logout works and protected pages redirect when unauthenticated.
+- **mvp-auth-003** Member portal login and session handling
+  - [ ] A set-up member can log into the portal on a mobile browser.
+  - [ ] The member session resolves to the correct Member row and gym tenant server-side.
+  - [ ] Logout works and portal pages redirect when unauthenticated.
+
+### mvp-member-management — Member records and invite flow _(depends on: mvp-auth)_
+
+Staff can create, view, and edit member records for their gym, and onboard members via an invite email sent through a provisioned transactional email provider (Resend). The invited member accepts the invite and sets up portal access — no public self-signup in v1.
+
+- **mvp-member-management-001** Member CRUD UI and Server Actions
+  - [ ] Staff can create, view, and edit a member record.
+  - [ ] Member list only shows the current gym's members.
+  - [ ] Validation prevents saving incomplete required fields.
+- **mvp-member-management-002** Provision transactional email provider integration (Resend)
+  - [ ] A server-side helper can send a transactional email via Resend using env-configured credentials.
+  - [ ] A test/dev send succeeds end to end to a real inbox.
+  - [ ] Send failures return an error the caller can handle rather than crashing the request.
+- **mvp-member-management-003** Generate and send invite emails
+  - [ ] Creating an invite stores a token-bound Invite row scoped to the gym and member.
+  - [ ] An invite email is delivered with a working onboarding link.
+  - [ ] Invite tokens are single-use and expirable.
+- **mvp-member-management-004** Member invite acceptance and portal account setup
+  - [ ] A valid invite token lets the member set up access; an invalid/expired one is rejected.
+  - [ ] The new member account is bound to the correct gym tenant and Member row.
+  - [ ] After setup the member can authenticate to the portal.
+
+### mvp-program — Program authoring and assignment _(depends on: mvp-member-management)_
+
+The differentiating wedge: a trainer builds a training program composed of exercises (each with sets, reps, rest, and notes) and assigns it to a specific member within their gym, creating a ProgramAssignment the member portal will surface. Authoring and assignment are kept in one cohesive task to respect the MVP task budget.
+
+- **mvp-program-001** Program and exercise data layer
+  - [ ] A program with multiple ordered exercises persists and reloads with order preserved.
+  - [ ] Each exercise persists its sets, reps, rest, and notes values exactly as entered (verified by reading them back).
+  - [ ] Programs and exercises created under gym A are not visible or writable under gym B.
+- **mvp-program-002** Program builder UI
+  - [ ] A trainer can add, edit, reorder, and remove exercises in a program.
+  - [ ] Each exercise field (sets, reps, rest, notes) is captured and shown on reload.
+  - [ ] The program saves and reloads accurately, including exercise order.
+- **mvp-program-003** Assignment data layer
+  - [ ] Assigning a program creates a ProgramAssignment row linking the program and member.
+  - [ ] Assignment is rejected server-side if the program and member belong to different gym tenants (a trainer cannot assign to a member outside their tenant).
+  - [ ] An existing assignment can be replaced or updated.
+- **mvp-program-004** Assignment UI from program or member
+  - [ ] A trainer can assign a program to a member from the dashboard.
+  - [ ] The member picker only lists the current gym's members.
+  - [ ] The current assignment is visible to staff after assigning.
+
+### mvp-member-portal — Member portal (read-only, mobile-first) _(depends on: mvp-program, mvp-auth)_
+
+An invited member logs in on their phone browser and sees the training program assigned to them, rendered read-only and mobile-first. Member login/session is provided by mvp-auth; this task surfaces the assigned program.
+
+- **mvp-member-portal-001** Member-scoped program query
+  - [ ] An authenticated member receives only their assigned program.
+  - [ ] A member cannot fetch another member's or gym's program even via crafted requests.
+  - [ ] Members with no assignment see an appropriate empty state.
+- **mvp-member-portal-002** Mobile-first read-only program view
+  - [ ] The program renders clearly on a mobile viewport.
+  - [ ] All exercise details (sets, reps, rest, notes) are shown.
+  - [ ] No editing controls are exposed to the member.
+
+## Alpha — Complete the feature set so the product is usable as a day-to-day CRM, not just a demo loop.
+
+**Success criteria:**
+
+- Staff can search, filter, and manage a full roster of members with complete records.
+- Trainers can reuse exercises and program templates rather than authoring from scratch each time.
+- A member can have multiple programs over time with visible history; trainers can edit and re-assign.
+- Invites can be resent, revoked, and their status tracked.
+
+### alpha-member-records — Full member records, search, and filtering _(depends on: mvp-member-management)_
+
+Round out the generic CRM table stakes: richer member fields (contact, status, notes), a searchable and filterable roster, and bulk-friendly list views.
+
+- **alpha-member-records-001** Extended member fields and detail view
+  - [ ] Staff can capture extended member fields.
+  - [ ] Member detail view shows all fields and edit history of status.
+  - [ ] Validation handles optional vs required fields.
+- **alpha-member-records-002** Roster search and filtering
+  - [ ] Staff can search members by name.
+  - [ ] Staff can filter by membership status.
+  - [ ] Results are paginated and tenant-scoped.
+
+### alpha-exercise-library — Exercise library and program templates _(depends on: mvp-program)_
+
+Let trainers reuse exercises from a per-gym library and save/apply program templates instead of authoring everything from scratch.
+
+- **alpha-exercise-library-001** Per-gym exercise library
+  - [ ] Trainers can add exercises to a gym library.
+  - [ ] Library exercises can be inserted into a program.
+  - [ ] Library is tenant-scoped.
+- **alpha-exercise-library-002** Save and apply program templates
+  - [ ] A program can be saved as a reusable template.
+  - [ ] A new program can be created from a template.
+  - [ ] Templates are tenant-scoped.
+
+### alpha-program-lifecycle — Multi-program management, editing, and history _(depends on: mvp-program, mvp-member-portal)_
+
+Support multiple programs per member over time, editing/re-assigning programs, and a member-visible history of past and current programs.
+
+- **alpha-program-lifecycle-001** Multiple assignments with active/archived states
+  - [ ] A member can have one active and several archived programs.
+  - [ ] Re-assigning archives the prior active program.
+  - [ ] States are enforced server-side.
+- **alpha-program-lifecycle-002** Program history in the member portal
+  - [ ] Members see their active program by default.
+  - [ ] Members can browse archived programs read-only.
+  - [ ] History remains member-scoped under RLS.
+
+### alpha-invite-lifecycle — Invite lifecycle management _(depends on: mvp-member-management)_
+
+Give staff control over invites: view status, resend, and revoke pending invites.
+
+- **alpha-invite-lifecycle-001** Invite status tracking and dashboard view
+  - [ ] Each invite shows an accurate status.
+  - [ ] Staff can see pending vs accepted invites.
+  - [ ] Status updates when an invite is accepted or expires.
+- **alpha-invite-lifecycle-002** Resend and revoke invites
+  - [ ] Resending issues a fresh email and valid token.
+  - [ ] Revoking invalidates the token immediately.
+  - [ ] Revoked/expired tokens are rejected at acceptance.
+
+## Beta — Polished, production-ready, and compliant for an EU/Cyprus launch.
+
+**Success criteria:**
+
+- GDPR data export and erasure flows exist for members and staff.
+- A comprehensive automated test suite proves cross-tenant and cross-member isolation cannot be bypassed across every table.
+- Errors are handled gracefully with monitoring; invite emails reliably deliver and pass SPF/DKIM.
+- The member portal and staff dashboard meet WCAG AA basics and perform well on mobile.
+
+### beta-gdpr — GDPR data-subject rights _(depends on: alpha-member-records)_
+
+Implement EU/GDPR compliance flows: data export and erasure for members and staff, plus consent/retention handling appropriate for the Cyprus launch.
+
+- **beta-gdpr-001** Data export for members and staff
+  - [ ] A member's data can be exported on request.
+  - [ ] Export includes only that subject's data.
+  - [ ] Export is logged for audit.
+- **beta-gdpr-002** Erasure and retention handling
+  - [ ] A data subject can be erased or anonymised.
+  - [ ] Erasure respects referential integrity without leaking other tenants' data.
+  - [ ] Retention behaviour is documented and configurable.
+
+### beta-isolation-audit — Comprehensive security and RLS isolation audit _(depends on: mvp-platform-foundation)_
+
+Extend the MVP smoke tests into a comprehensive automated suite plus a manual audit proving cross-tenant and cross-member access is impossible by construction at the DB layer across every table and code path.
+
+- **beta-isolation-audit-001** Comprehensive cross-tenant/member isolation tests
+  - [ ] Tests cover every tenanted table and write path.
+  - [ ] All cross-tenant and cross-member access attempts fail.
+  - [ ] Tests run in CI on each change and gate deploys.
+- **beta-isolation-audit-002** Security review of auth and JWT handling
+  - [ ] No code path trusts tenant_id/user from the client.
+  - [ ] Tokens are verified, scoped, and expirable.
+  - [ ] Findings are documented and remediated.
+
+### beta-hardening — Error handling, observability, and email deliverability _(depends on: mvp-member-portal)_
+
+Make the app production-grade: graceful error handling, logging/monitoring, and deliverability hardening for the transactional email provisioned in MVP (SPF/DKIM, bounce/failure handling).
+
+- **beta-hardening-001** Global error handling and monitoring
+  - [ ] Unexpected errors show friendly messages, not stack traces.
+  - [ ] Errors are logged and monitored.
+  - [ ] Critical failures raise alerts.
+- **beta-hardening-002** Email deliverability hardening
+  - [ ] Invite emails pass SPF and DKIM.
+  - [ ] Send failures and bounces are handled and surfaced.
+  - [ ] Deliverability verified against common inbox providers.
+
+### beta-polish-a11y — Accessibility, performance, and UX polish _(depends on: mvp-member-portal)_
+
+Final polish: WCAG AA basics, mobile performance for the member portal, and UX refinement across the staff dashboard.
+
+- **beta-polish-a11y-001** Accessibility pass (WCAG AA basics)
+  - [ ] Key flows are keyboard navigable.
+  - [ ] Contrast and labels meet WCAG AA basics.
+  - [ ] Automated a11y checks pass on core pages.
+- **beta-polish-a11y-002** Mobile performance and UX refinement
+  - [ ] Member portal meets a defined mobile performance budget.
+  - [ ] Common staff workflows are streamlined.
+  - [ ] No major layout shifts or jank on mobile.

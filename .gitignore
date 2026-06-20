@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+*.tsbuildinfo
+next-env.d.ts
+
+# Env / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# nous pipeline state
+.nous/

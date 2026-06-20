@@ -1,0 +1,49 @@
+name: Deploy
+
+# Deploys the app from main and runs DB migrations against the production
+# (Supabase, EU) database before the new build goes live. Requires these
+# repository secrets to be configured (never stored in source):
+#   PRODUCTION_DATABASE_URL  - Supabase Postgres connection string (EU region)
+#   VERCEL_TOKEN             - Vercel deploy token
+#   VERCEL_ORG_ID            - Vercel org id
+#   VERCEL_PROJECT_ID        - Vercel project id
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  migrate-and-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Migrations run automatically on every deploy. Idempotent: applies only
+      # new migrations, so it is safe against an existing production database.
+      - name: Run database migrations (production)
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npm run migrate
+
+      # Single deploy path: Vercel Git auto-deploy is disabled
+      # (vercel.json git.deploymentEnabled.main = false) so only this CLI step
+      # deploys, guaranteeing the migration above runs before the build goes live.
+      - name: Deploy to Vercel (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
