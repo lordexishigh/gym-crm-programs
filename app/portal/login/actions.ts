@@ -2,20 +2,20 @@
 
 import { redirect } from "next/navigation";
 import { signInWithPassword } from "@/lib/auth/supabase";
-import { verifyAccessToken, sessionRole } from "@/lib/identity";
+import { verifyAccessToken, sessionRole, claimValue } from "@/lib/identity";
 import { establishSession } from "@/lib/auth/session";
 
 /**
- * Staff sign-in (mvp-auth-002).
+ * Member portal sign-in (mvp-auth-003).
  *
- * Authenticates against Supabase Auth, verifies the returned access token
- * server-side, confirms the session is a STAFF audience, then establishes the
- * session cookies and routes to the dashboard. tenant_id is derived from the
- * verified token only — never from the form.
+ * For invited members who have completed account setup. Authenticates against
+ * Supabase Auth, verifies the access token server-side, and requires a MEMBER
+ * audience carrying a member_id so the session resolves to a Member row under
+ * RLS. tenant_id/member_id come from the verified token only.
  */
 export type LoginState = { error?: string };
 
-export async function loginAction(
+export async function memberLoginAction(
   _prevState: LoginState,
   formData: FormData,
 ): Promise<LoginState> {
@@ -31,22 +31,28 @@ export async function loginAction(
     return { error: result.error };
   }
 
-  // Re-verify the token rather than trusting the auth response body, and gate
-  // by audience: staff sign in here, members use the portal.
   let role: "staff" | "member";
+  let hasMemberId: boolean;
   try {
     const claims = await verifyAccessToken(result.tokens.accessToken);
     role = sessionRole(claims);
+    hasMemberId = Boolean(claimValue(claims, "member_id"));
   } catch {
     return { error: "Sign-in failed. Please try again." };
   }
 
-  if (role !== "staff") {
+  if (role !== "member") {
     return {
-      error: "This account is a member account — use the member portal to sign in.",
+      error: "This is a staff account — please use the staff sign-in page.",
+    };
+  }
+  if (!hasMemberId) {
+    return {
+      error:
+        "Your account setup isn't complete yet. Please use your invite link to finish setting up.",
     };
   }
 
   await establishSession(result.tokens);
-  redirect("/dashboard");
+  redirect("/portal");
 }

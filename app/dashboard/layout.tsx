@@ -1,0 +1,74 @@
+import Link from "next/link";
+import { requireStaff } from "@/lib/auth/session";
+import { withTenantContext } from "@/lib/db";
+import { logoutAction } from "@/lib/auth/actions";
+
+// Session/identity is request-derived; never statically rendered.
+export const dynamic = "force-dynamic";
+
+/**
+ * Authenticated staff dashboard shell (mvp-auth-002).
+ *
+ * Gated to staff via `requireStaff` (redirects unauthenticated/member sessions).
+ * The gym name is resolved through `withTenantContext` so RLS confirms the
+ * session resolves to exactly one tenant — the staff member's own gym.
+ */
+const NAV = [
+  { href: "/dashboard", label: "Overview" },
+  { href: "/dashboard/members", label: "Members" },
+  { href: "/dashboard/programs", label: "Programs" },
+];
+
+export default async function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const session = await requireStaff();
+
+  // Resolve the tenant name under RLS — the only gym row this session can read.
+  const gymName = await withTenantContext(session.identity, async (c) => {
+    const { rows } = await c.query<{ name: string }>(
+      "select name from gym where id = $1",
+      [session.identity.tenantId],
+    );
+    return rows[0]?.name ?? "Your gym";
+  });
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-5 py-3">
+          <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="text-base font-bold text-brand">
+              Alpha CRM
+            </Link>
+            <span className="text-sm text-slate-500">· {gymName}</span>
+          </div>
+          <form action={logoutAction}>
+            <input type="hidden" name="redirectTo" value="/login" />
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Log out
+            </button>
+          </form>
+        </div>
+        <nav className="mx-auto flex w-full max-w-5xl gap-1 px-3 pb-1">
+          {NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="rounded-md px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-6">{children}</main>
+    </div>
+  );
+}

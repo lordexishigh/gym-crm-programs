@@ -2,29 +2,29 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { loginAction, type LoginState } from "./actions";
+import { memberLoginAction, type LoginState } from "./actions";
 
 const initialState: LoginState = {};
 
-export default function LoginPage() {
+/**
+ * Member portal login — mobile-first (the portal is opened on a phone browser).
+ * Inputs use base text size to avoid iOS zoom-on-focus and large tap targets.
+ */
+export default function MemberLoginPage() {
   const [state, formAction, pending] = useActionState(
-    loginAction,
+    memberLoginAction,
     initialState,
   );
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 px-5 py-12">
+    <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col justify-center gap-6 px-5 py-12">
       <div className="flex flex-col gap-1 text-center">
         <Link href="/" className="text-sm font-semibold text-brand">
           Alpha CRM
         </Link>
-        <h1 className="text-2xl font-bold">Staff sign in</h1>
+        <h1 className="text-2xl font-bold">Member sign in</h1>
         <p className="text-sm text-slate-600">
-          For gym staff and trainers. Members sign in at the{" "}
-          <Link href="/portal/login" className="font-medium text-brand underline">
-            member portal
-          </Link>
-          .
+          Sign in to view the training programs your gym assigned to you.
         </p>
       </div>
 
@@ -35,8 +35,9 @@ export default function LoginPage() {
             type="email"
             name="email"
             autoComplete="email"
+            inputMode="email"
             required
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+            className="rounded-lg border border-slate-300 px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
             placeholder="you@example.com"
           />
         </label>
@@ -48,7 +49,7 @@ export default function LoginPage() {
             name="password"
             autoComplete="current-password"
             required
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+            className="rounded-lg border border-slate-300 px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
             placeholder="••••••••"
           />
         </label>
@@ -67,6 +68,13 @@ export default function LoginPage() {
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      <p className="text-center text-sm text-slate-500">
+        Gym staff?{" "}
+        <Link href="/login" className="font-medium text-brand underline">
+          Staff sign in
+        </Link>
+      </p>
     </main>
   );
 }
