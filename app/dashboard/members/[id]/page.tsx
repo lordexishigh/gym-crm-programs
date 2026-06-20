@@ -7,27 +7,18 @@ import {
   effectiveInviteStatus,
   expireStalePendingInvites,
 } from "@/lib/invite-status";
+import {
+  MEMBER_STATUS_HISTORY_SQL,
+  type MemberStatusEvent,
+} from "@/lib/member-records";
 import { MemberForm } from "../MemberForm";
+import { StatusHistory } from "../StatusHistory";
 import { updateMemberAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
 
 export const dynamic = "force-dynamic";
 
 type LastInvite = { id: string; status: string; expires_at: string | null };
-
-type StatusEvent = {
-  old_status: string | null;
-  new_status: string;
-  changed_at: string;
-  changed_by_name: string | null;
-};
-
-function formatDateTime(iso: string): string {
-  // Stable, locale-independent rendering (avoids server/client hydration drift).
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-}
 
 /**
  * Member detail / edit screen (mvp-member-management-001/003). Loads the member
@@ -66,15 +57,9 @@ export default async function MemberDetailPage({
       )
     ).rows[0] ?? null;
 
+    // Shared SQL (lib/member-records) so this read can't drift from the helper.
     const statusHistory = (
-      await c.query<StatusEvent>(
-        `select e.old_status, e.new_status, e.changed_at, u.full_name as changed_by_name
-           from member_status_event e
-           left join users u on u.id = e.changed_by
-          where e.member_id = $1
-          order by e.changed_at desc`,
-        [id],
-      )
+      await c.query<MemberStatusEvent>(MEMBER_STATUS_HISTORY_SQL, [id])
     ).rows;
 
     return { member, lastInvite, statusHistory };
@@ -145,36 +130,7 @@ export default async function MemberDetailPage({
         }}
       />
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold text-slate-900">Status history</h2>
-        {statusHistory.length === 0 ? (
-          <p className="text-sm text-slate-500">No status changes recorded yet.</p>
-        ) : (
-          <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
-            {statusHistory.map((e, i) => (
-              <li
-                key={`${e.changed_at}-${i}`}
-                className="flex items-center justify-between gap-4 px-4 py-3 text-sm"
-              >
-                <span className="text-slate-900">
-                  {e.old_status ? (
-                    <>
-                      {e.old_status} <span className="text-slate-400">→</span>{" "}
-                      {e.new_status}
-                    </>
-                  ) : (
-                    <>Created as {e.new_status}</>
-                  )}
-                </span>
-                <span className="shrink-0 text-right text-xs text-slate-500">
-                  {formatDateTime(e.changed_at)}
-                  {e.changed_by_name ? ` · ${e.changed_by_name}` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <StatusHistory events={statusHistory} />
 
       <InvitePanel
         memberId={member.id}
