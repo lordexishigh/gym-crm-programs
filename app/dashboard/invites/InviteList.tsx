@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import {
   effectiveInviteStatus,
   type InviteStatus,
-} from "../../lib/invite-status";
+} from "../../../lib/invite-status";
 
 /**
  * Pure presentational invite list (alpha-invite-lifecycle-001/002).
