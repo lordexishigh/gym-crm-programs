@@ -14,3 +14,34 @@ body {
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
+
+/*
+ * Accessibility (beta-polish-a11y-001).
+ *
+ * A single, app-wide keyboard-focus indicator so every interactive element
+ * (portal + dashboard) has a clearly visible focus ring, regardless of its own
+ * utility classes. `:focus-visible` only paints for keyboard/programmatic focus,
+ * so mouse clicks stay quiet. Uses the brand colour with an offset so it reads
+ * on white cards, tinted chips, and inside bordered inputs alike.
+ */
+:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/*
+ * Respect a user's reduced-motion preference: neutralise the `transition`/
+ * animation utilities used across the UI. Also helps perceived performance and
+ * avoids motion-induced jank on lower-end phones (beta-polish-a11y-002).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
