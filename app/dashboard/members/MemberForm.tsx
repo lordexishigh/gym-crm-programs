@@ -13,7 +13,9 @@ type Defaults = {
   id?: string;
   fullName?: string;
   email?: string;
+  phone?: string;
   status?: "active" | "inactive";
+  notes?: string;
 };
 
 /**
@@ -67,6 +69,17 @@ export function MemberForm({
       </label>
 
       <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        Phone <span className="font-normal text-slate-400">(optional)</span>
+        <input
+          type="tel"
+          name="phone"
+          defaultValue={defaults.phone ?? ""}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+          placeholder="+357 99 123456"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
         Status
         <select
           name="status"
@@ -76,6 +89,17 @@ export function MemberForm({
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        Notes <span className="font-normal text-slate-400">(optional)</span>
+        <textarea
+          name="notes"
+          rows={4}
+          defaultValue={defaults.notes ?? ""}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+          placeholder="Injuries, goals, preferences…"
+        />
       </label>
 
       {state.error ? (

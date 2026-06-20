@@ -70,6 +70,10 @@ export async function lookupInviteByToken(
   if (row.invite_status === "accepted" || row.member_auth_user_id) {
     return { status: "used" };
   }
+  // A row may already be flipped to 'expired' by the lazy sweep; report it as
+  // expired (not a generic invalid) so the member sees the right guidance.
+  if (row.invite_status === "expired") return { status: "expired" };
+  // Revoked (and any other non-pending) tokens are rejected outright.
   if (row.invite_status !== "pending") return { status: "invalid" };
   if (isInviteExpired(row.expires_at)) return { status: "expired" };
 

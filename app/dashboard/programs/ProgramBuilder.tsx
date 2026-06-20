@@ -34,6 +34,16 @@ type Defaults = {
   exercises?: ExerciseDefault[];
 };
 
+/** A library exercise the trainer can insert into the program. */
+type LibraryItem = {
+  id: string;
+  name: string;
+  sets: number | null;
+  reps: string | null;
+  rest: string | null;
+  notes: string | null;
+};
+
 const inputClass =
   "rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand";
 
@@ -62,10 +72,13 @@ export function ProgramBuilder({
   action,
   defaults = {},
   submitLabel,
+  library = [],
 }: {
   action: Action;
   defaults?: Defaults;
   submitLabel: string;
+  /** The gym's exercise library, selectable to insert into the program. */
+  library?: LibraryItem[];
 }) {
   const [state, formAction, pending] = useActionState<
     ProgramFormState,
@@ -79,6 +92,29 @@ export function ProgramBuilder({
   const [exercises, setExercises] = useState<ExerciseDraft[]>(() =>
     (defaults.exercises ?? []).map((e) => toDraft(e, makeKey())),
   );
+
+  // Library picker selection (empty string = no selection yet).
+  const [selectedLib, setSelectedLib] = useState("");
+
+  /** Append the chosen library exercise as a new, editable draft. */
+  function addFromLibrary() {
+    const item = library.find((l) => l.id === selectedLib);
+    if (!item) return;
+    setExercises((prev) => [
+      ...prev,
+      toDraft(
+        {
+          name: item.name,
+          sets: item.sets,
+          reps: item.reps,
+          rest: item.rest,
+          notes: item.notes,
+        },
+        makeKey(),
+      ),
+    ]);
+    setSelectedLib("");
+  }
 
   function addExercise() {
     setExercises((prev) => [
@@ -156,15 +192,42 @@ export function ProgramBuilder({
       </div>
 
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-900">Exercises</h2>
-          <button
-            type="button"
-            onClick={addExercise}
-            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-          >
-            + Add exercise
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {library.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="Choose an exercise from the library"
+                  value={selectedLib}
+                  onChange={(ev) => setSelectedLib(ev.target.value)}
+                  className={`${inputClass} py-1.5 text-sm`}
+                >
+                  <option value="">From library…</option>
+                  {library.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={addFromLibrary}
+                  disabled={!selectedLib}
+                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-40"
+                >
+                  Insert
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={addExercise}
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              + Add exercise
+            </button>
+          </div>
         </div>
 
         {exercises.length === 0 ? (

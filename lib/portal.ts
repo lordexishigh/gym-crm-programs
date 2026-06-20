@@ -82,3 +82,65 @@ export async function loadMemberPortal(
     }));
   });
 }
+
+/** The archived (past) assignments for the member's history list. */
+const ARCHIVED_PROGRAMS_SQL = `select p.id, p.name, p.description, p.created_at, p.updated_at,
+        pa.assigned_at
+   from program p
+   join program_assignment pa on pa.program_id = p.id
+  where pa.member_id = $1 and pa.status = 'archived'
+  order by pa.assigned_at desc`;
+
+/**
+ * Resolve the member's archived programs — their read-only history
+ * (alpha-program-lifecycle-002). Summaries only (no exercises); the member taps
+ * through to a detail page for the full read-only view. RLS scopes the result to
+ * the caller's own assignments regardless of the `memberId` argument: the
+ * member policies (migration 0002) carry no status filter, so a member can read
+ * an archived assignment exactly as they can an active one.
+ */
+export async function archivedPrograms(
+  identity: Identity,
+  memberId: string,
+): Promise<AssignedProgram[]> {
+  return withTenantContext(
+    identity,
+    async (c) =>
+      (await c.query<AssignedProgram>(ARCHIVED_PROGRAMS_SQL, [memberId])).rows,
+  );
+}
+
+/**
+ * Load a single program assigned to the member (active OR archived), with its
+ * ordered exercises — the data behind a history detail page. Returns null when
+ * the program is not assigned to this member: RLS makes another member's or
+ * another gym's program invisible, so a crafted id simply resolves to no row.
+ */
+export async function loadMemberProgram(
+  identity: Identity,
+  memberId: string,
+  programId: string,
+): Promise<PortalProgram | null> {
+  return withTenantContext(identity, async (c) => {
+    const { rows } = await c.query<AssignedProgram>(
+      `select p.id, p.name, p.description, p.created_at, p.updated_at,
+              pa.assigned_at
+         from program p
+         join program_assignment pa on pa.program_id = p.id
+        where pa.member_id = $1 and p.id = $2`,
+      [memberId, programId],
+    );
+    const program = rows[0];
+    if (!program) return null;
+
+    const { rows: exercises } = await c.query<ExerciseRow>(
+      `select id, program_id, position, name, sets, reps, rest, notes
+         from exercise
+        where program_id = $1
+        order by position asc`,
+      [programId],
+    );
+
+    return { program, exercises };
+  });
+}

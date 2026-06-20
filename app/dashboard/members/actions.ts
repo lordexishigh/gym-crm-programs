@@ -1,5 +1,6 @@
 "use server";
 
+import type { PoolClient } from "pg";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireStaff } from "@/lib/auth/session";
@@ -22,6 +23,24 @@ import { sendEmail } from "@/lib/email/resend";
 
 export type MemberFormState = { error?: string };
 
+/**
+ * Resolve the staff row id for the current session. The JWT carries the
+ * Supabase auth id (users.auth_user_id), but member_status_event.changed_by
+ * targets users(id). Returns null when unmatched — the column is nullable and
+ * the event is informational, so a missing author must never block the write.
+ */
+async function staffUserId(
+  c: PoolClient,
+  authUserId: string | null | undefined,
+): Promise<string | null> {
+  if (!authUserId) return null;
+  const { rows } = await c.query<{ id: string }>(
+    "select id from users where auth_user_id = $1",
+    [authUserId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 /** Create a member, then go to its detail page. */
 export async function createMemberAction(
   _prev: MemberFormState,
@@ -32,21 +51,31 @@ export async function createMemberAction(
   const parsed = validateMemberInput({
     fullName: formData.get("fullName"),
     email: formData.get("email"),
+    phone: formData.get("phone"),
     status: formData.get("status"),
+    notes: formData.get("notes"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, status } = parsed.value;
+  const { fullName, email, phone, status, notes } = parsed.value;
 
   let newId: string;
   try {
     newId = await withTenantContext(session.identity, async (c) => {
       const { rows } = await c.query<{ id: string }>(
-        `insert into member (tenant_id, full_name, email, status)
-         values ($1, $2, $3, $4)
+        `insert into member (tenant_id, full_name, email, phone, status, notes)
+         values ($1, $2, $3, $4, $5, $6)
          returning id`,
-        [session.identity.tenantId, fullName, email, status],
+        [session.identity.tenantId, fullName, email, phone, status, notes],
       );
-      return rows[0].id;
+      const id = rows[0].id;
+      // Seed the status history with the initial status (old_status null).
+      await c.query(
+        `insert into member_status_event
+           (tenant_id, member_id, old_status, new_status, changed_by)
+         values ($1, $2, null, $3, $4)`,
+        [session.identity.tenantId, id, status, await staffUserId(c, session.identity.userId)],
+      );
+      return id;
     });
   } catch {
     return { error: "Could not save the member. Please try again." };
@@ -69,20 +98,47 @@ export async function updateMemberAction(
   const parsed = validateMemberInput({
     fullName: formData.get("fullName"),
     email: formData.get("email"),
+    phone: formData.get("phone"),
     status: formData.get("status"),
+    notes: formData.get("notes"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, status } = parsed.value;
+  const { fullName, email, phone, status, notes } = parsed.value;
 
   let updated: number;
   try {
     updated = await withTenantContext(session.identity, async (c) => {
+      // Read the prior status first so we only log an event when it changes.
+      const prev = (
+        await c.query<{ status: string }>(
+          "select status from member where id = $1",
+          [id],
+        )
+      ).rows[0];
+      if (!prev) return 0;
+
       const res = await c.query(
         `update member
-            set full_name = $2, email = $3, status = $4, updated_at = now()
+            set full_name = $2, email = $3, phone = $4, status = $5,
+                notes = $6, updated_at = now()
           where id = $1`,
-        [id, fullName, email, status],
+        [id, fullName, email, phone, status, notes],
       );
+
+      if (prev.status !== status) {
+        await c.query(
+          `insert into member_status_event
+             (tenant_id, member_id, old_status, new_status, changed_by)
+           values ($1, $2, $3, $4, $5)`,
+          [
+            session.identity.tenantId,
+            id,
+            prev.status,
+            status,
+            await staffUserId(c, session.identity.userId),
+          ],
+        );
+      }
       return res.rowCount ?? 0;
     });
   } catch {
@@ -206,7 +262,49 @@ export async function sendInviteAction(
   }
 
   revalidatePath(`/dashboard/members/${memberId}`);
+  revalidatePath("/dashboard/invites");
   return { success: `Invite sent to ${member.email}.` };
+}
+
+/**
+ * Revoke a pending invite, invalidating its token immediately
+ * (alpha-invite-lifecycle-002). Only a still-`pending` row can be revoked; once
+ * revoked the acceptance path rejects the token (a non-pending invite is never
+ * `valid`). `memberId` is optional and used only to revalidate the member page.
+ */
+export async function revokeInviteAction(
+  _prev: InviteState,
+  formData: FormData,
+): Promise<InviteState> {
+  const session = await requireStaff();
+
+  const inviteId = String(formData.get("inviteId") ?? "");
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!inviteId) return { error: "Missing invite id." };
+
+  let updated: number;
+  try {
+    updated = await withTenantContext(session.identity, async (c) => {
+      // WHERE status = 'pending' makes this safe and idempotent: an already
+      // accepted/revoked/expired invite matches nothing.
+      const res = await c.query(
+        "update invite set status = 'revoked' where id = $1 and status = 'pending'",
+        [inviteId],
+      );
+      return res.rowCount ?? 0;
+    });
+  } catch {
+    return { error: "Could not revoke the invite. Please try again." };
+  }
+
+  // 0 rows: cross-tenant id (RLS) or the invite was no longer pending.
+  if (updated === 0) {
+    return { error: "This invite can no longer be revoked." };
+  }
+
+  revalidatePath("/dashboard/invites");
+  if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
+  return { success: "Invite revoked." };
 }
 
 function inviteEmailHtml(name: string, url: string): string {

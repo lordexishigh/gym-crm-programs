@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { validateProgramInput, type ExerciseInput } from "@/lib/programs";
+import { reassignProgram } from "@/lib/assignments";
 
 /**
  * Staff-facing program authoring + assignment mutations (mvp-program-001/003).
@@ -166,8 +167,11 @@ export type AssignState = { error?: string; success?: string };
  * member id from another tenant resolves to no row and is rejected here — and
  * even a forged insert would fail the composite (id, tenant_id) FK with-check.
  *
- * Idempotent: re-assigning the same program to the same member updates the
- * existing row (reactivating it) rather than creating a duplicate.
+ * A member has at most one ACTIVE program: assigning a different program
+ * archives whichever was active (alpha-program-lifecycle-001). Re-assigning the
+ * same program just refreshes it. The archive-prior + upsert is delegated to
+ * `reassignProgram` (shared with the lifecycle test) and enforced server-side
+ * by the partial unique index from migration 0003.
  */
 export async function assignProgramAction(
   _prev: AssignState,
@@ -200,21 +204,12 @@ export async function assignProgramAction(
 
       const assignedBy = await resolveStaffUserId(c, session.identity.userId);
 
-      // Upsert by (program, member): reactivate an existing link, else create.
-      const updated = await c.query(
-        `update program_assignment
-            set status = 'active', assigned_at = now(), assigned_by = $3
-          where program_id = $1 and member_id = $2`,
-        [programId, memberId, assignedBy],
-      );
-      if ((updated.rowCount ?? 0) === 0) {
-        await c.query(
-          `insert into program_assignment
-             (tenant_id, program_id, member_id, assigned_by)
-           values ($1, $2, $3, $4)`,
-          [session.identity.tenantId, programId, memberId, assignedBy],
-        );
-      }
+      await reassignProgram(c, {
+        tenantId: session.identity.tenantId,
+        programId,
+        memberId,
+        assignedBy,
+      });
       return "ok";
     });
   } catch {

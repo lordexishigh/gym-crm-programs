@@ -3,13 +3,31 @@ import { notFound } from "next/navigation";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { MemberRow } from "@/lib/members";
+import {
+  effectiveInviteStatus,
+  expireStalePendingInvites,
+} from "@/lib/invite-status";
 import { MemberForm } from "../MemberForm";
 import { updateMemberAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
 
 export const dynamic = "force-dynamic";
 
-type LastInvite = { status: string; expires_at: string | null };
+type LastInvite = { id: string; status: string; expires_at: string | null };
+
+type StatusEvent = {
+  old_status: string | null;
+  new_status: string;
+  changed_at: string;
+  changed_by_name: string | null;
+};
+
+function formatDateTime(iso: string): string {
+  // Stable, locale-independent rendering (avoids server/client hydration drift).
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
 
 /**
  * Member detail / edit screen (mvp-member-management-001/003). Loads the member
@@ -27,16 +45,20 @@ export default async function MemberDetailPage({
   const data = await withTenantContext(session.identity, async (c) => {
     const member = (
       await c.query<MemberRow>(
-        `select id, email, full_name, status, auth_user_id, created_at, updated_at
+        `select id, email, full_name, phone, status, notes,
+                auth_user_id, created_at, updated_at
            from member where id = $1`,
         [id],
       )
     ).rows[0];
     if (!member) return null;
 
+    // Keep stored statuses honest before reading the latest invite.
+    await expireStalePendingInvites(c);
+
     const lastInvite = (
       await c.query<LastInvite>(
-        `select status, expires_at from invite
+        `select id, status, expires_at from invite
           where member_id = $1
           order by created_at desc
           limit 1`,
@@ -44,11 +66,22 @@ export default async function MemberDetailPage({
       )
     ).rows[0] ?? null;
 
-    return { member, lastInvite };
+    const statusHistory = (
+      await c.query<StatusEvent>(
+        `select e.old_status, e.new_status, e.changed_at, u.full_name as changed_by_name
+           from member_status_event e
+           left join users u on u.id = e.changed_by
+          where e.member_id = $1
+          order by e.changed_at desc`,
+        [id],
+      )
+    ).rows;
+
+    return { member, lastInvite, statusHistory };
   });
 
   if (!data) notFound();
-  const { member, lastInvite } = data;
+  const { member, lastInvite, statusHistory } = data;
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,6 +95,43 @@ export default async function MemberDetailPage({
         <h1 className="text-2xl font-bold">{member.full_name}</h1>
       </div>
 
+      <dl className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Email
+          </dt>
+          <dd className="text-slate-900">{member.email ?? "—"}</dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Phone
+          </dt>
+          <dd className="text-slate-900">{member.phone ?? "—"}</dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Status
+          </dt>
+          <dd className="text-slate-900">{member.status}</dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Portal access
+          </dt>
+          <dd className="text-slate-900">
+            {member.auth_user_id ? "Active" : "Not set up"}
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5 sm:col-span-2">
+          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Notes
+          </dt>
+          <dd className="whitespace-pre-wrap text-slate-900">
+            {member.notes ?? "—"}
+          </dd>
+        </div>
+      </dl>
+
       <MemberForm
         action={updateMemberAction}
         submitLabel="Save changes"
@@ -69,9 +139,42 @@ export default async function MemberDetailPage({
           id: member.id,
           fullName: member.full_name,
           email: member.email ?? "",
+          phone: member.phone ?? "",
           status: member.status,
+          notes: member.notes ?? "",
         }}
       />
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-slate-900">Status history</h2>
+        {statusHistory.length === 0 ? (
+          <p className="text-sm text-slate-500">No status changes recorded yet.</p>
+        ) : (
+          <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            {statusHistory.map((e, i) => (
+              <li
+                key={`${e.changed_at}-${i}`}
+                className="flex items-center justify-between gap-4 px-4 py-3 text-sm"
+              >
+                <span className="text-slate-900">
+                  {e.old_status ? (
+                    <>
+                      {e.old_status} <span className="text-slate-400">→</span>{" "}
+                      {e.new_status}
+                    </>
+                  ) : (
+                    <>Created as {e.new_status}</>
+                  )}
+                </span>
+                <span className="shrink-0 text-right text-xs text-slate-500">
+                  {formatDateTime(e.changed_at)}
+                  {e.changed_by_name ? ` · ${e.changed_by_name}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <InvitePanel
         memberId={member.id}
@@ -79,7 +182,16 @@ export default async function MemberDetailPage({
         alreadyActive={Boolean(member.auth_user_id)}
         lastInvite={
           lastInvite
-            ? { status: lastInvite.status, expiresAt: lastInvite.expires_at }
+            ? {
+                id: lastInvite.id,
+                // Show the effective status so a just-expired pending invite
+                // reads as "expired", matching the invites dashboard.
+                status: effectiveInviteStatus(
+                  lastInvite.status,
+                  lastInvite.expires_at,
+                ),
+                expiresAt: lastInvite.expires_at,
+              }
             : null
         }
       />

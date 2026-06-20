@@ -1,7 +1,8 @@
 import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
-import { loadMemberPortal } from "@/lib/portal";
+import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
 import { ProgramView } from "./ProgramView";
+import { ProgramHistory } from "./ProgramHistory";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -26,10 +27,12 @@ export const dynamic = "force-dynamic";
  */
 export default async function PortalPage() {
   const session = await requireMember();
-  const programs = await loadMemberPortal(
-    session.identity,
-    session.identity.memberId as string,
-  );
+  const memberId = session.identity.memberId as string;
+  // Active program (shown by default) + the read-only history of past programs.
+  const [programs, history] = await Promise.all([
+    loadMemberPortal(session.identity, memberId),
+    archivedPrograms(session.identity, memberId),
+  ]);
 
   // Mobile-first shell: full-width on a phone, capped/centred on larger screens.
   return (
@@ -49,6 +52,7 @@ export default async function PortalPage() {
 
       <main className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <ProgramView programs={programs} />
+        <ProgramHistory programs={history} />
       </main>
     </div>
   );

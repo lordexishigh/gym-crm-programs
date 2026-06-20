@@ -3,9 +3,11 @@ import { notFound } from "next/navigation";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { ExerciseRow, ProgramRow } from "@/lib/programs";
+import type { LibraryExerciseRow } from "@/lib/exercise-library";
 import { ProgramBuilder } from "../ProgramBuilder";
 import { AssignPanel } from "../AssignPanel";
 import { updateProgramAction } from "../actions";
+import { saveProgramAsTemplateAction } from "../../templates/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -67,27 +69,46 @@ export default async function ProgramDetailPage({
       )
     ).rows;
 
-    return { program, exercises, members, assignments };
+    const library = (
+      await c.query<LibraryExerciseRow>(
+        `select id, name, sets, reps, rest, notes
+           from exercise_library order by name asc`,
+      )
+    ).rows;
+
+    return { program, exercises, members, assignments, library };
   });
 
   if (!data) notFound();
-  const { program, exercises, members, assignments } = data;
+  const { program, exercises, members, assignments, library } = data;
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <Link
-          href="/dashboard/programs"
-          className="text-sm font-medium text-slate-500 hover:text-slate-700"
-        >
-          ← Programs
-        </Link>
-        <h1 className="text-2xl font-bold">{program.name}</h1>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <Link
+            href="/dashboard/programs"
+            className="text-sm font-medium text-slate-500 hover:text-slate-700"
+          >
+            ← Programs
+          </Link>
+          <h1 className="text-2xl font-bold">{program.name}</h1>
+        </div>
+        <form action={saveProgramAsTemplateAction} className="shrink-0">
+          <input type="hidden" name="programId" value={program.id} />
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            Save as template
+          </button>
+        </form>
       </div>
 
       <ProgramBuilder
         action={updateProgramAction}
         submitLabel="Save changes"
+        library={library}
         defaults={{
           id: program.id,
           name: program.name,

@@ -16,7 +16,10 @@ export const dynamic = "force-dynamic";
 const NAV = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/members", label: "Members" },
+  { href: "/dashboard/invites", label: "Invites" },
   { href: "/dashboard/programs", label: "Programs" },
+  { href: "/dashboard/exercises", label: "Exercises" },
+  { href: "/dashboard/templates", label: "Templates" },
 ];
 
 export default async function DashboardLayout({
