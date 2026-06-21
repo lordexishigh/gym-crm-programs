@@ -2,8 +2,9 @@
  * Minimal Supabase Auth (GoTrue) REST client.
  *
  * The project intentionally has no `@supabase/supabase-js` dependency: the
- * server already verifies Supabase-issued HS256 access tokens with `jose`
- * (see lib/identity.ts), so authentication only needs GoTrue's token/logout
+ * server already verifies Supabase-issued access tokens against the project's
+ * JWKS with `jose` (see lib/identity.ts), so authentication only needs GoTrue's
+ * token/logout
  * endpoints. Talking to them over `fetch` keeps this edge-safe (usable from
  * middleware) and dependency-free.
  *
@@ -24,15 +25,15 @@ export type AuthResult =
   | { ok: true; tokens: AuthTokens }
   | { ok: false; error: string };
 
-function supabaseConfig(): { url: string; anonKey: string } {
+function supabaseConfig(): { url: string; publishableKey: string } {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
+  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !publishableKey) {
     throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set (see .env.example).",
+      "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set (see .env.example).",
     );
   }
-  return { url: url.replace(/\/$/, ""), anonKey };
+  return { url: url.replace(/\/$/, ""), publishableKey };
 }
 
 type GoTrueTokenResponse = {
@@ -65,14 +66,14 @@ async function postToken(
   grant: "password" | "refresh_token",
   payload: Record<string, string>,
 ): Promise<AuthResult> {
-  const { url, anonKey } = supabaseConfig();
+  const { url, publishableKey } = supabaseConfig();
   let res: Response;
   try {
     res = await fetch(`${url}/auth/v1/token?grant_type=${grant}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: anonKey,
+        apikey: publishableKey,
       },
       body: JSON.stringify(payload),
       // Auth must never be served from a cache.
@@ -118,11 +119,11 @@ export function refreshAccessToken(refreshToken: string): Promise<AuthResult> {
  */
 export async function signOut(accessToken: string): Promise<void> {
   try {
-    const { url, anonKey } = supabaseConfig();
+    const { url, publishableKey } = supabaseConfig();
     await fetch(`${url}/auth/v1/logout`, {
       method: "POST",
       headers: {
-        apikey: anonKey,
+        apikey: publishableKey,
         Authorization: `Bearer ${accessToken}`,
       },
       cache: "no-store",

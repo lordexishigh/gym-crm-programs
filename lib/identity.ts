@@ -1,4 +1,4 @@
-import { jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Identity } from "./db";
 
 /**
@@ -50,18 +50,43 @@ export function sessionRole(claims: AccessTokenClaims): "staff" | "member" {
   return claimValue(claims, "app_role") === "member" ? "member" : "staff";
 }
 
-/** Verify a Supabase-issued (HS256) access token and return its claims. */
+/**
+ * Lazily-built remote JWKS for the project's Supabase Auth instance. `jose`
+ * caches the fetched public keys and transparently handles key rotation, so we
+ * construct it once per runtime (rebuilding only if the project URL changes).
+ */
+let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+let jwksUrl: string | null = null;
+
+function projectBaseUrl(): string {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is not set.");
+  return url.replace(/\/$/, "");
+}
+
+function getJwks(base: string): ReturnType<typeof createRemoteJWKSet> {
+  const target = `${base}/auth/v1/.well-known/jwks.json`;
+  if (!jwks || jwksUrl !== target) {
+    jwks = createRemoteJWKSet(new URL(target));
+    jwksUrl = target;
+  }
+  return jwks;
+}
+
+/**
+ * Verify a Supabase-issued access token against the project's published JWKS
+ * (asymmetric ES256 signing keys) and return its claims. No shared secret is
+ * stored anywhere; the issuer and audience are validated as defence-in-depth.
+ * Edge-safe — uses only `jose` + `fetch`.
+ */
 export async function verifyAccessToken(
   token: string,
 ): Promise<AccessTokenClaims> {
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (!secret) {
-    throw new Error("SUPABASE_JWT_SECRET is not set.");
-  }
-  const { payload } = await jwtVerify(
-    token,
-    new TextEncoder().encode(secret),
-  );
+  const base = projectBaseUrl();
+  const { payload } = await jwtVerify(token, getJwks(base), {
+    issuer: `${base}/auth/v1`,
+    audience: "authenticated",
+  });
   return payload as AccessTokenClaims;
 }
 

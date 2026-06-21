@@ -1,9 +1,9 @@
 /**
- * Supabase Auth (GoTrue) ADMIN client — service-role only (mvp-member-management-004).
+ * Supabase Auth (GoTrue) ADMIN client — secret-key only (mvp-member-management-004).
  *
  * Used solely on the privileged provisioning path: creating a member's auth
  * account when they accept an invite. It talks to GoTrue's admin endpoints with
- * the service-role key, so it must NEVER be imported into client code or the
+ * the Supabase secret key, so it must NEVER be imported into client code or the
  * edge middleware. Like lib/auth/supabase.ts it is fetch-based and returns a
  * discriminated result rather than throwing.
  *
@@ -18,15 +18,15 @@ export type AdminUserResult =
   | { ok: true; user: CreatedAuthUser }
   | { ok: false; error: string; alreadyExists?: boolean };
 
-function adminConfig(): { url: string; serviceKey: string } {
+function adminConfig(): { url: string; secretKey: string } {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) {
+  const secretKey = process.env.SUPABASE_SECRET_KEY;
+  if (!url || !secretKey) {
     throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set (see .env.example).",
+      "NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY must be set (see .env.example).",
     );
   }
-  return { url: url.replace(/\/$/, ""), serviceKey };
+  return { url: url.replace(/\/$/, ""), secretKey };
 }
 
 type AdminUserResponse = {
@@ -49,9 +49,9 @@ export async function createMemberAuthUser(params: {
   claims: { tenant_id: string; member_id: string };
 }): Promise<AdminUserResult> {
   let url: string;
-  let serviceKey: string;
+  let secretKey: string;
   try {
-    ({ url, serviceKey } = adminConfig());
+    ({ url, secretKey } = adminConfig());
   } catch (err) {
     return {
       ok: false,
@@ -65,8 +65,8 @@ export async function createMemberAuthUser(params: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
+        apikey: secretKey,
+        Authorization: `Bearer ${secretKey}`,
       },
       body: JSON.stringify({
         email: params.email,
@@ -115,9 +115,9 @@ export async function createMemberAuthUser(params: {
  */
 export async function deleteAuthUser(id: string): Promise<void> {
   let url: string;
-  let serviceKey: string;
+  let secretKey: string;
   try {
-    ({ url, serviceKey } = adminConfig());
+    ({ url, secretKey } = adminConfig());
   } catch {
     return;
   }
@@ -126,8 +126,8 @@ export async function deleteAuthUser(id: string): Promise<void> {
     await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
       method: "DELETE",
       headers: {
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
+        apikey: secretKey,
+        Authorization: `Bearer ${secretKey}`,
       },
       cache: "no-store",
     });

@@ -12,9 +12,8 @@ source. See [`.env.example`](../.env.example) for the full list.
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | Vercel + CI | Privileged Postgres connection (migrations + base connection the app drops into `app_user`). |
-| `SUPABASE_JWT_SECRET` | Vercel (server-only) | Verifies access tokens server-side. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Vercel (server-only) | Admin/provisioning paths. |
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel | Client Supabase config. |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Vercel | Public Supabase config (browser + public auth calls). |
+| `SUPABASE_SECRET_KEY` | Vercel (server-only) | Admin/provisioning paths (secret key `sb_secret_...`). |
 | `RESEND_API_KEY` / `INVITE_FROM_EMAIL` | Vercel (server-only) | Invite email (used in later tasks). |
 
 In CI/CD these live in GitHub repository **secrets** (`PRODUCTION_DATABASE_URL`,

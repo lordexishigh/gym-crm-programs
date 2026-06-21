@@ -26,8 +26,11 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
-      # Build-time placeholders (auth wiring lands in mvp-auth).
-      SUPABASE_JWT_SECRET: ci-test-secret
+      # Public build-time placeholders. No JWT secret is needed — access tokens
+      # are verified against the project's JWKS at runtime; the identity unit
+      # test stubs that endpoint.
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
 
     steps:
       - uses: actions/checkout@v4
