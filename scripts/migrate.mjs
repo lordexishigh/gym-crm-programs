@@ -19,12 +19,22 @@ const { Client } = pg;
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 /**
- * @param {string} [connectionString] defaults to process.env.DATABASE_URL
+ * @param {string} [connectionString] defaults to MIGRATE_DATABASE_URL, then DATABASE_URL
  * @returns {Promise<string[]>} filenames applied during this run
+ *
+ * NOTE: migrations run DDL (CREATE/ALTER/GRANT ROLE). Supabase's *transaction*
+ * pooler (port 6543) rejects some of these with a FATAL XX000 and drops the
+ * connection. Run migrations against the **Session pooler (5432)** or the
+ * **Direct connection** instead — set MIGRATE_DATABASE_URL to that connection
+ * string and leave DATABASE_URL pointing at the (transaction) pooler the app uses.
  */
-export async function runMigrations(connectionString = process.env.DATABASE_URL) {
+export async function runMigrations(
+  connectionString = process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL,
+) {
   if (!connectionString) {
-    throw new Error("DATABASE_URL is not set (and no connection string passed).");
+    throw new Error(
+      "No connection string: set MIGRATE_DATABASE_URL (preferred for DDL) or DATABASE_URL.",
+    );
   }
 
   const files = readdirSync(MIGRATIONS_DIR)

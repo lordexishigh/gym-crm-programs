@@ -1,0 +1,11 @@
+-- 0005_app_user_role_membership.sql
+-- Allow the application's connecting role to `SET LOCAL ROLE app_user`.
+--
+-- The app drops into the unprivileged `app_user` role per transaction so RLS
+-- applies (see lib/db.ts withTenantContext). To `SET ROLE app_user`, the
+-- connecting role must be a MEMBER of app_user — automatic for a local
+-- superuser, but NOT on managed Postgres (e.g. Supabase), where the connecting
+-- role is not a superuser. Granting membership here makes the app portable to
+-- managed Postgres without weakening RLS (app_user remains NOLOGIN and
+-- unprivileged; this only permits the role switch).
+grant app_user to current_user;
