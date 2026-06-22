@@ -315,7 +315,7 @@ function inviteEmailHtml(name: string, url: string): string {
   <p>Hi ${safeName},</p>
   <p>Your gym has set up a training portal account for you. Click the button below to set your password and view the programs assigned to you.</p>
   <p style="margin:24px 0">
-    <a href="${safeUrl}" style="background:#4f46e5;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block">Set up your account</a>
+    <a href="${safeUrl}" style="background:#059669;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block">Set up your account</a>
   </p>
   <p style="color:#475569;font-size:14px">Or paste this link into your browser:<br><a href="${safeUrl}">${safeUrl}</a></p>
   <p style="color:#94a3b8;font-size:12px">This link expires in ${INVITE_TTL_DAYS} days and can only be used once.</p>

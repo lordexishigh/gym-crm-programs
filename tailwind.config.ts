@@ -25,9 +25,18 @@ const config: Config = {
     },
     extend: {
       colors: {
+        // Primary brand accent — single source of truth for the app's accent
+        // colour. Every `bg-brand` / `text-brand` / `ring-brand` / `border-brand`
+        // utility (and the `hover:bg-brand-dark` button state) resolves here, so
+        // recolouring the whole UI is a one-place change. Emerald-600 / emerald-700.
+        //
+        // The channel values live in the `--brand` / `--brand-dark` CSS variables
+        // (app/globals.css) so the SAME colour drives both these utilities and the
+        // raw-CSS keyboard focus ring — that's the actual single source of truth.
+        // `<alpha-value>` keeps opacity modifiers (e.g. `bg-brand/10`) working.
         brand: {
-          DEFAULT: "#0f766e",
-          dark: "#0d5d57",
+          DEFAULT: "rgb(var(--brand) / <alpha-value>)",
+          dark: "rgb(var(--brand-dark) / <alpha-value>)",
         },
       },
     },

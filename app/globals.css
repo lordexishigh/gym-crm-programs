@@ -4,6 +4,16 @@
 
 :root {
   color-scheme: light dark;
+
+  /*
+   * Brand accent channels (Emerald-600 / Emerald-700) as space-separated RGB so
+   * they feed both Tailwind's `rgb(var(--brand) / <alpha-value>)` theme colour
+   * and the raw-CSS focus ring below. This is the one place to recolour the UI
+   * — except the invite-email button, which hardcodes the same hex separately
+   * (#059669) because email HTML can't read CSS variables; keep them in sync.
+   */
+  --brand: 5 150 105;
+  --brand-dark: 4 120 87;
 }
 
 html,
@@ -25,7 +35,7 @@ body {
  * on white cards, tinted chips, and inside bordered inputs alike.
  */
 :focus-visible {
-  outline: 2px solid #0f766e;
+  outline: 2px solid rgb(var(--brand));
   outline-offset: 2px;
   border-radius: 2px;
 }
