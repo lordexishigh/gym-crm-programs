@@ -76,38 +76,6 @@ Next.js Route Handlers and Server Actions over HTTPS, organized by resource and 
 - EU-region hosting/data (Vercel EU + Supabase Frankfurt) — required for GDPR expectations in the Cyprus launch market.
 - Build order honors the inverted plan — program authoring/assignment and the thin RLS+auth foundation are the first deliverables; generic CRM breadth is deferred.
 
-## Performance
-
-The member portal is consumer-facing and opened on phones over mobile data, so
-it is held to an explicit mobile performance budget (beta-polish-a11y-002). The
-budget is the Google "good" Core Web Vitals boundary — a metric at or below its
-target is within budget:
-
-| Metric | Budget | What it guards |
-| --- | --- | --- |
-| LCP (Largest Contentful Paint) | ≤ 2500 ms | Main content visible quickly |
-| INP (Interaction to Next Paint) | ≤ 200 ms | Taps feel responsive |
-| CLS (Cumulative Layout Shift) | ≤ 0.1 | No major layout shift / jank |
-| FCP (First Contentful Paint) | ≤ 1800 ms | First pixels paint quickly |
-| TTFB (Time to First Byte) | ≤ 800 ms | Server responds quickly |
-
-These thresholds are defined once in `lib/observability/web-vitals.ts` and shared
-by the client reporter. How the budget is kept and verified:
-
-- **Thin server-rendered surface.** Portal pages (`app/portal/*`) are Server
-  Components with no client data-fetching and no heavy client libraries, so the
-  shipped JS stays small. The only client JS is the logout form and the
-  `<WebVitals />` reporter (renders nothing).
-- **Transfer trimming** (`next.config.mjs`): gzip/brotli compression, no client
-  source maps in production, and the `X-Powered-By` header dropped.
-- **No layout shift / jank**: content renders from server data in one pass, and
-  `prefers-reduced-motion` neutralises transitions/animations (`app/globals.css`).
-- **Continuous verification**: `<WebVitals />` measures real Core Web Vitals via
-  Next's `useReportWebVitals` and forwards *only budget breaches* through the
-  existing `/api/observability/report` pipeline, where they are captured as
-  `warning`-severity monitoring events. A regression therefore shows up as a
-  monitored alert rather than going unnoticed.
-
 ## Assumptions
 
 - Scale is modest in v1: tens of gyms and low thousands of members, comfortably served by a single shared Postgres instance with RLS (no per-tenant database/sharding needed).
