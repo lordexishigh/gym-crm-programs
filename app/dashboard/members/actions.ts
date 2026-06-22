@@ -12,6 +12,8 @@ import {
   inviteAcceptUrl,
 } from "@/lib/invites";
 import { sendEmail } from "@/lib/email/resend";
+import { captureException, reportHandledError } from "@/lib/observability/monitoring";
+import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -77,7 +79,10 @@ export async function createMemberAction(
       );
       return id;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "create-member", {
+      tenantId: session.identity.tenantId,
+    });
     return { error: "Could not save the member. Please try again." };
   }
 
@@ -141,7 +146,11 @@ export async function updateMemberAction(
       }
       return res.rowCount ?? 0;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "update-member", {
+      tenantId: session.identity.tenantId,
+      memberId: id,
+    });
     return { error: "Could not save changes. Please try again." };
   }
 
@@ -179,7 +188,11 @@ export async function sendInviteAction(
       );
       return rows[0] ?? null;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "send-invite-load-member", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
     return { error: "Could not load the member. Please try again." };
   }
   if (!member) return { error: "Member not found." };
@@ -222,7 +235,11 @@ export async function sendInviteAction(
       );
       return rows[0].id;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "send-invite-create", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
     return { error: "Could not create the invite. Please try again." };
   }
 
@@ -235,6 +252,15 @@ export async function sendInviteAction(
   });
 
   if (!sent.ok) {
+    // A synchronous send failure (bad config, provider rejection, network) is a
+    // critical reliability signal: invites are how members onboard, so a failing
+    // send path should page someone, not just surface to one staff member.
+    await captureException(new Error(`Invite send failed: ${sent.error}`), {
+      source: "send-invite",
+      severity: "critical",
+      memberId,
+      tenantId: session.identity.tenantId,
+    });
     // Roll the invite back so we don't leave a token-bound row that was never
     // delivered; staff can simply try again.
     try {
@@ -247,11 +273,21 @@ export async function sendInviteAction(
     return { error: `Invite created but the email failed to send: ${sent.error}` };
   }
 
-  // The new link is delivered — now supersede any OTHER still-pending invite so
-  // only the newest link works. Done post-send so a failed send never leaves the
-  // member with no valid invite. Best-effort: the new invite is already usable.
+  // The new link is delivered — record the Resend message id (so the inbound
+  // webhook can correlate later bounce/complaint events back to this invite) and
+  // supersede any OTHER still-pending invite so only the newest link works. Done
+  // post-send so a failed send never leaves the member with no valid invite.
+  // Best-effort: the new invite is already usable.
   try {
     await withTenantContext(session.identity, async (c) => {
+      await c.query(
+        `update invite
+            set resend_message_id = $2,
+                delivery_status   = 'sent',
+                delivery_updated_at = now()
+          where id = $1`,
+        [inviteId, sent.id],
+      );
       await c.query(
         "update invite set status = 'revoked' where member_id = $1 and status = 'pending' and id <> $2",
         [memberId, inviteId],
@@ -293,7 +329,11 @@ export async function revokeInviteAction(
       );
       return res.rowCount ?? 0;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "revoke-invite", {
+      tenantId: session.identity.tenantId,
+      inviteId,
+    });
     return { error: "Could not revoke the invite. Please try again." };
   }
 
@@ -305,6 +345,88 @@ export async function revokeInviteAction(
   revalidatePath("/dashboard/invites");
   if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
   return { success: "Invite revoked." };
+}
+
+// ---------------------------------------------------------------------------
+// GDPR data-subject rights (beta-gdpr-001/002). Both actions are staff-gated via
+// requireStaff() and run through the RLS-scoped client, so a cross-tenant id is
+// invisible — the export/erasure simply finds no subject.
+
+export type ExportActionResult =
+  | { ok: true; filename: string; json: string }
+  | { ok: false; error: string };
+
+/**
+ * Export a member's personal data as a portable JSON document (beta-gdpr-001).
+ * The export is logged for audit inside `exportMemberData`. Returns the document
+ * as a string for the browser to download — a Server Action cannot stream a file
+ * directly, so the client component turns this into a download.
+ */
+export async function exportMemberAction(
+  memberId: string,
+): Promise<ExportActionResult> {
+  const session = await requireStaff();
+  if (!memberId) return { ok: false, error: "Missing member id." };
+
+  let json: string;
+  try {
+    const { data } = await exportMemberData(session.identity, memberId);
+    if (!data) return { ok: false, error: "Member not found." };
+    json = JSON.stringify(data, null, 2);
+  } catch (err) {
+    await reportHandledError(err, "gdpr-export-member", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { ok: false, error: "Could not export this member. Please try again." };
+  }
+
+  return {
+    ok: true,
+    filename: `member-${memberId}-export.json`,
+    json,
+  };
+}
+
+export type EraseActionState = { error?: string; success?: string };
+
+/**
+ * Erase (anonymise) a member on request (beta-gdpr-002). PII is tombstoned, the
+ * row is kept (referential integrity preserved), and the action is logged for
+ * audit. Idempotent: erasing an already-erased member reports success.
+ */
+export async function eraseMemberAction(
+  _prev: EraseActionState,
+  formData: FormData,
+): Promise<EraseActionState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId) return { error: "Missing member id." };
+
+  let result: Awaited<ReturnType<typeof anonymiseMember>>;
+  try {
+    result = await anonymiseMember(session.identity, memberId);
+  } catch (err) {
+    await reportHandledError(err, "gdpr-erase-member", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not erase this member. Please try again." };
+  }
+
+  if (!result.ok) {
+    return { error: "Member not found." };
+  }
+
+  revalidatePath("/dashboard/members");
+  revalidatePath(`/dashboard/members/${memberId}`);
+  revalidatePath("/dashboard/invites");
+  return {
+    success: result.alreadyErased
+      ? "This member was already erased."
+      : "Member erased. Their personal data has been anonymised.",
+  };
 }
 
 function inviteEmailHtml(name: string, url: string): string {

@@ -38,7 +38,7 @@ A single multi-tenant Next.js (App Router) application hosts both the staff/trai
 
 - **Tech:** Supabase Auth (Postgres-native JWT, custom claims via access-token hook), EU region
 - Issues and verifies signed JWTs for staff and members, supports email-based invite onboarding (no public self-signup in v1), and embeds a custom tenant_id claim (and role) used by Postgres RLS. The Next.js app maps the verified token to DB session identity on every request.
-- **Exposes:** Sign-in / session JWT issuance, Invite-based user provisioning, JWT verification (asymmetric ES256 signing keys verified against the project's published JWKS with `jose`; no shared secret stored)
+- **Exposes:** Sign-in / session JWT issuance, Invite-based user provisioning, JWT verification (JWKS)
 - **Depends on:** PostgreSQL (RLS)
 ### Transactional Email (service)
 

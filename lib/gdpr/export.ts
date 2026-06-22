@@ -4,7 +4,17 @@ import {
   MEMBER_STATUS_HISTORY_SQL,
   type MemberStatusEvent,
 } from "../member-records";
+import { deleteAuthUser } from "../auth/admin";
 import { recordGdprEvent, resolveActorUserId } from "./audit";
+
+/**
+ * Tombstone values written in place of personal data on erasure (beta-gdpr-002).
+ * Anonymisation keeps the row (preserving referential integrity) but removes any
+ * data that could identify the subject. These are exported so tests assert the
+ * exact post-erasure shape and the values cannot silently drift.
+ */
+export const ERASED_MEMBER_NAME = "Erased member";
+export const ERASED_INVITE_EMAIL = "[erased]";
 
 /**
  * Member data export (beta-gdpr-001).
@@ -191,4 +201,266 @@ export async function exportMemberData(
     };
     return { data };
   });
+}
+
+// ===========================================================================
+// Staff data subject (beta-gdpr-001/002).
+//
+// A staff user is a data subject too: they can request an export or erasure of
+// their own personal data. The `users` table is staff-only under RLS
+// (users_staff_all), so these run as staff and are scoped to the caller's gym —
+// a cross-tenant `userId` resolves to no row, exactly like the member path.
+// ===========================================================================
+
+/** A subject's exported staff profile (all stored personal fields). */
+export type ExportedStaff = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  created_at: string;
+  updated_at: string;
+  erased_at: string | null;
+};
+
+/**
+ * Provenance summary: how much of the gym's data this staff user authored. These
+ * are counts only (not other subjects' personal data) — the staff member's own
+ * activity record, which a DSAR may reasonably include.
+ */
+export type StaffActivitySummary = {
+  programs_created: number;
+  assignments_made: number;
+  invites_created: number;
+  status_changes_made: number;
+};
+
+/** The full export document for a staff data subject. */
+export type StaffDataExport = {
+  format: "alpha-crm.staff-export";
+  format_version: 1;
+  subject: { type: "staff"; id: string };
+  staff: ExportedStaff;
+  activity: StaffActivitySummary;
+};
+
+export type StaffExportResult = { data: StaffDataExport | null };
+
+/**
+ * Export `userId`'s staff personal data under `identity`, logging the action.
+ * Returns `{ data: null }` when the user is not visible to the caller (not
+ * found, or cross-tenant) — RLS makes an out-of-scope id resolve to no row.
+ */
+export async function exportStaffData(
+  identity: Identity,
+  userId: string,
+): Promise<StaffExportResult> {
+  return withTenantContext(identity, async (c) => {
+    const staff = (
+      await c.query<ExportedStaff>(
+        `select id, email, full_name, role, created_at, updated_at, erased_at
+           from users where id = $1`,
+        [userId],
+      )
+    ).rows[0];
+    if (!staff) return { data: null };
+
+    const counts = (
+      await c.query<{
+        programs_created: string;
+        assignments_made: string;
+        invites_created: string;
+        status_changes_made: string;
+      }>(
+        `select
+           (select count(*) from program where created_by = $1)            as programs_created,
+           (select count(*) from program_assignment where assigned_by = $1) as assignments_made,
+           (select count(*) from invite where created_by = $1)             as invites_created,
+           (select count(*) from member_status_event where changed_by = $1) as status_changes_made`,
+        [userId],
+      )
+    ).rows[0];
+
+    await recordGdprEvent(c, {
+      tenantId: identity.tenantId,
+      action: "export",
+      actorRole: "staff",
+      actorUserId: await resolveActorUserId(c, identity.userId),
+      subjectUserId: userId,
+      detail: { subject: "staff" },
+    });
+
+    const data: StaffDataExport = {
+      format: "alpha-crm.staff-export",
+      format_version: 1,
+      subject: { type: "staff", id: staff.id },
+      staff,
+      activity: {
+        programs_created: Number(counts.programs_created),
+        assignments_made: Number(counts.assignments_made),
+        invites_created: Number(counts.invites_created),
+        status_changes_made: Number(counts.status_changes_made),
+      },
+    };
+    return { data };
+  });
+}
+
+// ===========================================================================
+// Right to erasure / anonymisation (beta-gdpr-002).
+//
+// We ANONYMISE rather than hard-delete: the subject row is kept but every field
+// that could identify the person is tombstoned/nulled, and `erased_at` is
+// stamped. This preserves referential integrity — programs, assignments, status
+// history and invites that reference the subject remain valid — while removing
+// the personal data, and never touches another tenant's rows (RLS + the
+// tenant-scoped client guarantee that). The action is idempotent: re-erasing an
+// already-erased subject is a no-op that still reports success.
+// ===========================================================================
+
+export type EraseResult =
+  | { ok: true; alreadyErased: boolean }
+  | { ok: false; reason: "not_found" | "forbidden" };
+
+/**
+ * Erase (anonymise) a member: tombstone profile PII, scrub their invite emails,
+ * revoke any pending invite, sever portal access, and stamp `erased_at`. The
+ * row and all its FKs survive. Best-effort deletes the Supabase auth account
+ * after the DB transaction commits so the member can no longer sign in.
+ */
+export async function anonymiseMember(
+  identity: Identity,
+  memberId: string,
+): Promise<EraseResult> {
+  const outcome = await withTenantContext(identity, async (c) => {
+    const member = (
+      await c.query<{ id: string; auth_user_id: string | null; erased_at: string | null }>(
+        `select id, auth_user_id, erased_at from member where id = $1`,
+        [memberId],
+      )
+    ).rows[0];
+    // RLS makes an out-of-scope id resolve to no row.
+    if (!member) return { ok: false as const, reason: "not_found" as const };
+
+    if (member.erased_at) {
+      return { ok: true as const, alreadyErased: true, authUserId: null };
+    }
+
+    await c.query(
+      `update member
+          set full_name = $2, email = null, phone = null, notes = null,
+              status = 'inactive', auth_user_id = null,
+              erased_at = now(), updated_at = now()
+        where id = $1`,
+      [memberId, ERASED_MEMBER_NAME],
+    );
+
+    // Scrub PII held on the member's invites and invalidate any pending one.
+    await c.query(
+      `update invite
+          set email = $2,
+              status = case when status = 'pending' then 'revoked' else status end
+        where member_id = $1`,
+      [memberId, ERASED_INVITE_EMAIL],
+    );
+
+    await recordGdprEvent(c, {
+      tenantId: identity.tenantId,
+      action: "erasure",
+      actorRole: identity.role,
+      actorUserId:
+        identity.role === "staff"
+          ? await resolveActorUserId(c, identity.userId)
+          : null,
+      subjectMemberId: memberId,
+      detail: { subject: "member" },
+    });
+
+    return {
+      ok: true as const,
+      alreadyErased: false,
+      authUserId: member.auth_user_id,
+    };
+  });
+
+  // Best-effort, post-commit: remove the auth account so sign-in is impossible.
+  if (outcome.ok && !outcome.alreadyErased && outcome.authUserId) {
+    await deleteAuthUser(outcome.authUserId);
+  }
+
+  return outcome.ok
+    ? { ok: true, alreadyErased: outcome.alreadyErased }
+    : outcome;
+}
+
+/**
+ * Erase (anonymise) a staff user: tombstone their email (kept unique per tenant
+ * via the id suffix to satisfy the unique constraint), null their name, sever
+ * portal/auth linkage and stamp `erased_at`. Authored rows (programs,
+ * assignments, etc.) keep their FK — they record activity, not personal data.
+ *
+ * A staff user cannot erase THEMSELVES (that would lock the actor out
+ * mid-request and remove the audit actor); the caller is identified via the
+ * session, so this is enforced here rather than trusting the UI.
+ */
+export async function anonymiseStaff(
+  identity: Identity,
+  userId: string,
+): Promise<EraseResult> {
+  const outcome = await withTenantContext(identity, async (c) => {
+    const actorUserId = await resolveActorUserId(c, identity.userId);
+    if (actorUserId && actorUserId === userId) {
+      return { ok: false as const, reason: "forbidden" as const };
+    }
+
+    const staff = (
+      await c.query<{ id: string; auth_user_id: string | null; erased_at: string | null }>(
+        `select id, auth_user_id, erased_at from users where id = $1`,
+        [userId],
+      )
+    ).rows[0];
+    if (!staff) return { ok: false as const, reason: "not_found" as const };
+
+    if (staff.erased_at) {
+      return {
+        ok: true as const,
+        alreadyErased: true,
+        authUserId: null,
+        actorUserId,
+      };
+    }
+
+    await c.query(
+      `update users
+          set email = 'erased-' || id::text || '@invalid.example',
+              full_name = null, auth_user_id = null,
+              erased_at = now(), updated_at = now()
+        where id = $1`,
+      [userId],
+    );
+
+    await recordGdprEvent(c, {
+      tenantId: identity.tenantId,
+      action: "erasure",
+      actorRole: "staff",
+      actorUserId,
+      subjectUserId: userId,
+      detail: { subject: "staff" },
+    });
+
+    return {
+      ok: true as const,
+      alreadyErased: false,
+      authUserId: staff.auth_user_id,
+      actorUserId,
+    };
+  });
+
+  if (outcome.ok && !outcome.alreadyErased && outcome.authUserId) {
+    await deleteAuthUser(outcome.authUserId);
+  }
+
+  return outcome.ok
+    ? { ok: true, alreadyErased: outcome.alreadyErased }
+    : outcome;
 }

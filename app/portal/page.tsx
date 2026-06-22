@@ -37,6 +37,13 @@ export default async function PortalPage() {
   // Mobile-first shell: full-width on a phone, capped/centred on larger screens.
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col">
+      {/* Keyboard skip-link: first tab stop jumps past the header to the program. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-brand focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+      >
+        Skip to content
+      </a>
       <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-6">
         <span className="text-base font-bold text-brand">Alpha CRM</span>
         <form action={logoutAction}>
@@ -50,7 +57,11 @@ export default async function PortalPage() {
         </form>
       </header>
 
-      <main className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex-1 px-4 py-6 focus:outline-none sm:px-6 sm:py-8"
+      >
         <ProgramView programs={programs} />
         <ProgramHistory programs={history} />
       </main>

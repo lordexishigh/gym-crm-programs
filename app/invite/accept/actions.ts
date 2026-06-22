@@ -7,6 +7,7 @@ import { createMemberAuthUser, deleteAuthUser } from "@/lib/auth/admin";
 import { signInWithPassword } from "@/lib/auth/supabase";
 import { verifyAccessToken, sessionRole, claimValue } from "@/lib/identity";
 import { establishSession } from "@/lib/auth/session";
+import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
  * Invite acceptance: provision the member's portal account (mvp-member-management-004).
@@ -91,7 +92,16 @@ export async function acceptInviteAction(
       }
       return "ok";
     });
-  } catch {
+  } catch (err) {
+    // The auth user exists but the member link/invite-consume transaction failed.
+    // This is a reliability problem in the onboarding flow worth alerting on —
+    // the invitee is left in a half-provisioned state.
+    await reportHandledError(err, "invite-accept-link", {
+      severity: "critical",
+      tenantId: invite.tenantId,
+      memberId: invite.memberId,
+      inviteId: invite.inviteId,
+    });
     return {
       error: "Your account was created but linking failed. Please try signing in.",
     };

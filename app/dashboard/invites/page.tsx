@@ -24,7 +24,7 @@ export default async function InvitesPage() {
 
     const { rows } = await c.query<InviteListRow>(
       `select i.id, i.email, i.status, i.expires_at, i.created_at, i.accepted_at,
-              i.member_id,
+              i.member_id, i.delivery_status, i.delivery_detail,
               m.full_name    as member_name,
               m.auth_user_id as member_auth_user_id
          from invite i

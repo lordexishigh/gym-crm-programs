@@ -2,12 +2,6 @@
 
 > A multi-tenant web CRM for Cyprus gyms whose wedge is member-facing training programs: trainers build programs and assign them to members, who view them on a mobile-first web portal.
 
-## Refined idea
-
-Alpha CRM is a multi-tenant, web-based CRM for gyms and fitness businesses (launching in Cyprus), where one hosted application serves many gyms and each gym's data is strictly isolated by tenant_id with database-level Row Level Security. The primary users are gym staff (owners and trainers) who manage their gym from a responsive dashboard, plus the gym's members, who get a narrow, read-only, mobile-first portal. The core capability and competitive wedge is member-facing training programs: a trainer builds a program (exercises with sets, reps, rest, and notes) and assigns it to a member, who then logs in on their phone browser to see their own assigned program — something the incumbent competitor (ThinkCRM) cannot do.
-
-Build order is deliberately inverted to ship the differentiator first: a thin foundation (member management UI, trainer role) and the hero program feature come before generic CRM table stakes. The member experience ships as responsive web inside the existing Next.js app first, with native mobile apps deferred until paying gyms justify the overhead. Standard CRM functions — check-in flow, plans and Stripe billing, fuller staff management — follow once the wedge works. Assumptions filled where the idea was vague: members are onboarded via invite email rather than self-signup for v1 (simpler and safer), and identity for every data query is enforced from the signed JWT at the database layer, never from the browser, so no member or gym can ever see another's data.
-
 ## Problem
 
 Gyms and fitness businesses in Cyprus need to manage members and deliver training programs, but the incumbent (ThinkCRM) cannot give members a way to see the programs their trainers build for them. Gyms are stuck either using a generic CRM with no member-facing program delivery or stitching together separate tools. Alpha CRM closes this gap with a single hosted application that strictly isolates each gym's data while letting trainers author and assign programs that members can open on their phones.

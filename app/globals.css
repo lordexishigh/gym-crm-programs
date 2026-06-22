@@ -6,14 +6,26 @@
   color-scheme: dark;
 
   /*
-   * Brand accent channels (Emerald-600 / Emerald-700) as space-separated RGB so
-   * they feed both Tailwind's `rgb(var(--brand) / <alpha-value>)` theme colour
-   * and the raw-CSS focus ring below. This is the one place to recolour the UI
-   * — except the invite-email button, which hardcodes the same hex separately
-   * (#059669) because email HTML can't read CSS variables; keep them in sync.
+   * Brand accent channels as space-separated RGB so they feed both Tailwind's
+   * `rgb(var(--brand) / <alpha-value>)` theme colours and the raw-CSS focus ring
+   * below. This is the one place to recolour the UI.
+   *
+   * On a DARK theme the same emerald can't serve both roles and meet WCAG AA, so
+   * the brand is split (beta-polish-a11y-001):
+   *   --brand      Emerald-700 — SOLID fills (`bg-brand` buttons). White text on
+   *                this reaches ~5.5:1, clearing AA (Emerald-600 only made 3.8:1).
+   *   --brand-dark Emerald-800 — solid hover (`hover:bg-brand-dark`).
+   *   --brand-text Emerald-400 — accent TEXT, links, and the focus ring. As text
+   *                on the dark surfaces this clears AA (~9:1); the solid emerald
+   *                would only reach ~3:1 as text. See the `.text-brand` override.
+   *
+   * The invite-email button hardcodes its own hex (email HTML can't read CSS
+   * variables) and has its own contrast constraints, so it is intentionally NOT
+   * kept pixel-identical to these tokens.
    */
-  --brand: 5 150 105;
-  --brand-dark: 4 120 87;
+  --brand: 4 120 87;
+  --brand-dark: 6 95 70;
+  --brand-text: 52 211 153;
 }
 
 html,
@@ -35,7 +47,7 @@ body {
  * on white cards, tinted chips, and inside bordered inputs alike.
  */
 :focus-visible {
-  outline: 2px solid rgb(var(--brand));
+  outline: 2px solid rgb(var(--brand-text));
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -87,4 +99,31 @@ body {
 .border-white, .border-slate-100, .border-slate-200, .border-slate-300,
 .border-gray-100, .border-gray-200, .border-gray-300 {
   border-color: #334155 !important;       /* slate-700 */
+}
+
+/*
+ * Text contrast (beta-polish-a11y-001 — WCAG AA, ≥4.5:1 on the dark surfaces).
+ * Centralised here so the AA guarantee holds app-wide and can't drift per-file.
+ *
+ * - Muted helper/label text (slate-400/500): slate-500 fails (~3.3:1) on the
+ *   dark page, so both are lifted to a tone that clears AA on slate-800/900.
+ * - Status text (danger/success): the -600/700 shades are too dark to read on a
+ *   dark surface, so they map to the -400 shades, which pass while staying
+ *   semantically red/green.
+ * - Accent text/links (`text-brand`): use the lighter --brand-text token; the
+ *   solid emerald brand would only reach ~3:1 as text. Solid `bg-brand` buttons
+ *   keep white text and are unaffected (they use the dark --brand fill).
+ */
+.text-slate-500, .text-slate-400 {
+  color: #94a3b8 !important;              /* slate-400 — AA muted text on dark */
+}
+.text-red-600, .text-red-700 {
+  color: #f87171 !important;             /* red-400 — AA danger text on dark */
+}
+.text-green-700, .text-green-600,
+.text-emerald-700, .text-emerald-600 {
+  color: #34d399 !important;             /* emerald-400 — AA success text on dark */
+}
+.text-brand {
+  color: rgb(var(--brand-text)) !important;
 }

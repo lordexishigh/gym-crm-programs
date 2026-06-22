@@ -30,7 +30,14 @@ export async function resolveActorUserId(
   return rows[0]?.id ?? null;
 }
 
-/** Append one GDPR audit event using the caller's tenant-scoped client. */
+/**
+ * Append one GDPR audit event using the caller's tenant-scoped client.
+ *
+ * The data subject is identified by exactly one of `subjectMemberId` (a member)
+ * or `subjectUserId` (a staff user) — both are nullable so the audit row can
+ * survive later erasure/cleanup of the row it references (the FKs are ON DELETE
+ * SET NULL; see migrations 0004/0006).
+ */
 export async function recordGdprEvent(
   c: PoolClient,
   event: {
@@ -38,20 +45,23 @@ export async function recordGdprEvent(
     action: GdprAction;
     actorRole: "staff" | "member";
     actorUserId: string | null;
-    subjectMemberId: string;
+    subjectMemberId?: string | null;
+    subjectUserId?: string | null;
     detail?: Record<string, unknown>;
   },
 ): Promise<void> {
   await c.query(
     `insert into gdpr_audit_event
-       (tenant_id, action, actor_role, actor_user_id, subject_member_id, detail)
-     values ($1, $2, $3, $4, $5, $6)`,
+       (tenant_id, action, actor_role, actor_user_id,
+        subject_member_id, subject_user_id, detail)
+     values ($1, $2, $3, $4, $5, $6, $7)`,
     [
       event.tenantId,
       event.action,
       event.actorRole,
       event.actorUserId,
-      event.subjectMemberId,
+      event.subjectMemberId ?? null,
+      event.subjectUserId ?? null,
       event.detail ? JSON.stringify(event.detail) : null,
     ],
   );

@@ -15,6 +15,7 @@ import { MemberForm } from "../MemberForm";
 import { StatusHistory } from "../StatusHistory";
 import { updateMemberAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
+import { GdprPanel } from "../GdprPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +36,9 @@ export default async function MemberDetailPage({
 
   const data = await withTenantContext(session.identity, async (c) => {
     const member = (
-      await c.query<MemberRow>(
+      await c.query<MemberRow & { erased_at: string | null }>(
         `select id, email, full_name, phone, status, notes,
-                auth_user_id, created_at, updated_at
+                auth_user_id, created_at, updated_at, erased_at
            from member where id = $1`,
         [id],
       )
@@ -151,6 +152,8 @@ export default async function MemberDetailPage({
             : null
         }
       />
+
+      <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
     </div>
   );
 }

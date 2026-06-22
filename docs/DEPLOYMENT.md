@@ -14,7 +14,9 @@ source. See [`.env.example`](../.env.example) for the full list.
 | `DATABASE_URL` | Vercel + CI | Privileged Postgres connection (migrations + base connection the app drops into `app_user`). |
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Vercel | Public Supabase config (browser + public auth calls). |
 | `SUPABASE_SECRET_KEY` | Vercel (server-only) | Admin/provisioning paths (secret key `sb_secret_...`). |
-| `RESEND_API_KEY` / `INVITE_FROM_EMAIL` | Vercel (server-only) | Invite email (used in later tasks). |
+| `RESEND_API_KEY` / `INVITE_FROM_EMAIL` | Vercel (server-only) | Invite email send. `INVITE_FROM_EMAIL` must use the verified sending domain (below). |
+| `RESEND_WEBHOOK_SECRET` | Vercel (server-only) | Verifies inbound Resend bounce/complaint webhooks (`whsec_...`). |
+| `MONITORING_WEBHOOK_URL` / `ALERT_WEBHOOK_URL` | Vercel (server-only) | Optional. Error-monitoring sink + critical-alert sink (see Observability). |
 
 In CI/CD these live in GitHub repository **secrets** (`PRODUCTION_DATABASE_URL`,
 `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`).
@@ -63,5 +65,87 @@ npm run migrate
 npm run dev                 # http://localhost:3000
 ```
 
-Health check: `GET /api/health` returns `{ status, db, ... }` for deploy smoke
-tests and uptime monitoring.
+## Email deliverability (Resend) — beta-hardening-002
+
+Invite emails are sent through Resend (`lib/email/resend.ts`). For mail to reach
+real inboxes — not spam folders — the sending domain must be **authenticated**
+with SPF and DKIM, and bounces/complaints must be processed.
+
+### 1. Verified sending domain + SPF / DKIM / DMARC
+
+In the Resend dashboard, add and **verify** the sending domain (e.g.
+`mail.yourgym.example`) in the **EU region**, then publish the DNS records Resend
+generates. `INVITE_FROM_EMAIL` must use this verified domain — never the shared
+`onboarding@resend.dev` sandbox address, which cannot pass DKIM for our domain.
+
+Typical records (Resend shows the exact values for your domain):
+
+| Type | Host | Value | Purpose |
+| --- | --- | --- | --- |
+| `TXT` | `send.mail.yourgym.example` | `v=spf1 include:amazonses.com ~all` | **SPF** — authorises Resend's MTAs to send for the domain. |
+| `TXT` | `resend._domainkey.mail.yourgym.example` | `p=MIGfMA0…` (Resend-provided key) | **DKIM** — signs each message so receivers verify it wasn't altered/forged. |
+| `MX`  | `send.mail.yourgym.example` | `feedback-smtp.eu-west-1.amazonses.com` (priority 10) | Return-path / bounce handling for the verified subdomain. |
+| `TXT` | `_dmarc.yourgym.example` | `v=DMARC1; p=quarantine; rua=mailto:dmarc@yourgym.example` | **DMARC** — aligns SPF/DKIM and tells receivers what to do on failure; also yields aggregate reports. |
+
+Verification is **DNS/domain config, not code** — the app only references the
+verified domain via `INVITE_FROM_EMAIL`.
+
+### 2. Bounce & complaint handling (inbound webhook)
+
+Add a webhook in the Resend dashboard pointing at:
+
+```
+https://app.yourdomain.eu/api/email/webhook
+```
+
+Subscribe it to `email.bounced`, `email.complained`, `email.delivery_delayed`,
+`email.delivered`, and `email.sent`. Copy the webhook's signing secret into
+`RESEND_WEBHOOK_SECRET`. The route (`app/api/email/webhook/route.ts`):
+
+- **verifies the Svix signature** over the raw body (rejects spoofed events 401),
+- correlates the event to the invite by the Resend message id stored at send time
+  (`invite.resend_message_id`, migration `0007`),
+- advances `invite.delivery_status` (`sent` → `delivered`, or terminal
+  `bounced` / `complained` / `failed`) and stores the reason in
+  `delivery_detail`,
+- logs every event and raises a **critical alert** (via `captureException`) on a
+  bounce/complaint so the team can react before sender reputation degrades.
+
+Staff see a red "Bounced / Marked as spam / Delivery failed" flag on the affected
+invite in **Dashboard → Invites**. A synchronous send failure (bad config,
+provider rejection) rolls the invite back, surfaces an error to the staff member,
+and also raises a critical alert.
+
+### 3. Verifying deliverability against common inbox providers
+
+Use the dev send script to send to real inboxes and confirm authentication:
+
+```bash
+node scripts/send-test-email.mjs you@gmail.com
+node scripts/send-test-email.mjs you@outlook.com
+node scripts/send-test-email.mjs you@yahoo.com
+```
+
+In each inbox, open **Show original / View source** and confirm `SPF=pass`,
+`DKIM=pass`, and `DMARC=pass`. Gmail's *Show original* and
+[mail-tester.com](https://www.mail-tester.com) both report all three at a glance.
+
+## Observability (beta-hardening-001)
+
+- **Structured logs** — every server log is one JSON line (`lib/observability/logger.ts`),
+  emitted to stdout/stderr and indexed by Vercel's log drain. Sensitive keys are
+  redacted before serialisation.
+- **Error monitoring** — uncaught server errors (`instrumentation.ts`
+  `onRequestError`), client render errors (the `error.tsx` boundaries →
+  `/api/observability/report`), and handled failures all flow through
+  `captureException`, which logs + POSTs to `MONITORING_WEBHOOK_URL` if set.
+- **Critical alerts** — `critical` severity additionally POSTs to
+  `ALERT_WEBHOOK_URL` (e.g. a Slack/PagerDuty webhook), falling back to the
+  monitoring URL flagged `alert: true`. Invite send failures and email
+  bounces/complaints are raised at this level.
+- Users only ever see a friendly message plus a correlation id; stack traces stay
+  server-side.
+
+Health check: `GET /api/health` returns `{ ok, status, db, email, time }` and
+**HTTP 503 when the database is unreachable** (200 when healthy) so uptime
+monitors alert on a real outage. Point an uptime monitor at it.

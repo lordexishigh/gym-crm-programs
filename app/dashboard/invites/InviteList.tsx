@@ -28,6 +28,19 @@ export type InviteListRow = {
   member_id: string | null;
   member_name: string | null;
   member_auth_user_id: string | null;
+  /** Email delivery state from Resend webhooks (beta-hardening-002). Optional
+   *  so the pure view test can omit it; absent/'pending'/'sent'/'delivered'
+   *  show no warning. */
+  delivery_status?: string | null;
+  delivery_detail?: string | null;
+};
+
+/** Delivery states that represent a deliverability problem worth flagging. */
+const DELIVERY_PROBLEM: Record<string, string> = {
+  bounced: "Bounced",
+  complained: "Marked as spam",
+  failed: "Delivery failed",
+  delayed: "Delivery delayed",
 };
 
 /** A row annotated with its display status, as passed to `renderActions`. */
@@ -122,6 +135,14 @@ export function InviteList({
                       ? `expires ${fmtDate(row.expires_at)}`
                       : `sent ${fmtDate(row.created_at)}`}
                 </span>
+                {row.delivery_status && DELIVERY_PROBLEM[row.delivery_status] ? (
+                  <span
+                    className="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
+                    title={row.delivery_detail ?? undefined}
+                  >
+                    ⚠ {DELIVERY_PROBLEM[row.delivery_status]}
+                  </span>
+                ) : null}
               </div>
 
               {renderActions ? renderActions(row) : null}

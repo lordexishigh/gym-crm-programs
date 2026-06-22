@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, vi } from "vitest";
-import { SignJWT, exportJWK, generateKeyPair, type KeyLike } from "jose";
+import { SignJWT, exportJWK, generateKeyPair, type JWK, type KeyLike } from "jose";
 import {
   claimValue,
   identityFromClaims,
@@ -25,7 +25,7 @@ const ISSUER = `${SUPABASE_URL}/auth/v1`;
 const KID = "test-es256-key";
 
 // Shared holder the hoisted mock factory reads from; populated in beforeAll.
-const keyset = vi.hoisted(() => ({ jwks: { keys: [] as unknown[] } }));
+const keyset = vi.hoisted(() => ({ jwks: { keys: [] as JWK[] } }));
 vi.mock("jose", async (importOriginal) => {
   const actual = await importOriginal<typeof import("jose")>();
   return { ...actual, createRemoteJWKSet: () => actual.createLocalJWKSet(keyset.jwks) };
@@ -149,5 +149,44 @@ describe("verifyAccessToken", () => {
       .setExpirationTime("1h")
       .sign(rogue);
     await expect(verifyAccessToken(bad)).rejects.toThrow();
+  });
+
+  it("rejects a token whose alg is not ES256 (algorithm substitution)", async () => {
+    // A non-ES256 token must be refused even before key resolution: the verify
+    // call pins `algorithms: ["ES256"]`. Sign with an RS256 key published under
+    // the SAME kid so only the algorithm differs.
+    const { privateKey: rsaPriv, publicKey: rsaPub } =
+      await generateKeyPair("RS256");
+    keyset.jwks.keys = [
+      ...keyset.jwks.keys,
+      { ...(await exportJWK(rsaPub)), kid: KID, alg: "RS256", use: "sig" },
+    ];
+    const rs = await new SignJWT({ sub: "x", tenant_id: "gym-1" })
+      .setProtectedHeader({ alg: "RS256", kid: KID })
+      .setIssuer(ISSUER)
+      .setAudience("authenticated")
+      .setExpirationTime("1h")
+      .sign(rsaPriv);
+    await expect(verifyAccessToken(rs)).rejects.toThrow();
+  });
+
+  it("rejects an expired token", async () => {
+    const expired = await new SignJWT({ sub: "x", tenant_id: "gym-1" })
+      .setProtectedHeader({ alg: "ES256", kid: KID })
+      .setIssuer(ISSUER)
+      .setAudience("authenticated")
+      .setExpirationTime("-1h") // already past
+      .sign(privateKey);
+    await expect(verifyAccessToken(expired)).rejects.toThrow();
+  });
+
+  it("rejects a token for the wrong audience", async () => {
+    const wrongAud = await new SignJWT({ sub: "x", tenant_id: "gym-1" })
+      .setProtectedHeader({ alg: "ES256", kid: KID })
+      .setIssuer(ISSUER)
+      .setAudience("anon")
+      .setExpirationTime("1h")
+      .sign(privateKey);
+    await expect(verifyAccessToken(wrongAud)).rejects.toThrow();
   });
 });

@@ -6,6 +6,17 @@ const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
   // `pg` is a server-only dependency; never bundle it for the browser.
   serverExternalPackages: ["pg"],
+
+  // Mobile performance budget (beta-polish-a11y-002). The member portal is
+  // opened on phones over mobile data, so we trim what ships to the browser:
+  // - gzip/br compression on responses (smaller transfer on slow links),
+  // - no client source maps in production (they bloat the deployed bundle),
+  // - drop the X-Powered-By header (fewer bytes, less fingerprinting).
+  // The portal stays a thin server-rendered surface (no client data-fetching,
+  // no heavy client libs); the documented budget lives in docs/ARCHITECTURE.md.
+  compress: true,
+  productionBrowserSourceMaps: false,
+  poweredByHeader: false,
 };
 
 export default nextConfig;

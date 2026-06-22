@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { resolveStaffUserId } from "@/lib/staff";
+import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
  * Program template mutations (alpha-exercise-library-002).
@@ -95,7 +96,11 @@ export async function saveProgramAsTemplateAction(
       );
       return true;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "save-program-as-template", {
+      tenantId: session.identity.tenantId,
+      programId,
+    });
     saved = false;
   }
 
@@ -158,7 +163,11 @@ export async function createProgramFromTemplateAction(
       );
       return programId;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "create-program-from-template", {
+      tenantId: session.identity.tenantId,
+      templateId,
+    });
     newProgramId = null;
   }
 

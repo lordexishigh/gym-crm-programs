@@ -61,8 +61,13 @@ describe.skipIf(!hasDb)("core schema", () => {
     const rows = await withAdminContext(async (c) =>
       (
         await c.query(
+          // Scope to the public schema: Supabase provisions an `auth.users`
+          // table whose relname collides with our core `users`, so an
+          // unscoped relname match would pick it up and over-count.
           `select relname, relrowsecurity, relforcerowsecurity
-           from pg_class where relname = any($1)`,
+           from pg_class
+           where relname = any($1)
+             and relnamespace = 'public'::regnamespace`,
           [CORE_TABLES as unknown as string[]],
         )
       ).rows,

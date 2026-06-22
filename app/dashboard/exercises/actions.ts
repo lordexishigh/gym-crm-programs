@@ -6,6 +6,7 @@ import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { resolveStaffUserId } from "@/lib/staff";
 import { validateLibraryExerciseInput } from "@/lib/exercise-library";
+import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
  * Per-gym exercise library mutations (alpha-exercise-library-001).
@@ -44,7 +45,10 @@ export async function createLibraryExerciseAction(
         [session.identity.tenantId, name, sets, reps, rest, notes, createdBy],
       );
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "create-library-exercise", {
+      tenantId: session.identity.tenantId,
+    });
     return { error: "Could not add the exercise. Please try again." };
   }
 

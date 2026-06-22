@@ -11,7 +11,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#059669",
+  // Matches the AA-compliant solid brand (Emerald-700, app/globals.css --brand).
+  themeColor: "#047857",
 };
 
 export default function RootLayout({

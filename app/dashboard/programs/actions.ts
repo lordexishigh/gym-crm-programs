@@ -7,6 +7,7 @@ import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { validateProgramInput, type ExerciseInput } from "@/lib/programs";
 import { reassignProgram } from "@/lib/assignments";
+import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
  * Staff-facing program authoring + assignment mutations (mvp-program-001/003).
@@ -93,7 +94,10 @@ export async function createProgramAction(
       await insertExercises(c, session.identity.tenantId, programId, exercises);
       return programId;
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "create-program", {
+      tenantId: session.identity.tenantId,
+    });
     return { error: "Could not save the program. Please try again." };
   }
 
@@ -148,7 +152,11 @@ export async function updateProgramAction(
       await insertExercises(c, session.identity.tenantId, id, exercises);
       return "ok";
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "update-program", {
+      tenantId: session.identity.tenantId,
+      programId: id,
+    });
     return { error: "Could not save changes. Please try again." };
   }
 
@@ -212,7 +220,12 @@ export async function assignProgramAction(
       });
       return "ok";
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "assign-program", {
+      tenantId: session.identity.tenantId,
+      programId,
+      memberId,
+    });
     return { error: "Could not assign the program. Please try again." };
   }
 
@@ -246,7 +259,12 @@ export async function unassignProgramAction(
         [programId, memberId],
       );
     });
-  } catch {
+  } catch (err) {
+    await reportHandledError(err, "unassign-program", {
+      tenantId: session.identity.tenantId,
+      programId,
+      memberId,
+    });
     return { error: "Could not remove the assignment. Please try again." };
   }
 

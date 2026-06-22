@@ -127,3 +127,21 @@ export async function captureException(
 
   return id;
 }
+
+/**
+ * Report an error that a server action or route handler CAUGHT and turned into a
+ * friendly return value instead of rethrowing (beta-hardening-001).
+ *
+ * Such an error never escapes to Next.js' `onRequestError`, so without this it
+ * would be invisible to monitoring even though the user saw a failure. This
+ * routes it through the same `captureException` path (severity "error" by
+ * default — logged + monitored, but not paged) so the staff mutation surface is
+ * observable too. Best-effort and never throws; returns the correlation id.
+ */
+export async function reportHandledError(
+  error: unknown,
+  source: string,
+  context: Omit<ErrorContext, "source"> = {},
+): Promise<string> {
+  return captureException(error, { source, ...context });
+}

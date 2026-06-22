@@ -78,6 +78,13 @@ function getJwks(base: string): ReturnType<typeof createRemoteJWKSet> {
  * (asymmetric ES256 signing keys) and return its claims. No shared secret is
  * stored anywhere; the issuer and audience are validated as defence-in-depth.
  * Edge-safe — uses only `jose` + `fetch`.
+ *
+ * `algorithms` is pinned to ES256 (the project's asymmetric signing algorithm)
+ * so a token presenting any other `alg` header is rejected outright. This closes
+ * algorithm-substitution attacks — e.g. a forged `alg: HS256` / `alg: none`
+ * token, or one signed with a key type the JWKS does not publish — rather than
+ * relying on key-by-`kid` resolution alone. `jwtVerify` also enforces `exp`
+ * (and `nbf`/`iat` when present) by default, so an expired token never verifies.
  */
 export async function verifyAccessToken(
   token: string,
@@ -86,6 +93,7 @@ export async function verifyAccessToken(
   const { payload } = await jwtVerify(token, getJwks(base), {
     issuer: `${base}/auth/v1`,
     audience: "authenticated",
+    algorithms: ["ES256"],
   });
   return payload as AccessTokenClaims;
 }
