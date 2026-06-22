@@ -26,3 +26,13 @@ next-env.d.ts
 
 # nous pipeline state
 .nous/
+
+# nous provisioning secrets
+.env*.local
+
+# nous provisioning secrets
+.env*.local
+.vercel
+
+# nous provisioning secrets
+.env*.local
