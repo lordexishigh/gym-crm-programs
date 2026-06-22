@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
   /*
    * Brand accent channels (Emerald-600 / Emerald-700) as space-separated RGB so
@@ -22,7 +22,7 @@ body {
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-slate-900 text-slate-100 antialiased;
 }
 
 /*
@@ -54,4 +54,37 @@ body {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
   }
+}
+
+/*
+ * Dark surfaces (user request: no white/bright backgrounds on any page).
+ * The app was authored light — white cards on a slate-50 page. Rather than touch
+ * every component, remap the bright NEUTRAL surfaces to dark and flip the dark
+ * text/borders that sat on them to light so contrast is preserved. Brand (emerald)
+ * accents and `text-white` on accent buttons are intentionally left untouched.
+ * This is the one place to tune the dark palette.
+ */
+.bg-white, .hover\:bg-white:hover,
+.bg-slate-50, .hover\:bg-slate-50:hover {
+  background-color: #1e293b !important;   /* slate-800 — cards, inputs, panels */
+}
+.bg-slate-100, .hover\:bg-slate-100:hover {
+  background-color: #273449 !important;   /* slightly lifted — table rows, hovers, chips */
+}
+
+/* Dark text that used to sit on white → light, so it stays readable on dark. */
+.text-slate-900, .text-slate-800,
+.text-gray-900, .text-gray-800,
+.text-black {
+  color: #f1f5f9 !important;
+}
+.text-slate-700, .text-slate-600,
+.text-gray-700, .text-gray-600 {
+  color: #cbd5e1 !important;
+}
+
+/* Hairline borders → visible but subtle on dark. */
+.border-white, .border-slate-100, .border-slate-200, .border-slate-300,
+.border-gray-100, .border-gray-200, .border-gray-300 {
+  border-color: #334155 !important;       /* slate-700 */
 }
