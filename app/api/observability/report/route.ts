@@ -31,6 +31,26 @@ export async function POST(request: Request) {
     return new NextResponse(null, { status: 204 });
   }
 
+  // Web Vitals budget breach (beta-polish-a11y-002). The client only POSTs a
+  // metric here when it exceeds the mobile performance budget, so record it as a
+  // warning (a perf regression, not a crash) on the same monitoring sink.
+  if (body.type === "web-vital") {
+    const name = clamp(body.name) ?? "unknown";
+    const value = typeof body.value === "number" ? body.value : undefined;
+    await captureException(
+      new Error(`Web Vitals budget exceeded: ${name}`),
+      {
+        source: "web-vitals",
+        severity: "warning",
+        metric: name,
+        value,
+        rating: clamp(body.rating),
+        path: clamp(body.path),
+      },
+    );
+    return new NextResponse(null, { status: 204 });
+  }
+
   const message = clamp(body.message) ?? "Client error";
   const digest = clamp(body.digest);
 

@@ -13,7 +13,9 @@ const nextConfig = {
   // - no client source maps in production (they bloat the deployed bundle),
   // - drop the X-Powered-By header (fewer bytes, less fingerprinting).
   // The portal stays a thin server-rendered surface (no client data-fetching,
-  // no heavy client libs); the documented budget lives in docs/ARCHITECTURE.md.
+  // no heavy client libs). The budget (Core Web Vitals targets) is documented in
+  // docs/ARCHITECTURE.md → "Performance" and enforced at runtime by the
+  // `<WebVitals />` reporter, which forwards budget breaches to monitoring.
   compress: true,
   productionBrowserSourceMaps: false,
   poweredByHeader: false,

@@ -333,6 +333,17 @@ describe.skipIf(!hasDb)("comprehensive cross-tenant & cross-member isolation", (
   });
 
   afterAll(async () => {
+    // Self-clean the seeded fixtures so the suite leaves no residue, even when
+    // deliberately pointed at a shared (non-CI) database via
+    // ALLOW_NONLOCAL_TEST_DB. Deleting the two gyms cascades to every child row
+    // (users/member/program/exercise/assignment/invite/library/template/events).
+    if (seed.gymA || seed.gymB) {
+      await withAdminContext(async (c) => {
+        await c.query("delete from gym where id = any($1)", [
+          [seed.gymA, seed.gymB].filter(Boolean),
+        ]);
+      });
+    }
     await closePool();
   });
 
@@ -502,6 +513,104 @@ describe.skipIf(!hasDb)("comprehensive cross-tenant & cross-member isolation", (
         async (c) =>
           (await c.query("delete from member where id = $1", [seed.memberA1]))
             .rowCount,
+      );
+      expect(rowCount).toBe(0);
+    });
+  });
+
+  // --- Member axis: staff-managed tables are READ-ONLY to a member -----------
+  // A member may SELECT their assigned program/exercises and their own
+  // assignment (proven above) but has NO write policy on any of these tables.
+  // Every write path must therefore fail: INSERT is rejected outright (no
+  // permissive INSERT policy), and UPDATE/DELETE match zero rows even for rows
+  // the member CAN read (a SELECT policy grants no UPDATE/DELETE visibility).
+  describe("member cannot write staff-managed tables (program/exercise/assignment)", () => {
+    const m = () => member(seed.gymA, seed.memberA1);
+
+    it("cannot INSERT a program", async () => {
+      await expect(
+        withTenantContext(m(), async (c) => {
+          await c.query(
+            "insert into program (tenant_id, name) values ($1, 'Member-made')",
+            [seed.gymA],
+          );
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("cannot UPDATE their assigned program (0 rows)", async () => {
+      const rowCount = await withTenantContext(m(), async (c) =>
+        (
+          await c.query("update program set name = 'hacked' where id = $1", [
+            seed.programA,
+          ])
+        ).rowCount,
+      );
+      expect(rowCount).toBe(0);
+    });
+
+    it("cannot DELETE their assigned program (0 rows)", async () => {
+      const rowCount = await withTenantContext(m(), async (c) =>
+        (await c.query("delete from program where id = $1", [seed.programA]))
+          .rowCount,
+      );
+      expect(rowCount).toBe(0);
+    });
+
+    it("cannot INSERT an exercise into their assigned program", async () => {
+      await expect(
+        withTenantContext(m(), async (c) => {
+          await c.query(
+            "insert into exercise (tenant_id, program_id, position, name) values ($1, $2, 99, 'Member-made')",
+            [seed.gymA, seed.programA],
+          );
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("cannot UPDATE an exercise in their assigned program (0 rows)", async () => {
+      const rowCount = await withTenantContext(m(), async (c) =>
+        (
+          await c.query("update exercise set name = 'hacked' where id = $1", [
+            seed.exerciseA,
+          ])
+        ).rowCount,
+      );
+      expect(rowCount).toBe(0);
+    });
+
+    it("cannot self-assign a program (INSERT program_assignment rejected)", async () => {
+      // The clearest privilege-escalation attempt: a member granting themselves
+      // a program. No member INSERT policy on program_assignment → blocked.
+      await expect(
+        withTenantContext(m(), async (c) => {
+          await c.query(
+            "insert into program_assignment (tenant_id, program_id, member_id) values ($1, $2, $3)",
+            [seed.gymA, seed.programA, seed.memberA1],
+          );
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("cannot UPDATE their own assignment (0 rows)", async () => {
+      const rowCount = await withTenantContext(m(), async (c) =>
+        (
+          await c.query(
+            "update program_assignment set status = 'archived' where id = $1",
+            [seed.assignA],
+          )
+        ).rowCount,
+      );
+      expect(rowCount).toBe(0);
+    });
+
+    it("cannot DELETE their own assignment (0 rows)", async () => {
+      const rowCount = await withTenantContext(m(), async (c) =>
+        (
+          await c.query("delete from program_assignment where id = $1", [
+            seed.assignA,
+          ])
+        ).rowCount,
       );
       expect(rowCount).toBe(0);
     });

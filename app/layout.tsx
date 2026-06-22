@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { WebVitals } from "./WebVitals";
 
 export const metadata: Metadata = {
   title: "Alpha CRM",
@@ -22,7 +23,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen">{children}</body>
+      <body className="min-h-screen">
+        {children}
+        {/* Measures Core Web Vitals against the mobile performance budget. */}
+        <WebVitals />
+      </body>
     </html>
   );
 }

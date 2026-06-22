@@ -114,6 +114,35 @@ sort after `0002` (which defines the `app_current_*()` helpers they reference),
 so apply order is safe. The `gdpr_audit_event` member self-insert policy is
 correctly constrained (export-only, self-subject, no staff subject — `0006`).
 
+### 2.8 Remediated — test harness could silently target a remote/production DB
+
+**Finding.** The RLS isolation suites SEED and MUTATE real rows (two conflicting
+tenants and their full child trees, plus forged-write attempts). They select the
+database from `DATABASE_URL`. Because `scripts/migrate.mjs` does
+`import "dotenv/config"`, simply importing it — which every DB-backed test does —
+loads `.env`, and locally `.env` carries the **production** Supabase connection
+string. A developer running `npm test` on their machine would therefore seed
+production (observed: multiple `Audit Gym A`/`Audit Gym B` fixture trees created
+in the live DB). CI was never affected — it sets `DATABASE_URL` to a throwaway
+`postgres:16` in the workflow env, a value dotenv leaves untouched — but the
+local foot-gun is real and the seeding is destructive-adjacent.
+
+**Remediation.**
+- **Guard (`test/setup/db-safety.ts`, wired as a vitest `setupFile`).** Before
+  any test module is imported, it resolves `.env` the same way the runner does
+  and, unless `DATABASE_URL` points at a local host (`localhost`/`127.0.0.1`/
+  `::1`) or the operator sets `ALLOW_NONLOCAL_TEST_DB=1`, it blanks
+  `DATABASE_URL`/`MIGRATE_DATABASE_URL`. The DB suites' existing `hasDb` guards
+  then SKIP instead of running against a remote target. (Setting the vars to `""`
+  rather than deleting them ensures the later `dotenv/config` import cannot
+  repopulate them — dotenv never overrides a key already present.)
+- **Self-cleanup.** `isolation-comprehensive.test.ts` now deletes its two seeded
+  gyms in `afterAll` (cascading to every child row), so even a deliberate
+  `ALLOW_NONLOCAL_TEST_DB=1` run against a shared DB leaves no residue.
+- The pre-existing `Audit Gym A`/`Audit Gym B` rows left in the live DB by prior
+  runs are removable with a single statement (children cascade):
+  `delete from gym where name in ('Audit Gym A', 'Audit Gym B');`
+
 ---
 
 ## 3. Continuous enforcement (tests + CI gate)
@@ -128,9 +157,13 @@ Isolation is now **exhaustively and continuously** verified, not assumed:
   tenants and three members. For every tenanted table it asserts a foreign
   staff session cannot SELECT / UPDATE / DELETE another tenant's rows nor INSERT
   a forged-tenant row; and that members read only their own rows, cannot read
-  any staff-only table, cannot write the member table, and can only self-insert
-  the one permitted `gdpr_audit_event`. All probes run through the real
-  `withTenantContext` session/role path (never a superuser bypass).
+  any staff-only table, cannot write the member table, cannot write any
+  staff-managed table they can partly read (INSERT/UPDATE/DELETE on
+  program/exercise/program_assignment — including the self-assign
+  privilege-escalation attempt — all fail), and can only self-insert the one
+  permitted `gdpr_audit_event`. All probes run through the real
+  `withTenantContext` session/role path (never a superuser bypass), and the
+  suite self-cleans its seed in `afterAll`.
 - **`test/identity.test.ts`** — JWT verification unit tests (tampered, wrong
   alg, expired, wrong audience, client-untrusted identity derivation).
 - Plus the pre-existing per-feature RLS suites.
