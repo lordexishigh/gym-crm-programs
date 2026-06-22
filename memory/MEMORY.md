@@ -1,0 +1,1 @@
+- [Test DB points at production](test-db-points-at-production.md) — repo .env DATABASE_URL is live prod Supabase; tests guarded by test/setup/db-safety.ts
