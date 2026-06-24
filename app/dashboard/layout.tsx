@@ -48,19 +48,29 @@ export default async function DashboardLayout({
       >
         Skip to content
       </a>
-      <header className="border-b border-slate-200 bg-white">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-5 py-3">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="text-base font-bold text-brand">
-              Alpha CRM
+          <div className="flex min-w-0 items-center gap-3">
+            <Link href="/dashboard" className="flex items-center gap-2.5">
+              <span
+                aria-hidden
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand text-sm font-bold text-white shadow-sm"
+              >
+                A
+              </span>
+              <span className="text-base font-bold tracking-tight text-brand">
+                Alpha CRM
+              </span>
             </Link>
-            <span className="text-sm text-slate-500">· {gymName}</span>
+            <span className="hidden truncate text-sm text-slate-500 sm:inline">
+              · {gymName}
+            </span>
           </div>
           <form action={logoutAction}>
             <input type="hidden" name="redirectTo" value="/login" />
             <button
               type="submit"
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
             >
               Log out
             </button>
@@ -68,7 +78,7 @@ export default async function DashboardLayout({
         </div>
         <nav
           aria-label="Primary"
-          className="mx-auto flex w-full max-w-5xl gap-1 overflow-x-auto px-3 pb-1"
+          className="mx-auto flex w-full max-w-5xl gap-1 overflow-x-auto px-3 pb-2"
         >
           {NAV.map((item) => (
             <NavLink key={item.href} href={item.href} label={item.label} />

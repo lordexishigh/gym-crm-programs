@@ -55,8 +55,18 @@ export default async function PortalPage() {
       >
         Skip to content
       </a>
-      <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-6">
-        <span className="text-base font-bold text-brand">Alpha CRM</span>
+      <header className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+        <span className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand text-sm font-bold text-white shadow-sm"
+          >
+            A
+          </span>
+          <span className="text-base font-bold tracking-tight text-brand">
+            Alpha CRM
+          </span>
+        </span>
         <form action={logoutAction}>
           <input type="hidden" name="redirectTo" value="/portal/login" />
           <button

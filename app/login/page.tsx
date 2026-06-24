@@ -14,21 +14,34 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 px-5 py-12">
-      <div className="flex flex-col gap-1 text-center">
-        <Link href="/" className="text-sm font-semibold text-brand">
-          Alpha CRM
+      <div className="flex flex-col items-center gap-4 text-center">
+        <Link href="/" className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand text-base font-bold text-white shadow-sm"
+          >
+            A
+          </span>
+          <span className="text-lg font-bold tracking-tight text-brand">
+            Alpha CRM
+          </span>
         </Link>
-        <h1 className="text-2xl font-bold">Staff sign in</h1>
-        <p className="text-sm text-slate-600">
-          For gym staff and trainers. Members sign in at the{" "}
-          <Link href="/portal/login" className="font-medium text-brand underline">
-            member portal
-          </Link>
-          .
-        </p>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Staff sign in</h1>
+          <p className="text-sm text-slate-600">
+            For gym staff and trainers. Members sign in at the{" "}
+            <Link href="/portal/login" className="font-medium text-brand underline">
+              member portal
+            </Link>
+            .
+          </p>
+        </div>
       </div>
 
-      <form action={formAction} className="flex flex-col gap-4">
+      <form
+        action={formAction}
+        className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6"
+      >
         <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
           Email
           <input

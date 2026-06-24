@@ -8,7 +8,7 @@
   /*
    * Brand accent channels as space-separated RGB so they feed both Tailwind's
    * `rgb(var(--brand) / <alpha-value>)` theme colours and the raw-CSS focus ring
-   * below. This is the one place to recolour the UI.
+   * below. This is the one place to recolour the brand.
    *
    * On a DARK theme the same emerald can't serve both roles and meet WCAG AA, so
    * the brand is split (beta-polish-a11y-001):
@@ -26,6 +26,43 @@
   --brand: 4 120 87;
   --brand-dark: 6 95 70;
   --brand-text: 52 211 153;
+
+  /*
+   * Neutral dark palette — layered surfaces for depth (the visual single source
+   * of truth, restyle-2026). Authored as a deliberate elevation ladder so the UI
+   * reads as stacked planes rather than one flat slab:
+   *   --page          deepest plane, the app background
+   *   --surface       cards / panels / the header bar
+   *   --surface-muted table rows, chips, hover fills (one step lifted)
+   *   --border        hairline dividers; --border-strong for interactive edges
+   * The dark-surface remap and component polish below all resolve to these, so
+   * the whole app re-tones from this block. Tuned cooler/deeper than a flat
+   * slate-900 to feel like a modern SaaS console.
+   */
+  --page: #0a0e17;
+  --surface: #151c2b;
+  --surface-muted: #1f293c;
+  --border: #29344c;
+  --border-strong: #38455f;
+
+  /*
+   * Premium font stack. "Inter" is used when present (most modern OSes / the
+   * common SaaS face) and otherwise falls back gracefully to the native system
+   * UI font — so we get a refined typeface with ZERO network dependency and no
+   * layout shift (important for the LCP/CLS budget; a build-time webfont fetch
+   * could also fail in offline CI).
+   */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /*
+   * Card elevation. On a dark UI a plain drop shadow barely registers, so the
+   * "lift" is built from three layers: a 1px inset top highlight (light catching
+   * the top edge), a tight contact shadow, and a soft ambient shadow. Applied to
+   * remapped card surfaces below so every panel reads as raised off the page.
+   */
+  --shadow-card: inset 0 1px 0 0 rgb(255 255 255 / 0.04),
+    0 1px 2px 0 rgb(0 0 0 / 0.4), 0 12px 28px -16px rgb(0 0 0 / 0.7);
 }
 
 html,
@@ -34,7 +71,30 @@ body {
 }
 
 body {
-  @apply bg-slate-900 text-slate-100 antialiased;
+  @apply text-slate-100 antialiased;
+  font-family: var(--font-sans);
+  /* Slightly tighter tracking on the dense SaaS UI reads cleaner. */
+  letter-spacing: -0.011em;
+  /*
+   * Deep base plane with a faint emerald glow bleeding down from the top — gives
+   * the page subtle depth and ties the neutral palette to the brand without
+   * lowering text contrast (the glow is <8% opacity and fixed, so it never sits
+   * brightly behind body copy).
+   */
+  background-color: var(--page);
+  background-image: radial-gradient(
+    1100px 560px at 50% -12%,
+    rgb(16 185 129 / 0.08),
+    transparent 62%
+  );
+  background-attachment: fixed;
+}
+
+/* Headings sit a touch tighter than body copy for a crisper hierarchy. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
 }
 
 /*
@@ -69,36 +129,94 @@ body {
 }
 
 /*
+ * Form controls (restyle-2026). The app authors inputs as bordered, transparent
+ * fields; on the deep page that left them barely distinguishable from the page
+ * itself. Give bare controls a faint inset fill + smooth transition so a field
+ * always reads as a field, app-wide, without touching every form. Controls that
+ * opt into an explicit `bg-*` (e.g. the remapped `bg-white`) win on specificity
+ * and keep their surface.
+ */
+@layer base {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+  select,
+  textarea {
+    background-color: rgb(255 255 255 / 0.03);
+    transition: border-color 150ms ease, box-shadow 150ms ease,
+      background-color 150ms ease;
+  }
+  ::placeholder {
+    color: #64748b; /* slate-500 — visible but clearly secondary on dark fields */
+  }
+}
+
+/*
  * Dark surfaces (user request: no white/bright backgrounds on any page).
  * The app was authored light — white cards on a slate-50 page. Rather than touch
- * every component, remap the bright NEUTRAL surfaces to dark and flip the dark
- * text/borders that sat on them to light so contrast is preserved. Brand (emerald)
- * accents and `text-white` on accent buttons are intentionally left untouched.
- * This is the one place to tune the dark palette.
+ * every component, remap the bright NEUTRAL surfaces to the dark elevation ladder
+ * and flip the dark text/borders that sat on them to light so contrast is
+ * preserved. Brand (emerald) accents and `text-white` on accent buttons are
+ * intentionally left untouched. This is the one place to tune the dark palette.
  */
-.bg-white, .hover\:bg-white:hover,
-.bg-slate-50, .hover\:bg-slate-50:hover {
-  background-color: #1e293b !important;   /* slate-800 — cards, inputs, panels */
+.bg-white {
+  background-color: var(--surface) !important;
+  /* Faint top-down sheen + layered shadow so every card/panel reads as raised. */
+  background-image: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.025),
+    transparent 140px
+  );
+  box-shadow: var(--shadow-card);
 }
-.bg-slate-100, .hover\:bg-slate-100:hover {
-  background-color: #273449 !important;   /* slightly lifted — table rows, hovers, chips */
+.hover\:bg-white:hover,
+.bg-slate-50,
+.hover\:bg-slate-50:hover {
+  background-color: var(--surface) !important;
+}
+.bg-slate-100,
+.hover\:bg-slate-100:hover {
+  background-color: var(--surface-muted) !important; /* rows, hovers, chips */
 }
 
 /* Dark text that used to sit on white → light, so it stays readable on dark. */
-.text-slate-900, .text-slate-800,
-.text-gray-900, .text-gray-800,
+.text-slate-900,
+.text-slate-800,
+.text-gray-900,
+.text-gray-800,
 .text-black {
   color: #f1f5f9 !important;
 }
-.text-slate-700, .text-slate-600,
-.text-gray-700, .text-gray-600 {
+.text-slate-700,
+.text-slate-600,
+.text-gray-700,
+.text-gray-600 {
   color: #cbd5e1 !important;
 }
 
-/* Hairline borders → visible but subtle on dark. */
-.border-white, .border-slate-100, .border-slate-200, .border-slate-300,
-.border-gray-100, .border-gray-200, .border-gray-300 {
-  border-color: #334155 !important;       /* slate-700 */
+/* Hairline borders → visible but subtle on dark, resolved from the token. */
+.border-white,
+.border-slate-100,
+.border-slate-200,
+.border-slate-300,
+.border-gray-100,
+.border-gray-200,
+.border-gray-300 {
+  border-color: var(--border) !important;
+}
+
+/*
+ * `divide-*` utilities (list row separators) compile to a DIFFERENT selector
+ * than `border-*`, so they escaped the border remap above and rendered as bright
+ * near-white lines on the dark cards. Re-tone them from the same hairline token
+ * so every list divider matches its card border. (Mirrors Tailwind's generated
+ * `> :not([hidden]) ~ :not([hidden])` target.)
+ */
+.divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+.divide-slate-200 > :not([hidden]) ~ :not([hidden]),
+.divide-slate-300 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-300 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border) !important;
 }
 
 /*
@@ -106,7 +224,7 @@ body {
  * Centralised here so the AA guarantee holds app-wide and can't drift per-file.
  *
  * - Muted helper/label text (slate-400/500): slate-500 fails (~3.3:1) on the
- *   dark page, so both are lifted to a tone that clears AA on slate-800/900.
+ *   dark page, so both are lifted to a tone that clears AA on the surfaces.
  * - Status text (danger/success): the -600/700 shades are too dark to read on a
  *   dark surface, so they map to the -400 shades, which pass while staying
  *   semantically red/green.
@@ -114,16 +232,51 @@ body {
  *   solid emerald brand would only reach ~3:1 as text. Solid `bg-brand` buttons
  *   keep white text and are unaffected (they use the dark --brand fill).
  */
-.text-slate-500, .text-slate-400 {
-  color: #94a3b8 !important;              /* slate-400 — AA muted text on dark */
+.text-slate-500,
+.text-slate-400 {
+  color: #94a3b8 !important; /* slate-400 — AA muted text on dark */
 }
-.text-red-600, .text-red-700 {
-  color: #f87171 !important;             /* red-400 — AA danger text on dark */
+.text-red-600,
+.text-red-700 {
+  color: #f87171 !important; /* red-400 — AA danger text on dark */
 }
-.text-green-700, .text-green-600,
-.text-emerald-700, .text-emerald-600 {
-  color: #34d399 !important;             /* emerald-400 — AA success text on dark */
+.text-green-700,
+.text-green-600,
+.text-emerald-700,
+.text-emerald-600 {
+  color: #34d399 !important; /* emerald-400 — AA success text on dark */
 }
 .text-brand {
   color: rgb(var(--brand-text)) !important;
+}
+
+/*
+ * Tinted status chips (e.g. `bg-emerald-50`, `bg-amber-50`, `bg-red-50`) were
+ * authored as pale fills for dark text. On the dark UI those pale fills vanish,
+ * so remap them to low-alpha tints of the same hue — keeping the semantic colour
+ * legible against the lifted -400 text the contrast block above already applies.
+ */
+.bg-emerald-50 {
+  background-color: rgb(16 185 129 / 0.14) !important;
+}
+.bg-amber-50 {
+  background-color: rgb(245 158 11 / 0.16) !important;
+}
+.text-amber-700,
+.text-amber-600 {
+  color: #fbbf24 !important; /* amber-400 — AA warning text on dark */
+}
+.bg-red-50,
+.bg-rose-50 {
+  background-color: rgb(239 68 68 / 0.14) !important;
+}
+.text-rose-700,
+.text-rose-600 {
+  color: #f87171 !important; /* red-400 — AA danger text on dark */
+}
+
+/* Tinted-status borders (e.g. destructive `border-red-200`) → readable on dark. */
+.border-red-200,
+.border-rose-200 {
+  border-color: rgb(239 68 68 / 0.4) !important;
 }

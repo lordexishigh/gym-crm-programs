@@ -24,7 +24,31 @@ const config: Config = {
       "2xl": "1536px",
     },
     extend: {
+      fontFamily: {
+        // Resolves to the premium font stack defined in app/globals.css
+        // (`--font-sans`). Setting it here makes Tailwind's default `font-sans`
+        // (and thus the whole app) use it, while keeping the stack in one place.
+        sans: ["var(--font-sans)"],
+      },
+      boxShadow: {
+        // The layered dark-card elevation, exposed as `shadow-card` for any new
+        // markup that wants the same lift as the remapped surfaces.
+        card: "var(--shadow-card)",
+      },
       colors: {
+        // Layered neutral surfaces (single source of truth in app/globals.css).
+        // Exposes `bg-surface` / `bg-surface-muted` / `border-border` etc. for
+        // new components that want to opt into the dark palette explicitly rather
+        // than rely on the bright-class remap.
+        page: "var(--page)",
+        surface: {
+          DEFAULT: "var(--surface)",
+          muted: "var(--surface-muted)",
+        },
+        hairline: {
+          DEFAULT: "var(--border)",
+          strong: "var(--border-strong)",
+        },
         // Primary brand accent — single source of truth for the app's accent
         // colour. Every `bg-brand` / `text-brand` / `ring-brand` / `border-brand`
         // utility (and the `hover:bg-brand-dark` button state) resolves here, so

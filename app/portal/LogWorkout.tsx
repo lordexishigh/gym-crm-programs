@@ -53,7 +53,7 @@ export function LogWorkout({
               name="programId"
               required
               defaultValue=""
-              className="rounded-lg border border-slate-300 bg-white px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+              className="rounded-lg border border-slate-300 px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
             >
               <option value="" disabled>
                 Which program did you train?
@@ -72,7 +72,7 @@ export function LogWorkout({
           <select
             name="effort"
             defaultValue=""
-            className="rounded-lg border border-slate-300 bg-white px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+            className="rounded-lg border border-slate-300 px-3 py-3 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
           >
             <option value="">How hard was it? (RPE 1–10)</option>
             {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (

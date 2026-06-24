@@ -3,9 +3,17 @@ import Link from "next/link";
 export default function LandingPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col items-center justify-center gap-8 px-5 py-12 text-center">
-      <div className="flex flex-col gap-3">
-        <span className="text-sm font-semibold uppercase tracking-widest text-brand">
-          Alpha CRM
+      <div className="flex flex-col items-center gap-3">
+        <span className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand text-base font-bold text-white shadow-sm"
+          >
+            A
+          </span>
+          <span className="text-sm font-semibold uppercase tracking-widest text-brand">
+            Alpha CRM
+          </span>
         </span>
         <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
           Training programs your members can actually open.

@@ -28,8 +28,8 @@ export function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "rounded-md bg-brand/10 px-3 py-2 text-sm font-semibold text-brand"
-          : "rounded-md px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          ? "rounded-lg bg-brand/10 px-3 py-2 text-sm font-semibold text-brand ring-1 ring-inset ring-brand/25"
+          : "rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
       }
     >
       {label}
