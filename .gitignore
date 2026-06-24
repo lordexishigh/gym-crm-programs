@@ -39,3 +39,6 @@ next-env.d.ts
 
 # nous provisioning secrets
 .env*.local
+
+# nous provisioning secrets
+.env*.local

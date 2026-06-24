@@ -12,6 +12,8 @@ The behaviour described here is implemented by:
 - `lib/retention.ts` — pure retention-policy resolution.
 - `migrations/0004_gdpr_rights.sql`, `migrations/0006_gdpr_subjects.sql` — schema,
   markers, and RLS.
+- `migrations/0008_workout_logs.sql` — the member-written workout-log entity and
+  its RLS (covered by export/erasure above; Phase GA).
 
 ## Data subjects
 
@@ -64,8 +66,14 @@ What is scrubbed on erasure:
 
 | Subject | Fields anonymised |
 | ------- | ----------------- |
-| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned. |
+| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, and the free-text `note` on every `workout_log` → null. |
 | Staff   | `email` → unique tombstone, `full_name` → null, `auth_user_id` → null. |
+
+Workout logs (`workout_log`, Phase GA) are the member's own data: they are
+included in the member export (and member self-export), and on erasure their
+free-text notes are scrubbed while the (now anonymised) rows are kept — they
+carry only the tombstoned `member_id` plus aggregate effort/timing, preserving
+referential integrity exactly like assignments and status history.
 
 Where the subject had a portal/auth account, the Supabase auth user is deleted
 (best-effort, post-commit) so they can no longer sign in. Every erasure is

@@ -105,6 +105,11 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
         "insert into invite (tenant_id, member_id, email, token_hash) values ($1,$2,'alice@a.example','hash-a1')",
         [gymA, memberA1],
       );
+      // A logged workout for member A1 (export should include it; Phase GA).
+      await c.query(
+        "insert into workout_log (tenant_id, member_id, program_id, effort, note) values ($1,$2,$3,7,'leg day')",
+        [gymA, memberA1, programA1],
+      );
 
       Object.assign(seed, {
         gymA,
@@ -132,6 +137,14 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
     expect(data!.programs.map((p) => p.program.id)).toEqual([seed.programA1]);
     expect(data!.programs[0].exercises.map((e) => e.name)).toEqual(["Squat"]);
     expect(data!.invites.map((i) => i.email)).toEqual(["alice@a.example"]);
+    // Workout logs are part of the member's exported data (Phase GA).
+    expect(data!.workout_logs).toHaveLength(1);
+    expect(data!.workout_logs[0]).toMatchObject({
+      program_id: seed.programA1,
+      program_name: "A1 program",
+      effort: 7,
+      note: "leg day",
+    });
   });
 
   it("a cross-tenant export resolves to nothing (RLS isolation)", async () => {
@@ -147,6 +160,8 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
     expect(data).not.toBeNull();
     expect(data!.member.id).toBe(seed.memberA1);
     expect(data!.programs.map((p) => p.program.id)).toEqual([seed.programA1]);
+    // The member's own workout logs ARE part of a self-export.
+    expect(data!.workout_logs).toHaveLength(1);
     // Staff-internal records are not exposed to a member self-export.
     expect(data!.invites).toHaveLength(0);
     expect(data!.status_history).toHaveLength(0);

@@ -230,3 +230,52 @@ Final polish: WCAG AA basics, mobile performance for the member portal, and UX r
   - [ ] Member portal meets a defined mobile performance budget.
   - [ ] Common staff workflows are streamlined.
   - [ ] No major layout shifts or jank on mobile.
+
+## GA — Member engagement & the trainer feedback loop. Turn the read-only portal into a two-way training tool so trainers can see that programs are actually being followed.
+
+MVP/Alpha/Beta delivered a complete, compliant, isolated CRM — but the member
+portal is strictly **read-only**, so the differentiating wedge (member-facing
+programs) is a one-way broadcast: a trainer cannot tell whether a member ever
+opened, started, or completed the program they built. GA closes that loop. It
+introduces the first **member-written** data (workout logging), surfaces it back
+to trainers as adherence/engagement signal, and keeps the same hard guarantees —
+every new entity is tenant- and member-isolated by RLS and covered by GDPR
+export/erasure + retention from day one.
+
+**Success criteria:**
+
+- A member can log that they completed a workout against an assigned program,
+  optionally with perceived effort and a note, from the mobile portal.
+- A member can see a history of their recent logged sessions; the portal is no
+  longer read-only but a member still cannot see or write anyone else's data.
+- Trainers can see, per member, whether and how recently programs are being
+  followed (engagement/adherence), turning the wedge into a feedback loop.
+- All new member-written data is isolated by RLS across every table and path,
+  and is covered by GDPR export, erasure/anonymisation, and retention.
+
+### ga-engagement — Member workout logging _(depends on: mvp-member-portal)_
+
+The foundational, member-written entity: a member viewing their assigned program
+can log a completed workout session. This is the first WRITE path on the portal.
+
+- **ga-engagement-001** Workout-session logging (data layer, RLS, portal UI)
+  - [x] A member can log a completed session against an assigned program, with optional effort (RPE 1–10) and note.
+  - [x] A member can only log for themselves and only against a program assigned to them (enforced by RLS `with check`, not app code).
+  - [x] A member sees their own recent sessions and cannot read or write another member's or gym's logs (RLS + isolation tests).
+  - [x] Workout logs are included in GDPR export and scrubbed on member erasure; retention is documented.
+- **ga-engagement-002** Per-exercise set logging (actual weights/reps/RPE per set)
+  - [ ] A member can record actual sets/reps/weight against each exercise in a session.
+  - [ ] Per-set entries roll up into the session log and the member's history.
+  - [ ] All entries remain member-scoped under RLS and covered by GDPR/retention.
+
+### ga-trainer-insights — Trainer adherence & engagement view _(depends on: ga-engagement)_
+
+Surface the new member-written signal back to staff so the loop is visible.
+
+- **ga-trainer-insights-001** Member adherence on the dashboard
+  - [ ] Staff can see, per member, last-logged date and recent session count.
+  - [ ] The member detail page lists the member's logged sessions (read-only for staff).
+  - [ ] All reads are tenant-scoped by RLS; staff never write a member's log.
+- **ga-trainer-insights-002** Roster engagement indicators
+  - [ ] The roster flags members with no recent activity (configurable window).
+  - [ ] Indicators are tenant-scoped and performant on the existing roster query.

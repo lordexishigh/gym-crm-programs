@@ -69,6 +69,11 @@ describe.skipIf(!hasDb)("GDPR erasure — anonymise & isolate", () => {
         "insert into invite (tenant_id, member_id, email, token_hash, status) values ($1,$2,'dana@a.example','h','pending')",
         [gymA, memberId],
       );
+      // A workout log whose free-text note must be scrubbed on erasure (Phase GA).
+      await c.query(
+        "insert into workout_log (tenant_id, member_id, program_id, effort, note) values ($1,$2,$3,6,'sensitive note')",
+        [gymA, memberId, programId],
+      );
       return { gymA, memberId, assignmentId };
     });
 
@@ -107,6 +112,15 @@ describe.skipIf(!hasDb)("GDPR erasure — anonymise & isolate", () => {
       ).rows[0];
       expect(invite.email).toBe(ERASED_INVITE_EMAIL);
       expect(invite.status).toBe("revoked");
+
+      // Workout-log note scrubbed; the row is kept anonymised (Phase GA).
+      const log = (
+        await c.query(
+          "select note from workout_log where member_id = $1",
+          [memberId],
+        )
+      ).rows[0];
+      expect(log.note).toBeNull();
 
       // Erasure logged for audit.
       const audit = (

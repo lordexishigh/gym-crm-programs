@@ -72,6 +72,16 @@ export type ExportedProgram = {
   exercises: ExerciseRow[];
 };
 
+/** One logged workout session, as exported (Phase GA — ga-engagement-001). */
+export type ExportedWorkoutLog = {
+  id: string;
+  program_id: string;
+  program_name: string;
+  completed_at: string;
+  effort: number | null;
+  note: string | null;
+};
+
 /** The full export document handed to the data subject. */
 export type MemberDataExport = {
   format: "alpha-crm.member-export";
@@ -81,6 +91,7 @@ export type MemberDataExport = {
   status_history: MemberStatusEvent[];
   invites: ExportedInvite[];
   programs: ExportedProgram[];
+  workout_logs: ExportedWorkoutLog[];
 };
 
 /** Result of an export: the document (null if the subject was not found). */
@@ -174,6 +185,20 @@ export async function exportMemberData(
       exercises: byProgram.get(a.program_id) ?? [],
     }));
 
+    // Workout logs are the member's OWN data — included for both staff DSAR and
+    // member self-export (the member RLS policy exposes only their own logs).
+    const workoutLogs = (
+      await c.query<ExportedWorkoutLog>(
+        `select wl.id, wl.program_id, p.name as program_name,
+                wl.completed_at, wl.effort, wl.note
+           from workout_log wl
+           join program p on p.id = wl.program_id
+          where wl.member_id = $1
+          order by wl.completed_at desc`,
+        [memberId],
+      )
+    ).rows;
+
     // Audit the export in the SAME transaction as the reads.
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
@@ -187,6 +212,7 @@ export async function exportMemberData(
         programs: programs.length,
         invites: invites.length,
         status_events: statusHistory.length,
+        workout_logs: workoutLogs.length,
       },
     });
 
@@ -198,6 +224,7 @@ export async function exportMemberData(
       status_history: statusHistory,
       invites,
       programs,
+      workout_logs: workoutLogs,
     };
     return { data };
   });
@@ -363,6 +390,13 @@ export async function anonymiseMember(
         where member_id = $1`,
       [memberId, ERASED_INVITE_EMAIL],
     );
+
+    // Scrub free-text notes on the member's workout logs (may contain PII). The
+    // rows themselves are kept anonymised — they carry only the (now tombstoned)
+    // member_id and aggregate effort/timing, preserving referential integrity.
+    await c.query(`update workout_log set note = null where member_id = $1`, [
+      memberId,
+    ]);
 
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,

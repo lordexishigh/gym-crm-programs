@@ -1,8 +1,11 @@
 import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
 import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
+import { recentWorkoutLogs } from "@/lib/workout-logs";
 import { ProgramView } from "./ProgramView";
 import { ProgramHistory } from "./ProgramHistory";
+import { LogWorkout } from "./LogWorkout";
+import { WorkoutHistory } from "./WorkoutHistory";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -28,11 +31,19 @@ export const dynamic = "force-dynamic";
 export default async function PortalPage() {
   const session = await requireMember();
   const memberId = session.identity.memberId as string;
-  // Active program (shown by default) + the read-only history of past programs.
-  const [programs, history] = await Promise.all([
+  // Active program (shown by default), the read-only history of past programs,
+  // and the member's recent logged workout sessions (Phase GA).
+  const [programs, history, workouts] = await Promise.all([
     loadMemberPortal(session.identity, memberId),
     archivedPrograms(session.identity, memberId),
+    recentWorkoutLogs(session.identity, memberId),
   ]);
+
+  // The active programs a member can log a session against (id + name only).
+  const activePrograms = programs.map(({ program }) => ({
+    id: program.id,
+    name: program.name,
+  }));
 
   // Mobile-first shell: full-width on a phone, capped/centred on larger screens.
   return (
@@ -63,6 +74,8 @@ export default async function PortalPage() {
         className="flex-1 px-4 py-6 focus:outline-none sm:px-6 sm:py-8"
       >
         <ProgramView programs={programs} />
+        <LogWorkout programs={activePrograms} />
+        <WorkoutHistory logs={workouts} />
         <ProgramHistory programs={history} />
       </main>
     </div>
