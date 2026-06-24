@@ -133,8 +133,14 @@ export async function logWorkout(
 }
 
 /**
- * The member's most recent logged sessions (default `RECENT_WORKOUTS_LIMIT`).
- * RLS scopes the result to the caller's own logs regardless of `memberId`.
+ * The most recent logged sessions for `memberId` (default `RECENT_WORKOUTS_LIMIT`).
+ *
+ * Used by BOTH audiences and secured the same way — by RLS, not by this query:
+ *   - member session: `workout_log_member_select` scopes the result to the
+ *     caller's own logs, so a crafted `memberId` returns nothing;
+ *   - staff session: `workout_log_staff_select` grants read-only visibility into
+ *     the staff member's own gym, so `memberId` selects that member's sessions
+ *     and a cross-tenant id resolves to no rows (verified in workout-logs-rls).
  */
 export async function recentWorkoutLogs(
   identity: Identity,
@@ -147,4 +153,60 @@ export async function recentWorkoutLogs(
       (await c.query<WorkoutLogRow>(RECENT_WORKOUTS_SQL, [memberId, limit]))
         .rows,
   );
+}
+
+/**
+ * The rolling window (in days) used to summarise a member's "recent" training
+ * adherence on the staff dashboard (ga-trainer-insights-001).
+ */
+export const ADHERENCE_WINDOW_DAYS = 30;
+
+/**
+ * A member's training-adherence summary for the staff dashboard: how recently
+ * and how often they are actually logging the programs a trainer assigned —
+ * turning the read-only wedge into a visible feedback loop.
+ */
+export type MemberAdherence = {
+  /** Total sessions ever logged by the member (in this tenant). */
+  totalSessions: number;
+  /** Sessions logged within `windowDays` (default `ADHERENCE_WINDOW_DAYS`). */
+  recentSessions: number;
+  /** Most recent session timestamp, or null when the member has never logged. */
+  lastCompletedAt: string | null;
+};
+
+// Shared adherence aggregate — kept beside the read query so the dashboard view
+// and its test cannot drift. `make_interval(days => $2)` keeps the window a
+// bound parameter (no string-built SQL). RLS scopes the rows: under a staff
+// session this counts only their own gym's logs for `memberId`.
+const MEMBER_ADHERENCE_SQL = `select
+        count(*)::int                                                          as total_sessions,
+        count(*) filter (where completed_at >= now() - make_interval(days => $2))::int as recent_sessions,
+        max(completed_at)                                                      as last_completed_at
+   from workout_log
+  where member_id = $1`;
+
+/**
+ * Summarise `memberId`'s workout-logging adherence for staff. RLS makes this
+ * read-only and tenant-scoped (a cross-tenant `memberId` yields zeroes/null), so
+ * a trainer sees engagement for their own gym's members and no one else's.
+ */
+export async function memberAdherence(
+  identity: Identity,
+  memberId: string,
+  windowDays: number = ADHERENCE_WINDOW_DAYS,
+): Promise<MemberAdherence> {
+  return withTenantContext(identity, async (c) => {
+    const { rows } = await c.query<{
+      total_sessions: number;
+      recent_sessions: number;
+      last_completed_at: string | null;
+    }>(MEMBER_ADHERENCE_SQL, [memberId, windowDays]);
+    const r = rows[0];
+    return {
+      totalSessions: r?.total_sessions ?? 0,
+      recentSessions: r?.recent_sessions ?? 0,
+      lastCompletedAt: r?.last_completed_at ?? null,
+    };
+  });
 }

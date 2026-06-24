@@ -11,8 +11,10 @@ import {
   MEMBER_STATUS_HISTORY_SQL,
   type MemberStatusEvent,
 } from "@/lib/member-records";
+import { memberAdherence, recentWorkoutLogs } from "@/lib/workout-logs";
 import { MemberForm } from "../MemberForm";
 import { StatusHistory } from "../StatusHistory";
+import { WorkoutAdherence } from "../WorkoutAdherence";
 import { updateMemberAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
 import { GdprPanel } from "../GdprPanel";
@@ -68,6 +70,13 @@ export default async function MemberDetailPage({
 
   if (!data) notFound();
   const { member, lastInvite, statusHistory } = data;
+
+  // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
+  // tenant-scoped by the `workout_log_staff_select` RLS policy.
+  const [adherence, workouts] = await Promise.all([
+    memberAdherence(session.identity, member.id),
+    recentWorkoutLogs(session.identity, member.id),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -130,6 +139,8 @@ export default async function MemberDetailPage({
           notes: member.notes ?? "",
         }}
       />
+
+      <WorkoutAdherence adherence={adherence} logs={workouts} />
 
       <StatusHistory events={statusHistory} />
 

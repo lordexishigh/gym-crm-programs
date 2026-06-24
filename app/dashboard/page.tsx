@@ -1,13 +1,17 @@
+import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Dashboard overview. The layout already gates access; calling `requireStaff`
- * here too keeps the page self-contained and gives us the session identity.
+ * here too keeps the page self-contained.
+ *
+ * The cards are navigable shortcuts into each section. Live tenant-scoped counts
+ * are scheduled as review-hardening-dashboard-001 (see docs/PLAN.md).
  */
 export default async function DashboardPage() {
-  const session = await requireStaff();
+  await requireStaff();
 
   return (
     <div className="flex flex-col gap-6">
@@ -18,25 +22,24 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[
-          { label: "Members", hint: "Invite and manage members" },
-          { label: "Programs", hint: "Create training programs" },
-          { label: "Assignments", hint: "Assign programs to members" },
+          { label: "Members", hint: "Invite and manage members", href: "/dashboard/members" },
+          { label: "Programs", hint: "Create training programs", href: "/dashboard/programs" },
+          { label: "Assignments", hint: "Assign programs to members", href: "/dashboard/programs" },
         ].map((card) => (
-          <div
+          <Link
             key={card.label}
-            className="rounded-xl border border-slate-200 bg-white p-4"
+            href={card.href}
+            className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-brand"
           >
-            <dt className="text-sm font-semibold text-slate-900">{card.label}</dt>
-            <dd className="mt-1 text-sm text-slate-500">{card.hint}</dd>
-          </div>
+            <span className="block text-sm font-semibold text-slate-900">
+              {card.label}
+            </span>
+            <span className="mt-1 block text-sm text-slate-500">{card.hint}</span>
+          </Link>
         ))}
-      </dl>
-
-      <p className="text-xs text-slate-400">
-        Signed in to tenant {session.identity.tenantId}.
-      </p>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../scripts/migrate.mjs";
 import { closePool, type Identity } from "../lib/db";
-import { logWorkout, recentWorkoutLogs } from "../lib/workout-logs";
+import {
+  logWorkout,
+  memberAdherence,
+  recentWorkoutLogs,
+} from "../lib/workout-logs";
 import { withAdminContext } from "../lib/db";
 
 /**
@@ -171,5 +175,24 @@ describe.skipIf(!hasDb)("workout-log isolation", () => {
     // Staff in gym B cannot see gym A's member logs (cross-tenant).
     const crossTenant = await recentWorkoutLogs(staff(seed.gymB), seed.memberA1);
     expect(crossTenant).toHaveLength(0);
+  });
+
+  it("staff adherence summarises a member's own-gym sessions only", async () => {
+    // memberA1 logged one session in the first test; it is recent (now()).
+    const own = await memberAdherence(staff(seed.gymA), seed.memberA1);
+    expect(own.totalSessions).toBeGreaterThanOrEqual(1);
+    expect(own.recentSessions).toBeGreaterThanOrEqual(1);
+    expect(own.lastCompletedAt).not.toBeNull();
+
+    // A member with no logs reads as zero / never, not an error.
+    const idle = await memberAdherence(staff(seed.gymA), seed.memberA2);
+    expect(idle.totalSessions).toBe(0);
+    expect(idle.recentSessions).toBe(0);
+    expect(idle.lastCompletedAt).toBeNull();
+
+    // Cross-tenant: gym B staff see nothing for gym A's member (RLS).
+    const crossTenant = await memberAdherence(staff(seed.gymB), seed.memberA1);
+    expect(crossTenant.totalSessions).toBe(0);
+    expect(crossTenant.lastCompletedAt).toBeNull();
   });
 });

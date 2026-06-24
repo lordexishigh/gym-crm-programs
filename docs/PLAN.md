@@ -273,9 +273,84 @@ can log a completed workout session. This is the first WRITE path on the portal.
 Surface the new member-written signal back to staff so the loop is visible.
 
 - **ga-trainer-insights-001** Member adherence on the dashboard
-  - [ ] Staff can see, per member, last-logged date and recent session count.
-  - [ ] The member detail page lists the member's logged sessions (read-only for staff).
-  - [ ] All reads are tenant-scoped by RLS; staff never write a member's log.
+  - [x] Staff can see, per member, last-logged date and recent session count.
+  - [x] The member detail page lists the member's logged sessions (read-only for staff).
+  - [x] All reads are tenant-scoped by RLS; staff never write a member's log.
 - **ga-trainer-insights-002** Roster engagement indicators
   - [ ] The roster flags members with no recent activity (configurable window).
   - [ ] Indicators are tenant-scoped and performant on the existing roster query.
+
+## v1-hardening — Review-driven improvements _(review: docs/REVIEW.md)_
+
+A whole-app review (`docs/REVIEW.md`, 2026-06-24) confirmed the security model
+(RLS-first isolation, server-derived identity, pure+shared validation) is sound
+and that GA's first member-written path is correctly minimal. It also surfaced
+concrete gaps: the two open GA tasks were never built, the staff dashboard
+overview is a non-functional stub, and three migration files collide on the
+`0003` prefix. This phase reconciles the open GA work and schedules the review
+findings as numbered tasks. One small, obviously-correct UI fix (navigable
+overview cards, raw tenant-UUID removed from `app/dashboard/page.tsx`) was
+applied directly during the review; the rest is deferred here.
+
+**Reconciliation of open GA items:** `ga-engagement-002` (per-exercise set
+logging) and `ga-trainer-insights-002` (roster engagement indicators) remain
+genuinely unimplemented — they are NOT closed. They are carried forward here at
+higher priority as `review-hardening-set-logging-001` and
+`review-hardening-roster-engagement-001` respectively, with their original
+acceptance criteria preserved and tightened. Treat the GA entries as superseded
+by these.
+
+**Success criteria:**
+
+- A trainer can spot disengaged members directly from the roster, without
+  opening each profile, and the indicator is tenant-scoped and adds no N+1 cost
+  to the roster query.
+- A member can record actual per-set work (reps/weight/RPE) against each
+  exercise in a session, rolled up into their history, still RLS-isolated and
+  GDPR-covered.
+- The staff dashboard overview shows live, tenant-scoped counts on navigable
+  cards rather than a static stub.
+- Migration filenames have unambiguous, intent-ordered numbering with a
+  documented ordering guarantee.
+
+### review-hardening-roster-engagement — Roster engagement indicators _(carries forward ga-trainer-insights-002; depends on: ga-trainer-insights)_
+
+Surface the workout signal at the roster level so disengaged members are visible
+at a glance, without regressing the existing search/filter/pagination query.
+
+- **review-hardening-roster-engagement-001** Flag inactive members on the roster
+  - [ ] The roster (`app/dashboard/members/page.tsx`) flags members with no logged session inside a configurable window (default `ADHERENCE_WINDOW_DAYS`).
+  - [ ] The flag is computed with a single aggregate join against `workout_log`, not a per-row query (no N+1; verified by inspecting the issued SQL).
+  - [ ] Indicators are tenant-scoped by RLS (`workout_log_staff_select`); a cross-tenant member id contributes nothing.
+  - [ ] The existing name search, status filter, and pagination continue to work unchanged.
+
+### review-hardening-set-logging — Per-exercise set logging _(carries forward ga-engagement-002; depends on: ga-engagement)_
+
+Extend session logging from session-level (program + effort + note) to actual
+per-set work, the natural next step for the feedback loop.
+
+- **review-hardening-set-logging-001** Record actual sets/reps/weight per exercise
+  - [ ] A member can record actual sets/reps/weight (and optional per-set RPE) against each exercise in a logged session.
+  - [ ] Per-set entries roll up into the session log and the member's history view.
+  - [ ] A pure `validate*Input` function guards per-set values before any DB round-trip, mirroring `validateWorkoutLogInput`.
+  - [ ] All per-set entries remain member-scoped under RLS (new `with check` policies on the new table) and are covered by GDPR export, erasure/anonymisation, and retention.
+
+### review-hardening-dashboard — Live staff dashboard overview _(depends on: alpha-member-records)_
+
+Replace the static overview stub with live, tenant-scoped figures so the landing
+page is useful rather than decorative.
+
+- **review-hardening-dashboard-001** Live, navigable overview cards
+  - [ ] The overview cards show live tenant-scoped counts (members, programs, recent assignments) read under `withTenantContext`.
+  - [ ] Each card links to its section; no raw tenant UUID or other internal identifier is rendered to the user.
+  - [ ] Counts are RLS-scoped to the staff member's gym and verified by a view/data test.
+
+### review-hardening-migrations — Deterministic migration ordering _(depends on: mvp-platform-foundation)_
+
+Remove the `0003` filename collision so applied order reflects intent and cannot
+silently reorder as new migrations land.
+
+- **review-hardening-migrations-001** Resolve duplicate 0003 migration numbers
+  - [ ] No two migration files share a numeric prefix (renumber the three `0003_*.sql` files, preserving their current applied order).
+  - [ ] `scripts/migrate.mjs` applies cleanly against both a fresh database and one where the original `0003_*` files are already recorded in `schema_migrations` (no double-apply, no gap failure).
+  - [ ] The intended ordering guarantee is documented alongside the runner.
