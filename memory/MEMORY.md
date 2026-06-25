@@ -1,2 +1,3 @@
 - [Test DB points at production](test-db-points-at-production.md) — repo .env DATABASE_URL is live prod Supabase; tests guarded by test/setup/db-safety.ts
 - [Exercise catalog is per-tenant](exercise-catalog-per-tenant.md) — built-in exercises seeded into each gym's exercise_library (no global table), to preserve RLS isolation
+- [Prod migrations via deploy workflow](prod-migrations-via-deploy-workflow.md) — prod schema migrated only by deploy.yml (not Vercel boot); a main-vs-master branch-trigger mismatch once stalled it and crashed dashboard tabs

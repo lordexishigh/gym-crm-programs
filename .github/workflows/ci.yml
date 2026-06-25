@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The repository's default branch is `master`; `main` is kept for forks/renames.
+    branches: [master, main]
   pull_request:
 
 jobs:

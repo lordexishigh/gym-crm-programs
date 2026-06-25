@@ -111,18 +111,40 @@ export async function captureException(
 
   // 2) Monitoring sink.
   const monitoringUrl = process.env.MONITORING_WEBHOOK_URL;
-  if (monitoringUrl) await postWebhook(monitoringUrl, event);
+  const alertUrl = process.env.ALERT_WEBHOOK_URL;
+  let delivered = false;
+  if (monitoringUrl) {
+    await postWebhook(monitoringUrl, event);
+    delivered = true;
+  }
 
   // 3) Alert sink for critical failures.
   if (severity === "critical") {
-    const alertUrl = process.env.ALERT_WEBHOOK_URL;
     if (alertUrl) {
       await postWebhook(alertUrl, { ...event, alert: true });
+      delivered = true;
     } else if (monitoringUrl) {
       // No dedicated alert sink — flag the monitoring event as an alert so the
       // backend can route it. Avoids double-sending when both point at one URL.
       await postWebhook(monitoringUrl, { ...event, alert: true });
     }
+  }
+
+  // 4) Loud-misconfiguration guard. The user-facing error boundaries promise the
+  //    team "has been notified" — but that is only TRUE when a sink is configured.
+  //    If a real failure (error/critical) was captured with NO delivery channel,
+  //    say so explicitly so the gap is visible in logs instead of silent: the
+  //    event was recorded but nobody was actually paged. (Warnings — perf-budget
+  //    breaches and the like — are log-only by design, so they don't trip this.)
+  if (!delivered && severity !== "warning") {
+    logger.warn(
+      "alerting not configured: captured exception was logged only, not delivered",
+      {
+        correlationId: id,
+        severity,
+        hint: "set MONITORING_WEBHOOK_URL (and optionally ALERT_WEBHOOK_URL) so error/critical events reach a person",
+      },
+    );
   }
 
   return id;

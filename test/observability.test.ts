@@ -104,6 +104,38 @@ describe("captureException", () => {
     expect(fetchMock.mock.calls.some((c) => JSON.parse(c[1].body).alert === true)).toBe(true);
   });
 
+  it("warns that alerting is unconfigured when an error is captured with no sink", async () => {
+    // No MONITORING_WEBHOOK_URL / ALERT_WEBHOOK_URL set (cleared in beforeEach).
+    vi.stubGlobal("fetch", vi.fn());
+
+    await captureException(new Error("boom"), { source: "test", severity: "error" });
+
+    // The structured error line on stderr...
+    expect(console.error).toHaveBeenCalledTimes(1);
+    // ...plus an explicit "not delivered" warning so the gap is visible.
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    const warnLine = JSON.parse((console.warn as unknown as { mock: { calls: string[][] } }).mock.calls[0][0]);
+    expect(warnLine.level).toBe("warn");
+    expect(warnLine.msg).toMatch(/alerting not configured/i);
+  });
+
+  it("does NOT warn-about-delivery for a warning-severity event (log-only by design)", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+
+    await captureException(new Error("perf budget"), { severity: "warning" });
+
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn-about-delivery when a sink IS configured", async () => {
+    process.env.MONITORING_WEBHOOK_URL = "https://monitor.example/hook";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+
+    await captureException(new Error("boom"), { severity: "error" });
+
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
   it("never throws even if the webhook delivery fails", async () => {
     process.env.MONITORING_WEBHOOK_URL = "https://monitor.example/hook";
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));

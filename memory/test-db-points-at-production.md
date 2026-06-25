@@ -17,6 +17,14 @@ non-local `DATABASE_URL` so DB suites SKIP unless the host is local OR
 `ALLOW_NONLOCAL_TEST_DB=1` is set. CI is unaffected (it overrides `DATABASE_URL`
 to a throwaway local Postgres).
 
+**Observed pollution (2026-06-25):** prod already holds many fixture-gym rows from
+past runs — `Gym A/B`, `Audit Gym A/B`, `Erase Gym A/Idem/Staff/X/Y`,
+`Export Gym A/B`, `Lib Gym A/B`, `Lifecycle Gym A/B`, `Portal Gym A/B`,
+`Prog Gym A/B` — each with a seeded `exercise_library`. The genuine prod tenant is
+`Demo Gym` (slug `demo-gym`, the seed default). Cleaning these is destructive — get
+explicit owner sign-off before deleting (`delete from gym where name in (...)`,
+children cascade).
+
 **Why:** prevents destructive/seeding RLS tests from ever hitting prod by accident.
 **How to apply:** never set `ALLOW_NONLOCAL_TEST_DB=1` against the prod URL; to run
 DB tests locally, point `DATABASE_URL` at a throwaway Postgres. Pre-existing

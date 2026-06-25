@@ -10,7 +10,10 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    # The repository's default branch is `master`; `main` is kept for forks/renames.
+    # If this only lists a branch the repo never pushes to, the production migration
+    # step below never runs and the live schema silently falls behind the code.
+    branches: [master, main]
 
 concurrency:
   group: deploy-production
