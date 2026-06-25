@@ -10,7 +10,12 @@
  * rules there so a library exercise inserted into a program always re-validates.
  */
 
-/** A library exercise as read by the staff dashboard (tenant-scoped via RLS). */
+/**
+ * A library exercise as read by the program builder + program pages
+ * (tenant-scoped via RLS). This is the MINIMAL shape those consumers need —
+ * the richer reference content lives on `LibraryExerciseDetail` so adding it
+ * never changes what ProgramBuilder reads.
+ */
 export type LibraryExerciseRow = {
   id: string;
   name: string;
@@ -20,6 +25,21 @@ export type LibraryExerciseRow = {
   notes: string | null;
 };
 
+/**
+ * A library exercise with its full reference content, as shown on the exercise
+ * library page (alpha-exercise-library-003): an image, how-to instructions,
+ * form/safety guidelines, coaching tips, a category, and whether it is part of
+ * the built-in starter catalog.
+ */
+export type LibraryExerciseDetail = LibraryExerciseRow & {
+  category: string | null;
+  imageUrl: string | null;
+  instructions: string | null;
+  guidelines: string | null;
+  tips: string | null;
+  isSeeded: boolean;
+};
+
 /** Normalised, validated library exercise ready to persist. */
 export type LibraryExerciseInput = {
   name: string;
@@ -27,15 +47,24 @@ export type LibraryExerciseInput = {
   reps: string | null;
   rest: string | null;
   notes: string | null;
+  category: string | null;
+  imageUrl: string | null;
+  instructions: string | null;
+  guidelines: string | null;
+  tips: string | null;
 };
 
 export type LibraryExerciseValidationResult =
   | { ok: true; value: LibraryExerciseInput }
   | { ok: false; error: string };
 
-// Limits — mirror the per-exercise limits in lib/programs.ts.
+// Limits — the short fields mirror the per-exercise limits in lib/programs.ts;
+// the teaching-content fields are allowed to be longer paragraphs.
 const NAME_MAX = 200;
 const TEXT_MAX = 500;
+const CATEGORY_MAX = 80;
+const URL_MAX = 1000;
+const CONTENT_MAX = 4000;
 const SETS_MAX = 100;
 
 function asTrimmed(v: unknown): string {
@@ -45,6 +74,20 @@ function asTrimmed(v: unknown): string {
 function nullableText(v: unknown): string | null {
   const s = asTrimmed(v);
   return s.length > 0 ? s : null;
+}
+
+/** A plain http(s) URL, or null if blank. Returns false when present-but-bad. */
+function parseOptionalUrl(v: unknown): string | null | false {
+  const s = asTrimmed(v);
+  if (!s) return null;
+  if (s.length > URL_MAX) return false;
+  let url: URL;
+  try {
+    url = new URL(s);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" || url.protocol === "https:" ? s : false;
 }
 
 /**
@@ -60,6 +103,11 @@ export function validateLibraryExerciseInput(raw: {
   reps?: unknown;
   rest?: unknown;
   notes?: unknown;
+  category?: unknown;
+  imageUrl?: unknown;
+  instructions?: unknown;
+  guidelines?: unknown;
+  tips?: unknown;
 }): LibraryExerciseValidationResult {
   const name = asTrimmed(raw.name);
   if (!name) {
@@ -90,18 +138,58 @@ export function validateLibraryExerciseInput(raw: {
   const reps = nullableText(raw.reps);
   const rest = nullableText(raw.rest);
   const notes = nullableText(raw.notes);
-  for (const [label, val] of [
-    ["Reps", reps],
-    ["Rest", rest],
-    ["Notes", notes],
+  const category = nullableText(raw.category);
+  for (const [label, val, max] of [
+    ["Reps", reps, TEXT_MAX],
+    ["Rest", rest, TEXT_MAX],
+    ["Notes", notes, TEXT_MAX],
+    ["Category", category, CATEGORY_MAX],
   ] as const) {
-    if (val && val.length > TEXT_MAX) {
+    if (val && val.length > max) {
       return {
         ok: false,
-        error: `${label} is too long (max ${TEXT_MAX} characters).`,
+        error: `${label} is too long (max ${max} characters).`,
       };
     }
   }
 
-  return { ok: true, value: { name, sets, reps, rest, notes } };
+  const imageUrl = parseOptionalUrl(raw.imageUrl);
+  if (imageUrl === false) {
+    return {
+      ok: false,
+      error: "Image URL must be a valid http(s) link (max 1000 characters).",
+    };
+  }
+
+  const instructions = nullableText(raw.instructions);
+  const guidelines = nullableText(raw.guidelines);
+  const tips = nullableText(raw.tips);
+  for (const [label, val] of [
+    ["Instructions", instructions],
+    ["Guidelines", guidelines],
+    ["Tips", tips],
+  ] as const) {
+    if (val && val.length > CONTENT_MAX) {
+      return {
+        ok: false,
+        error: `${label} is too long (max ${CONTENT_MAX} characters).`,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      name,
+      sets,
+      reps,
+      rest,
+      notes,
+      category,
+      imageUrl,
+      instructions,
+      guidelines,
+      tips,
+    },
+  };
 }

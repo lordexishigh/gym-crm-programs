@@ -210,3 +210,39 @@ export async function memberAdherence(
     };
   });
 }
+
+/**
+ * Per-member engagement summary used by the staff roster at-a-glance signal
+ * (review-hardening-roster-engagement-001 / ga-trainer-insights-002). The roster
+ * computes these two values for every listed member in ONE aggregate join (see
+ * `rosterListSql` in `lib/members.ts`) — never a per-row query — so the indicator
+ * adds no N+1 cost. RLS (`workout_log_staff_select`) scopes the underlying rows
+ * to the staff member's own gym, so a member from another tenant contributes
+ * nothing to these counts.
+ */
+export type RosterEngagement = {
+  /** Sessions this member logged inside the adherence window. */
+  recentSessions: number;
+  /** Most recent session timestamp ever, or null if the member never logged. */
+  lastCompletedAt: string | null;
+};
+
+/**
+ * How engaged a member is, for the roster badge. Kept PURE so the view and its
+ * test cannot drift on how a member is classified.
+ *
+ *   - "active"  — logged at least one session inside the window.
+ *   - "at-risk" — has logged before, but nothing inside the window: the member
+ *                 went quiet. This is the actionable churn signal a trainer wants
+ *                 to catch without opening each profile.
+ *   - "none"    — never logged a session (e.g. just added, or no program yet).
+ *                 Deliberately NOT flagged as at-risk, so the signal stays focused
+ *                 on members who started training and then stopped.
+ */
+export type EngagementLevel = "active" | "at-risk" | "none";
+
+export function memberEngagementLevel(e: RosterEngagement): EngagementLevel {
+  if (e.recentSessions > 0) return "active";
+  if (e.lastCompletedAt) return "at-risk";
+  return "none";
+}

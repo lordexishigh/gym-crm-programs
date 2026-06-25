@@ -5,12 +5,15 @@ import { createLibraryExerciseAction, type LibraryFormState } from "./actions";
 
 const inputClass =
   "rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand";
+const labelClass = "flex flex-col gap-1 text-sm font-medium text-slate-700";
 
 /**
- * Add-to-library form (alpha-exercise-library-001). Fields mirror a program's
- * exercise (name, sets, reps, rest, notes). `useActionState` surfaces validation
- * errors inline; the form is cleared after a successful add so the trainer can
- * quickly enter several exercises in a row.
+ * Add-to-library form (alpha-exercise-library-001/003). The top fields mirror a
+ * program's exercise (name, sets, reps, rest, notes); the optional "Reference
+ * content" block adds the teaching material members and trainers benefit from —
+ * a category, an image link, and how-to instructions, form guidelines, and
+ * coaching tips. `useActionState` surfaces validation errors inline; the form is
+ * cleared after a successful add so the trainer can enter several in a row.
  */
 export function ExerciseLibraryForm() {
   const [state, formAction, pending] = useActionState<
@@ -33,19 +36,31 @@ export function ExerciseLibraryForm() {
     >
       <h2 className="text-base font-semibold text-slate-900">Add an exercise</h2>
 
-      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-        Name
-        <input
-          type="text"
-          name="name"
-          required
-          className={inputClass}
-          placeholder="Back squat"
-        />
-      </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className={labelClass}>
+          Name
+          <input
+            type="text"
+            name="name"
+            required
+            className={inputClass}
+            placeholder="Back squat"
+          />
+        </label>
+        <label className={labelClass}>
+          Category{" "}
+          <span className="font-normal text-slate-400">(optional)</span>
+          <input
+            type="text"
+            name="category"
+            className={inputClass}
+            placeholder="Legs, Push, Pull, Core…"
+          />
+        </label>
+      </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        <label className={labelClass}>
           Sets
           <input
             type="number"
@@ -56,7 +71,7 @@ export function ExerciseLibraryForm() {
             placeholder="5"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        <label className={labelClass}>
           Reps
           <input
             type="text"
@@ -65,7 +80,7 @@ export function ExerciseLibraryForm() {
             placeholder="5 (or 8-12)"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        <label className={labelClass}>
           Rest
           <input
             type="text"
@@ -76,7 +91,7 @@ export function ExerciseLibraryForm() {
         </label>
       </div>
 
-      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+      <label className={labelClass}>
         Notes <span className="font-normal text-slate-400">(optional)</span>
         <input
           type="text"
@@ -85,6 +100,54 @@ export function ExerciseLibraryForm() {
           placeholder="Tempo, cues, or substitutions"
         />
       </label>
+
+      <details className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+        <summary className="cursor-pointer select-none text-sm font-medium text-slate-700">
+          Reference content{" "}
+          <span className="font-normal text-slate-400">
+            (image, instructions, guidelines, tips — optional)
+          </span>
+        </summary>
+
+        <div className="mt-3 flex flex-col gap-3">
+          <label className={labelClass}>
+            Image URL
+            <input
+              type="url"
+              name="imageUrl"
+              className={inputClass}
+              placeholder="https://…/back-squat.jpg"
+            />
+          </label>
+          <label className={labelClass}>
+            Instructions
+            <textarea
+              name="instructions"
+              rows={4}
+              className={inputClass}
+              placeholder={"Step-by-step how-to. One step per line."}
+            />
+          </label>
+          <label className={labelClass}>
+            Guidelines
+            <textarea
+              name="guidelines"
+              rows={3}
+              className={inputClass}
+              placeholder="Form & safety: setup, range of motion, what to avoid."
+            />
+          </label>
+          <label className={labelClass}>
+            Tips
+            <textarea
+              name="tips"
+              rows={2}
+              className={inputClass}
+              placeholder="Coaching cues that help members get it right."
+            />
+          </label>
+        </div>
+      </details>
 
       {state.error ? (
         <p role="alert" className="text-sm text-red-600">

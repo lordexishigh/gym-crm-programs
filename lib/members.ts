@@ -174,3 +174,53 @@ export function memberRosterWhere(filters: RosterFilters): {
 export function rosterPageCount(total: number, pageSize = ROSTER_PAGE_SIZE): number {
   return Math.max(1, Math.ceil(total / pageSize));
 }
+
+/**
+ * A roster row: the member profile plus the at-a-glance engagement signal
+ * (review-hardening-roster-engagement-001). The engagement columns come from a
+ * single aggregate join (see `rosterListSql`), not a per-row query.
+ */
+export type RosterMemberRow = MemberRow & {
+  /** Most recent logged session ever, or null if the member never logged. */
+  last_completed_at: string | null;
+  /** Sessions logged inside the adherence window (0 when none / never). */
+  recent_sessions: number;
+};
+
+/**
+ * Build the roster list query: the member columns plus a per-member workout
+ * aggregate, joined ONCE (no N+1). `clause` is the shared WHERE from
+ * `memberRosterWhere`, occupying placeholders `$1..$paramCount`; the caller then
+ * binds the adherence window, page limit and offset as the next three params
+ * ($paramCount+1, +2, +3) in that order.
+ *
+ * No tenant predicate is added: RLS scopes both sides — `member_staff_all` for
+ * the member rows and `workout_log_staff_select` for the aggregate — to the
+ * current gym, so the engagement counts can only ever reflect this tenant's logs.
+ *
+ * The WHERE columns (`full_name`, `status`) stay unqualified: only `member` (the
+ * aliased `m`) exposes them, so they remain unambiguous against the `wl`
+ * aggregate, which exposes only member_id / last_completed_at / recent_sessions.
+ */
+export function rosterListSql(clause: string, paramCount: number): string {
+  const win = paramCount + 1;
+  const lim = paramCount + 2;
+  const off = paramCount + 3;
+  return `select m.id, m.email, m.full_name, m.phone, m.status, m.notes,
+                m.auth_user_id, m.created_at, m.updated_at,
+                wl.last_completed_at,
+                coalesce(wl.recent_sessions, 0)::int as recent_sessions
+           from member m
+           left join (
+             select member_id,
+                    max(completed_at) as last_completed_at,
+                    count(*) filter (
+                      where completed_at >= now() - make_interval(days => $${win})
+                    )::int as recent_sessions
+               from workout_log
+              group by member_id
+           ) wl on wl.member_id = m.id
+           ${clause}
+          order by m.full_name asc
+          limit $${lim} offset $${off}`;
+}

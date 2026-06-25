@@ -31,38 +31,63 @@ export function register(): void {
     if (process.env.AUTO_MIGRATE === "0" || process.env.AUTO_MIGRATE === "false") return;
     if (!process.env.DATABASE_URL && !process.env.MIGRATE_DATABASE_URL) return;
 
-    // Run the migration in a CHILD PROCESS (plain Node), not via import:
+    // Run migrate + catalog seed in CHILD PROCESSES (plain Node), not via import:
     //   - keeps `pg`/`dotenv` out of THIS module's bundle entirely, and
     //   - isolates any `pg` connection 'error' event to the child, so a transient
     //     DB drop can never surface as an uncaughtException in the Next server.
     void (async () => {
       try {
         const { spawn } = await import("node:child_process");
-        const child = spawn(process.execPath, ["scripts/migrate.mjs"], {
-          cwd: process.cwd(),
-          env: process.env,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        let out = "";
-        child.stdout?.on("data", (d) => (out += d.toString()));
-        child.stderr?.on("data", (d) => (out += d.toString()));
-        child.on("error", (err) =>
-          console.error("[instrumentation] auto-migrate could not start:", err),
-        );
-        child.on("close", (code) => {
-          if (code === 0) {
-            if (/\+ apply/.test(out)) {
-              console.log("[instrumentation] applied pending migration(s) on boot.");
-            }
-          } else {
-            console.error(
-              `[instrumentation] auto-migrate exited with code ${code}. ` +
-                `Apply migrations manually if login fails (see README).\n${out.slice(-1200)}`,
-            );
+
+        // Spawn a script, buffering its output, and resolve with {code, out}.
+        const runScript = (script: string): Promise<{ code: number; out: string }> =>
+          new Promise((resolve) => {
+            const child = spawn(process.execPath, [script], {
+              cwd: process.cwd(),
+              env: process.env,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            let out = "";
+            child.stdout?.on("data", (d) => (out += d.toString()));
+            child.stderr?.on("data", (d) => (out += d.toString()));
+            child.on("error", (err) => {
+              console.error(`[instrumentation] ${script} could not start:`, err);
+              resolve({ code: -1, out });
+            });
+            child.on("close", (code) => resolve({ code: code ?? -1, out }));
+          });
+
+        const mig = await runScript("scripts/migrate.mjs");
+        if (mig.code !== 0) {
+          console.error(
+            `[instrumentation] auto-migrate exited with code ${mig.code}. ` +
+              `Apply migrations manually if login fails (see README).\n${mig.out.slice(-1200)}`,
+          );
+          return;
+        }
+        if (/\+ apply/.test(mig.out)) {
+          console.log("[instrumentation] applied pending migration(s) on boot.");
+        }
+
+        // Seed the built-in exercise catalog into every gym (idempotent upsert),
+        // AFTER migrations so the unique index its ON CONFLICT needs exists. This
+        // guarantees a freshly-migrated/cloned gym is never empty without anyone
+        // running `npm run seed`. Opt-out via AUTO_SEED=0. There is no runtime
+        // gym-provisioning path in the app (gyms are created by scripts/seed.mjs),
+        // so this boot backfill is the single place new gyms get the catalog.
+        if (process.env.AUTO_SEED === "0" || process.env.AUTO_SEED === "false") return;
+        const seed = await runScript("scripts/seed-catalog.mjs");
+        if (seed.code === 0) {
+          if (/upserted/.test(seed.out)) {
+            console.log("[instrumentation] seeded the built-in exercise catalog on boot.");
           }
-        });
+        } else {
+          console.error(
+            `[instrumentation] catalog seed exited with code ${seed.code}.\n${seed.out.slice(-1200)}`,
+          );
+        }
       } catch (err) {
-        console.error("[instrumentation] auto-migrate on boot failed:", err);
+        console.error("[instrumentation] auto-migrate/seed on boot failed:", err);
       }
     })();
   }

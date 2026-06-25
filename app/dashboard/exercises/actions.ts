@@ -31,21 +31,54 @@ export async function createLibraryExerciseAction(
     reps: formData.get("reps"),
     rest: formData.get("rest"),
     notes: formData.get("notes"),
+    category: formData.get("category"),
+    imageUrl: formData.get("imageUrl"),
+    instructions: formData.get("instructions"),
+    guidelines: formData.get("guidelines"),
+    tips: formData.get("tips"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { name, sets, reps, rest, notes } = parsed.value;
+  const { name, sets, reps, rest, notes, category, imageUrl, instructions, guidelines, tips } =
+    parsed.value;
 
   try {
     await withTenantContext(session.identity, async (c) => {
       const createdBy = await resolveStaffUserId(c, session.identity.userId);
       await c.query(
         `insert into exercise_library
-           (tenant_id, name, sets, reps, rest, notes, created_by)
-         values ($1, $2, $3, $4, $5, $6, $7)`,
-        [session.identity.tenantId, name, sets, reps, rest, notes, createdBy],
+           (tenant_id, name, sets, reps, rest, notes, category, image_url,
+            instructions, guidelines, tips, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          session.identity.tenantId,
+          name,
+          sets,
+          reps,
+          rest,
+          notes,
+          category,
+          imageUrl,
+          instructions,
+          guidelines,
+          tips,
+          createdBy,
+        ],
       );
     });
   } catch (err) {
+    // The (tenant_id, lower(name)) unique index (migration 0010) rejects a
+    // duplicate name within the gym — surface that as actionable guidance
+    // rather than the generic retry message (which would falsely imply a glitch).
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "23505"
+    ) {
+      return {
+        error: `“${name}” is already in your library. Pick a different name.`,
+      };
+    }
     await reportHandledError(err, "create-library-exercise", {
       tenantId: session.identity.tenantId,
     });

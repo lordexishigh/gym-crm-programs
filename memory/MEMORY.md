@@ -1,1 +1,2 @@
 - [Test DB points at production](test-db-points-at-production.md) — repo .env DATABASE_URL is live prod Supabase; tests guarded by test/setup/db-safety.ts
+- [Exercise catalog is per-tenant](exercise-catalog-per-tenant.md) — built-in exercises seeded into each gym's exercise_library (no global table), to preserve RLS isolation

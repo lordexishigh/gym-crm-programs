@@ -5,10 +5,16 @@ import {
   ROSTER_PAGE_SIZE,
   memberRosterWhere,
   parseRosterFilters,
+  rosterListSql,
   rosterPageCount,
-  type MemberRow,
   type RosterFilters,
+  type RosterMemberRow,
 } from "@/lib/members";
+import {
+  ADHERENCE_WINDOW_DAYS,
+  memberEngagementLevel,
+  type EngagementLevel,
+} from "@/lib/workout-logs";
 
 export const dynamic = "force-dynamic";
 
@@ -54,13 +60,11 @@ export default async function MembersPage({
       const page = Math.min(filters.page, pageCount);
       const offset = (page - 1) * ROSTER_PAGE_SIZE;
 
-      const { rows } = await c.query<MemberRow>(
-        `select id, email, full_name, phone, status, notes,
-                auth_user_id, created_at, updated_at
-           from member ${clause}
-          order by full_name asc
-          limit $${params.length + 1} offset $${params.length + 2}`,
-        [...params, ROSTER_PAGE_SIZE, offset],
+      // The list query LEFT JOINs a single per-member workout aggregate (no N+1)
+      // for the engagement signal. Window/limit/offset follow the clause params.
+      const { rows } = await c.query<RosterMemberRow>(
+        rosterListSql(clause, params.length),
+        [...params, ADHERENCE_WINDOW_DAYS, ROSTER_PAGE_SIZE, offset],
       );
 
       return { members: rows, total };
@@ -158,6 +162,14 @@ export default async function MembersPage({
                     </span>
                   </div>
                   <span className="flex shrink-0 items-center gap-2">
+                    <EngagementBadge
+                      level={memberEngagementLevel({
+                        recentSessions: m.recent_sessions,
+                        lastCompletedAt: m.last_completed_at,
+                      })}
+                      lastCompletedAt={m.last_completed_at}
+                      recentSessions={m.recent_sessions}
+                    />
                     {m.auth_user_id ? (
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                         Portal active
@@ -204,5 +216,51 @@ export default async function MembersPage({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Roster engagement indicator (review-hardening-roster-engagement-001). A calm,
+ * at-a-glance pill so a trainer spots who went quiet without opening each
+ * profile. "Active" (emerald) = logged inside the last {ADHERENCE_WINDOW_DAYS}
+ * days; "Inactive" (amber) = logged before but not recently — the actionable
+ * churn signal; members who never logged show no pill to avoid false alarms.
+ */
+function EngagementBadge({
+  level,
+  lastCompletedAt,
+  recentSessions,
+}: {
+  level: EngagementLevel;
+  lastCompletedAt: string | null;
+  recentSessions: number;
+}) {
+  if (level === "none") return null;
+
+  if (level === "active") {
+    return (
+      <span
+        title={`${recentSessions} session${recentSessions === 1 ? "" : "s"} logged in the last ${ADHERENCE_WINDOW_DAYS} days`}
+        className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700"
+      >
+        Active
+      </span>
+    );
+  }
+
+  const lastSeen = lastCompletedAt
+    ? new Date(lastCompletedAt).toLocaleDateString()
+    : null;
+  return (
+    <span
+      title={
+        lastSeen
+          ? `No workout logged in the last ${ADHERENCE_WINDOW_DAYS} days — last logged ${lastSeen}`
+          : `No workout logged in the last ${ADHERENCE_WINDOW_DAYS} days`
+      }
+      className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+    >
+      Inactive
+    </span>
   );
 }
