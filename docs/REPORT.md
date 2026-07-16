@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-87%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-55%2F100-red)](#) ![readiness](https://img.shields.io/badge/readiness-blocked-red)
 
-**Overall: 87/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 55/100** · readiness: **blocked**
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,10 +10,10 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 90 | `██████████████████░░` |
-| Code quality | 88 | `██████████████████░░` |
+| Spec coverage | 84 | `█████████████████░░░` |
+| Code quality | 90 | `██████████████████░░` |
 | Robustness & error handling | 85 | `█████████████████░░░` |
-| Builds & tests | 92 | `██████████████████░░` |
+| Builds & tests | 35 | `███████░░░░░░░░░░░░░` |
 | UX & design | 78 | `████████████████░░░░` |
 
 ## Readiness checks
@@ -27,8 +27,8 @@
 **Quality**
 - ✅ Automated tests — test files present
 - ✅ Dependencies pinned — lockfile/requirements present
-- ⚠️ License declared — no LICENSE file or declared license — ownership/reuse terms are ambiguous
-- ✅ Builds & tests pass — final smoke test passed
+- ✅ License declared — license present
+- ❌ Builds & tests pass — final product smoke test did not pass
 - ⚠️ Accessibility basics — 1 <img> without alt text
 
 **Compliance**
@@ -37,26 +37,26 @@
 - ✅ Cookie consent — no analytics/trackers detected
 
 **Growth**
-- ⚠️ SEO & discoverability — missing: robots.txt, sitemap
+- ✅ SEO & discoverability — meta tags, robots.txt and sitemap present
 
 ## Strengths
 
-- Tenant and member isolation is enforced at the database layer (RLS + unprivileged app_user role) and proven by a dedicated adversarial test suite that probes SELECT/UPDATE/DELETE/forged-INSERT across every tenanted table.
-- Strong verified test culture: 239 passing tests across 26 files, with tests asserting exact post-erasure GDPR tombstone shapes rather than happy paths only.
-- Goes beyond the spec with production concerns: GDPR export/anonymisation in single tenant-scoped transactions, observability hooks, and an accessibility pass with documented WCAG contrast reasoning.
-- Code is well-factored between lib/ domain modules and thin App Router pages/actions, with comments that explain invariants rather than restate code.
+- Database-layer tenant isolation is real and adversarially tested: a comprehensive cross-tenant/cross-member suite drives the actual RLS session path (`withTenantContext` + app_user role) and asserts forged-tenant writes are blocked.
+- GDPR support goes beyond the spec — transactional data export with audit logging and referential-integrity-preserving anonymisation with exported tombstone constants.
+- Code quality is consistently high: no stubs or dead code in the sample, clean lib/app separation, and comments that document constraints (e.g. why brand colors split for WCAG AA) rather than restating code.
+- Accessibility was treated as a first-class concern, with contrast-ratio-justified color tokens and a dedicated a11y polish task.
 
 ## To improve
 
-- One <img> still lacks alt text despite a dedicated a11y polish task — the accessibility pass should end with an automated axe/lint check gating the build.
-- No robots.txt or sitemap, weakening discoverability for what is a hosted multi-gym SaaS product.
-- No LICENSE file or declared license, leaving ownership and reuse terms ambiguous.
-- Several DB-dependent test suites skip silently when DATABASE_URL is absent, so CI environments without a database quietly under-verify the RLS guarantees; the pipeline should provision a Postgres for the full suite.
-- Multiple task reports mention files existing on disk but not committed in prior snapshots — the pipeline should verify against the committed tree, not the working directory, to avoid shipping untracked code.
+- Builds & tests pass: final product smoke test did not pass
+- The final product smoke test failed — the pipeline must run and fix the assembled end-to-end smoke path before declaring done, since per-task green builds did not guarantee the integrated product works.
+- One <img> is missing alt text despite a dedicated a11y task, indicating the a11y pass lacked an automated lint/axe check to catch regressions.
+- Several task reports mention review snapshots being stale versus disk state and files 'existed on disk but were never committed' — the pipeline needs a commit-before-review discipline so verification runs against what's actually tracked.
+- DB-dependent test suites skip silently without DATABASE_URL, so CI could pass while the RLS suites never ran; the final verification should require a provisioned database.
 
 ## Summary
 
-A genuinely strong build: every promised feature is implemented and wired up, DB-layer multi-tenant isolation is both designed and adversarially tested, and the final build passes 239 real tests. Remaining gaps are peripheral hygiene items (alt text, license, SEO files) rather than functional shortfalls.
+A genuinely well-built CRM — the promised multi-tenant RLS architecture, program authoring, invites, and portal are all implemented with excellent code quality and adversarial isolation testing — but the failed final smoke test means the assembled product is unverified end-to-end, which caps an otherwise excellent build.
 
 ---
-_Scored 2026-07-17 01:08 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-17 01:25 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
