@@ -17,8 +17,8 @@
     "jose": "^5.9.6",
     "next": "^15.5.19",
     "pg": "^8.13.1",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
     "@types/node": "^20.17.12",
