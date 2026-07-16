@@ -1,9 +1,14 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // The view test renders JSX components; use React's automatic runtime (as
+  // The view tests render JSX components; use React's automatic runtime (as
   // Next does) so no explicit `React` import is needed in component files.
-  esbuild: { jsx: "automatic" },
+  // vite 8 transforms with oxc (the `esbuild` option is inert), and the
+  // project tsconfig sets `jsx: "preserve"` (required by Next), which would
+  // skip the JSX transform — override it for the test pipeline.
+  oxc: {
+    jsx: { runtime: "automatic" },
+  },
   test: {
     // RLS tests open real DB connections; keep them serial and give DB setup
     // a little headroom.
@@ -14,7 +19,10 @@ export default defineConfig({
     setupFiles: ["test/setup/db-safety.ts"],
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    // Vitest 4 removed `poolOptions.forks.singleFork`; a single worker with
+    // file parallelism off gives the same serial execution.
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    maxWorkers: 1,
+    fileParallelism: false,
   },
 });
