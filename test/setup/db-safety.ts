@@ -49,3 +49,19 @@ if (url && !isLocalDatabase(url) && !optedIn) {
   process.env.DATABASE_URL = "";
   process.env.MIGRATE_DATABASE_URL = "";
 }
+
+// In CI the full DB-backed suite is MANDATORY, not optional: the workflow
+// provisions a throwaway postgres:16 service container and exports a
+// localhost DATABASE_URL (see .github/workflows/ci.yml). Skipping is a
+// local-development convenience only — if DATABASE_URL is absent here (never
+// set, or blanked just above because it pointed at a non-local host), every
+// RLS/isolation suite would silently skip and CI would green-light a build
+// whose core security guarantee was never verified. Fail the run instead.
+if (process.env.CI && !process.env.DATABASE_URL) {
+  throw new Error(
+    "[db-safety] CI run has no usable local DATABASE_URL, so the RLS/DB test " +
+      "suites would be silently skipped. Provision a throwaway Postgres in " +
+      "the workflow (postgres:16 service container) and export a localhost " +
+      "DATABASE_URL — see .github/workflows/ci.yml.",
+  );
+}

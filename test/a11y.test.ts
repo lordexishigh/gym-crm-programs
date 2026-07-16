@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -7,6 +9,7 @@ import axe from "axe-core";
 import { ProgramView } from "../app/portal/ProgramView";
 import { MemberForm } from "../app/dashboard/members/MemberForm";
 import { ProgramBuilder } from "../app/dashboard/programs/ProgramBuilder";
+import { ExerciseLibraryGrid } from "../app/dashboard/exercises/ExerciseLibraryGrid";
 
 /**
  * Automated accessibility checks (beta-polish-a11y-001).
@@ -123,6 +126,45 @@ describe("automated a11y (WCAG A/AA)", () => {
     expect(violations).toEqual([]);
   });
 
+  it("exercise library grid (incl. its <img>) has no violations", async () => {
+    const violations = await violationsFor(
+      createElement(ExerciseLibraryGrid, {
+        deleteAction: async () => {},
+        exercises: [
+          {
+            id: "lib-1",
+            name: "Bench Press",
+            sets: 3,
+            reps: "8-12",
+            rest: "120s",
+            notes: "Feet planted, slight arch.",
+            category: "Push",
+            imageUrl: "https://images.example.com/bench-press.jpg",
+            instructions: "Lower the bar to mid-chest, press to lockout.",
+            guidelines: "Keep wrists stacked over elbows.",
+            tips: "Squeeze the bar hard before unracking.",
+            isSeeded: true,
+          },
+          {
+            id: "lib-2",
+            name: "Goblet Squat",
+            sets: null,
+            reps: null,
+            rest: null,
+            notes: null,
+            category: null,
+            imageUrl: null,
+            instructions: null,
+            guidelines: null,
+            tips: null,
+            isSeeded: false,
+          },
+        ],
+      }),
+    );
+    expect(violations).toEqual([]);
+  });
+
   it("program builder has no violations", async () => {
     const violations = await violationsFor(
       createElement(ProgramBuilder, {
@@ -153,5 +195,41 @@ describe("automated a11y (WCAG A/AA)", () => {
       }),
     );
     expect(violations).toEqual([]);
+  });
+});
+
+/** Every .tsx source file under a directory, recursively. */
+function tsxFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return tsxFilesUnder(full);
+    return entry.name.endsWith(".tsx") ? [full] : [];
+  });
+}
+
+describe("static a11y source scan (whole app tree)", () => {
+  // The axe suite above only sees components it mounts. This scan closes the
+  // gap for the rest of the tree: every literal `<img>` in app/ must declare
+  // an `alt` attribute (empty alt for decorative images is fine — the rule is
+  // that the author made the decision explicitly). It runs as part of
+  // `npm test`, which CI requires, so a missing alt now fails the build.
+  it("every <img> under app/ declares an alt attribute", () => {
+    const offenders: string[] = [];
+    for (const file of tsxFilesUnder(join(process.cwd(), "app"))) {
+      const source = readFileSync(file, "utf8")
+        // Drop block comments (incl. {/* JSX */} and JSDoc that merely
+        // *mentions* <img>) and line comments before scanning.
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^[ \t]*\/\/.*$/gm, "");
+      // JSX attributes routinely span lines, so match up to the closing `>`.
+      for (const tag of source.match(/<img\b[^>]*>/g) ?? []) {
+        if (!/\balt\s*=/.test(tag)) {
+          offenders.push(
+            `${relative(process.cwd(), file)}: ${tag.replace(/\s+/g, " ").slice(0, 100)}`,
+          );
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

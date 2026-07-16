@@ -1,8 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { WebVitals } from "./WebVitals";
+import { siteBaseUrl } from "@/lib/site";
 
 export const metadata: Metadata = {
+  // Resolves relative OG/canonical URLs (and keeps robots.ts/sitemap.ts on the
+  // same origin — all three read APP_BASE_URL via lib/site.ts).
+  metadataBase: new URL(siteBaseUrl()),
   title: "Alpha CRM",
   description:
     "Multi-tenant CRM for Cyprus gyms — trainers build training programs and assign them to members.",

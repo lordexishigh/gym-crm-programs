@@ -2,6 +2,7 @@
   "name": "alpha-crm",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "description": "Multi-tenant web CRM for Cyprus gyms — member-facing training programs.",
   "scripts": {
     "dev": "next dev",

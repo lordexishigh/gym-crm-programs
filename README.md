@@ -26,6 +26,12 @@ Gyms and fitness businesses in Cyprus need to manage members and deliver trainin
 - Program assignment: a trainer assigns a built program to a specific member within their gym
 - Member portal (read-only, mobile-first responsive web): an invited member logs in on their phone browser and sees the training program assigned to them
 
+## License
+
+Proprietary — see [`LICENSE`](LICENSE). Alpha CRM is a commercial hosted
+product; the source is not open source and may not be copied, modified, or
+redistributed without a written agreement.
+
 ## Getting started
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for how to install dependencies,

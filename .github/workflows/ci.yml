@@ -57,4 +57,21 @@ jobs:
         run: npm run build
 
       - name: Test (RLS isolation smoke tests + schema checks)
+        # test/setup/db-safety.ts fails (not skips) the run if DATABASE_URL is
+        # missing while CI is set, so the DB-backed RLS suites can never be
+        # silently under-verified here.
         run: npm test
+
+      - name: Verify committed tree (nothing untracked or modified)
+        # CI checks out the committed tree, so every step above already ran
+        # against committed code only — a file that exists on a developer's
+        # disk but was never committed fails the type check/build/tests here.
+        # This step closes the remaining gap: it fails if any build/test step
+        # generated files that are neither committed nor gitignored, so such
+        # artifacts can't silently accumulate as "works locally" state.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Working tree is dirty after build & tests — commit or gitignore the files below:"
+            git status --porcelain
+            exit 1
+          fi
