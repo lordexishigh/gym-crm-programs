@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 86 | `█████████████████░░░` |
-| Code quality | 76 | `███████████████░░░░░` |
-| Robustness & error handling | 62 | `████████████░░░░░░░░` |
-| Builds & tests | 22 | `████░░░░░░░░░░░░░░░░` |
-| UX & design | 68 | `██████████████░░░░░░` |
+| Spec coverage | 88 | `██████████████████░░` |
+| Code quality | 82 | `████████████████░░░░` |
+| Robustness & error handling | 80 | `████████████████░░░░` |
+| Builds & tests | 42 | `████████░░░░░░░░░░░░` |
+| UX & design | 79 | `████████████████░░░░` |
 
 ## Readiness checks
 
@@ -41,22 +41,21 @@
 
 ## Strengths
 
-- Deep, adversarial RLS isolation testing (test/isolation-comprehensive.test.ts, test/*-rls.test.ts) that seeds conflicting tenants and asserts forged cross-tenant writes are blocked, not just happy-path reads.
-- GDPR export/erasure implemented as real tenant-scoped transactional logic (lib/gdpr/export.ts) with defined tombstone semantics and an audit trail, not a stub.
-- Invite-only onboarding is genuinely enforced (app/invite/accept flow, lib/invites.ts) with no public signup route present in the tree, matching the v1 spec constraint.
-- Self-documenting risk notes captured in memory/ (e.g. test-db-points-at-production.md) show the build caught and fixed a real hazard — .env pointing at production Supabase — via a vitest setupFile guard.
+- Full spec coverage with database-enforced multi-tenancy: RLS policies (migrations 0002) plus server-derived JWT identity mean isolation is enforced at the data layer, not just in application code.
+- Genuinely strong test corpus — 26 files / 239 tests including dedicated cross-tenant isolation suites (isolation-comprehensive.test.ts, *-rls.test.ts) and axe-core a11y checks, not trivial smoke tests.
+- Thoughtful engineering safeguards like test/setup/db-safety.ts, which blanks DATABASE_URL to stop the suite from seeding production.
 
 ## To improve
 
 - Builds & tests pass: final product smoke test did not pass
-- The final product smoke test fails despite every individual task and most test suites reporting green — root-cause the smoke test failure (likely an integration/env issue between the many late-added routes like /api/email/webhook, /portal/programs/[id], and /dashboard/templates) before trusting any of the per-task 'build succeeds' claims.
-- Fix the outstanding accessibility WARN: locate the <img> missing alt text (likely in a dashboard or portal view not covered by test/a11y.test.ts, since that suite only renders ProgramView, MemberForm, ProgramBuilder, and ExerciseLibraryGrid) and add coverage for the remaining pages.
-- Migration ordering is ambiguous — three separate files share the '0003_' prefix (0003_assignment_lifecycle.sql, 0003_library_and_templates.sql, 0003_member_extended_fields.sql); renumber sequentially so scripts/migrate.mjs applies them in a deterministic, reviewable order and the smoke-test failure can't stem from migration race conditions.
-- Several task summaries mention prior submissions where 'view-layer files existed on disk but were never committed' or were 'stale' snapshots (mvp-member-portal, alpha-invite-lifecycle) — add a CI check that fails the pipeline if `git status` shows uncommitted tracked-file diffs at task completion, since this class of bug is exactly what would produce a passing per-task report but a failing final smoke test.
+- The final product smoke test fails while unit/integration tests pass — add an end-to-end boot/smoke check (start the built app and hit `/`, `/login`, `/api/health`) to CI so the failing assembled-product path is reproduced, diagnosed, and fixed; this is the single largest score drag.
+- Fix the one accessibility violation flagged by the readiness check: locate the <img> without alt text (likely in a portal or dashboard view/page component) and give it a descriptive alt attribute, then extend a11y.test.ts to render that surface so it is guarded going forward.
+- Resolve the duplicate `0003_` migration prefix by renumbering 0003_library_and_templates.sql and 0003_member_extended_fields.sql to unique sequential ids so scripts/migrate.mjs applies them in a deterministic, documented order.
+- The a11y test explicitly skips the async Server Component page.tsx routes and the login/accept forms; add rendering coverage (or Playwright route tests) for app/portal/login and app/invite/accept so their label/landmark semantics are actually verified rather than assumed.
 
 ## Summary
 
-Feature-complete and well-tested at the unit/integration level with genuinely strong multi-tenant isolation and GDPR logic, but the build fails its final smoke test — a hard verification gate that outweighs the optimistic per-task narratives and must be root-caused before this is shippable.
+A substantially complete, well-architected multi-tenant CRM that implements every promised feature with real database-enforced isolation and a serious test suite, but it cannot be shipped as-is because the final assembled-product smoke test fails and a residual accessibility defect remains.
 
 ---
-_Scored 2026-07-22 22:00 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-22 23:32 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
