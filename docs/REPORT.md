@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 84 | `█████████████████░░░` |
-| Code quality | 90 | `██████████████████░░` |
-| Robustness & error handling | 85 | `█████████████████░░░` |
-| Builds & tests | 35 | `███████░░░░░░░░░░░░░` |
-| UX & design | 78 | `████████████████░░░░` |
+| Spec coverage | 86 | `█████████████████░░░` |
+| Code quality | 76 | `███████████████░░░░░` |
+| Robustness & error handling | 62 | `████████████░░░░░░░░` |
+| Builds & tests | 22 | `████░░░░░░░░░░░░░░░░` |
+| UX & design | 68 | `██████████████░░░░░░` |
 
 ## Readiness checks
 
@@ -41,22 +41,22 @@
 
 ## Strengths
 
-- Database-layer tenant isolation is real and adversarially tested: a comprehensive cross-tenant/cross-member suite drives the actual RLS session path (`withTenantContext` + app_user role) and asserts forged-tenant writes are blocked.
-- GDPR support goes beyond the spec — transactional data export with audit logging and referential-integrity-preserving anonymisation with exported tombstone constants.
-- Code quality is consistently high: no stubs or dead code in the sample, clean lib/app separation, and comments that document constraints (e.g. why brand colors split for WCAG AA) rather than restating code.
-- Accessibility was treated as a first-class concern, with contrast-ratio-justified color tokens and a dedicated a11y polish task.
+- Deep, adversarial RLS isolation testing (test/isolation-comprehensive.test.ts, test/*-rls.test.ts) that seeds conflicting tenants and asserts forged cross-tenant writes are blocked, not just happy-path reads.
+- GDPR export/erasure implemented as real tenant-scoped transactional logic (lib/gdpr/export.ts) with defined tombstone semantics and an audit trail, not a stub.
+- Invite-only onboarding is genuinely enforced (app/invite/accept flow, lib/invites.ts) with no public signup route present in the tree, matching the v1 spec constraint.
+- Self-documenting risk notes captured in memory/ (e.g. test-db-points-at-production.md) show the build caught and fixed a real hazard — .env pointing at production Supabase — via a vitest setupFile guard.
 
 ## To improve
 
 - Builds & tests pass: final product smoke test did not pass
-- The final product smoke test failed — the pipeline must run and fix the assembled end-to-end smoke path before declaring done, since per-task green builds did not guarantee the integrated product works.
-- One <img> is missing alt text despite a dedicated a11y task, indicating the a11y pass lacked an automated lint/axe check to catch regressions.
-- Several task reports mention review snapshots being stale versus disk state and files 'existed on disk but were never committed' — the pipeline needs a commit-before-review discipline so verification runs against what's actually tracked.
-- DB-dependent test suites skip silently without DATABASE_URL, so CI could pass while the RLS suites never ran; the final verification should require a provisioned database.
+- The final product smoke test fails despite every individual task and most test suites reporting green — root-cause the smoke test failure (likely an integration/env issue between the many late-added routes like /api/email/webhook, /portal/programs/[id], and /dashboard/templates) before trusting any of the per-task 'build succeeds' claims.
+- Fix the outstanding accessibility WARN: locate the <img> missing alt text (likely in a dashboard or portal view not covered by test/a11y.test.ts, since that suite only renders ProgramView, MemberForm, ProgramBuilder, and ExerciseLibraryGrid) and add coverage for the remaining pages.
+- Migration ordering is ambiguous — three separate files share the '0003_' prefix (0003_assignment_lifecycle.sql, 0003_library_and_templates.sql, 0003_member_extended_fields.sql); renumber sequentially so scripts/migrate.mjs applies them in a deterministic, reviewable order and the smoke-test failure can't stem from migration race conditions.
+- Several task summaries mention prior submissions where 'view-layer files existed on disk but were never committed' or were 'stale' snapshots (mvp-member-portal, alpha-invite-lifecycle) — add a CI check that fails the pipeline if `git status` shows uncommitted tracked-file diffs at task completion, since this class of bug is exactly what would produce a passing per-task report but a failing final smoke test.
 
 ## Summary
 
-A genuinely well-built CRM — the promised multi-tenant RLS architecture, program authoring, invites, and portal are all implemented with excellent code quality and adversarial isolation testing — but the failed final smoke test means the assembled product is unverified end-to-end, which caps an otherwise excellent build.
+Feature-complete and well-tested at the unit/integration level with genuinely strong multi-tenant isolation and GDPR logic, but the build fails its final smoke test — a hard verification gate that outweighs the optimistic per-task narratives and must be root-caused before this is shippable.
 
 ---
-_Scored 2026-07-17 01:25 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-22 22:00 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
