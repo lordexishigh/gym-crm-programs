@@ -1,4 +1,8 @@
--- 0003_assignment_lifecycle.sql
+-- 0011_assignment_lifecycle.sql
+-- (Renumbered from 0003_assignment_lifecycle.sql to resolve a duplicate `0003_`
+--  prefix — see scripts/migrate.mjs RENAMED for the safe re-apply-free backfill.
+--  Depends only on program_assignment from 0001, so its position is unaffected.)
+--
 -- Multi-program lifecycle: one ACTIVE program per member, many ARCHIVED.
 --
 -- The MVP modelled assignments with a status column ('active'|'archived', see
