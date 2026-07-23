@@ -58,8 +58,8 @@ jobs:
 
       - name: Test (RLS isolation smoke tests + schema checks)
         # test/setup/db-safety.ts fails (not skips) the run if DATABASE_URL is
-        # missing while CI is set, so the DB-backed RLS suites can never be
-        # silently under-verified here.
+        # missing while GITHUB_ACTIONS is set, so the DB-backed RLS suites can
+        # never be silently under-verified here.
         run: npm test
 
       - name: Smoke test the assembled product (boot & probe)

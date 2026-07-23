@@ -1,7 +1,5 @@
 # Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-55%2F100-red)](docs/REPORT.md) <!-- nous-score-badge -->
-
 > A multi-tenant web CRM for Cyprus gyms whose wedge is member-facing training programs: trainers build programs and assign them to members, who view them on a mobile-first web portal.
 
 Gyms and fitness businesses in Cyprus need to manage members and deliver training programs, but the incumbent (ThinkCRM) cannot give members a way to see the programs their trainers build for them. Gyms are stuck either using a generic CRM with no member-facing program delivery or stitching together separate tools. Alpha CRM closes this gap with a single hosted application that strictly isolates each gym's data while letting trainers author and assign programs that members can open on their phones.
@@ -25,12 +23,6 @@ Gyms and fitness businesses in Cyprus need to manage members and deliver trainin
 - Program authoring: a trainer builds a training program composed of exercises, each with sets, reps, rest, and notes
 - Program assignment: a trainer assigns a built program to a specific member within their gym
 - Member portal (read-only, mobile-first responsive web): an invited member logs in on their phone browser and sees the training program assigned to them
-
-## License
-
-Proprietary — see [`LICENSE`](LICENSE). Alpha CRM is a commercial hosted
-product; the source is not open source and may not be copied, modified, or
-redistributed without a written agreement.
 
 ## Getting started
 
