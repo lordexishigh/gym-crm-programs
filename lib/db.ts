@@ -40,6 +40,20 @@ export function getPool(): Pool {
       );
     }
     pool = new Pool({ connectionString, max: 10 });
+    // Boot/runtime resilience: `pg` emits an 'error' event on the POOL whenever a
+    // backend or network error hits an *idle* pooled client — e.g. Supabase's
+    // pooler dropping an idle connection, a transient network blip, or the DB
+    // being unreachable at boot. Node's EventEmitter THROWS an unhandled 'error'
+    // event as an uncaughtException, which would crash the whole Next.js server
+    // (taking down every route, including the static landing page) even though
+    // the triggering query was already handled elsewhere. Attaching a listener
+    // turns that fatal crash into a logged, swallowed event: the pool discards the
+    // broken client and lazily reconnects on the next query. This changes nothing
+    // about the security model — RLS, JWT-derived identity, and tenant isolation
+    // are all enforced per-transaction in `withTenantContext` regardless.
+    pool.on("error", (err) => {
+      console.error("[db] idle pool client error (recovered, non-fatal):", err);
+    });
   }
   return pool;
 }
