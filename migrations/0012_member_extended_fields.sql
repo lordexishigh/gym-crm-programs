@@ -1,4 +1,8 @@
--- 0003_member_extended_fields.sql
+-- 0012_member_extended_fields.sql
+-- (Renumbered from 0003_member_extended_fields.sql to resolve a duplicate `0003_`
+--  prefix — see scripts/migrate.mjs RENAMED for the safe re-apply-free backfill.
+--  Depends only on member/users from 0001, so its position is unaffected.)
+--
 -- Alpha task: full member records, search, and filtering.
 --
 -- Extends the minimal MVP member record with extra contact details and a

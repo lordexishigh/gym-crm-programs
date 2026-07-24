@@ -19,6 +19,26 @@ const { Client } = pg;
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 /**
+ * Migrations renamed after they had already been applied somewhere, mapping the
+ * CURRENT filename -> the OLD filename it used to carry.
+ *
+ * The runner records each *applied filename* in `schema_migrations`. Renaming a
+ * file would otherwise make an already-migrated database (e.g. production) see
+ * the new name as "never applied" and RE-RUN its DDL. Before applying anything,
+ * we backfill: for any DB that recorded the old id, we record the new id too
+ * (without re-running the SQL). On a fresh DB neither id is present, so the file
+ * simply applies once under its new name. Keeps the rename safe and idempotent.
+ *
+ * 0011/0012 were renumbered from a duplicate `0003_` prefix so ordering is
+ * unambiguous; `0003_library_and_templates.sql` KEEPS its number because
+ * 0009/0010 extend the `exercise_library` table it creates and must run after it.
+ */
+const RENAMED = {
+  "0011_assignment_lifecycle.sql": "0003_assignment_lifecycle.sql",
+  "0012_member_extended_fields.sql": "0003_member_extended_fields.sql",
+};
+
+/**
  * @param {string} [connectionString] defaults to MIGRATE_DATABASE_URL, then DATABASE_URL
  * @returns {Promise<string[]>} filenames applied during this run
  *
@@ -55,6 +75,19 @@ export async function runMigrations(
 
     const { rows } = await client.query("select id from schema_migrations");
     const done = new Set(rows.map((r) => r.id));
+
+    // Backfill renamed migrations: if a DB already recorded the OLD filename,
+    // record the NEW one too so the renamed file is not re-run. Idempotent.
+    for (const [newId, oldId] of Object.entries(RENAMED)) {
+      if (done.has(oldId) && !done.has(newId)) {
+        await client.query(
+          "insert into schema_migrations (id) values ($1) on conflict (id) do nothing",
+          [newId],
+        );
+        done.add(newId);
+        console.log(`~ alias  ${newId} (already applied as ${oldId})`);
+      }
+    }
 
     for (const file of files) {
       if (done.has(file)) {

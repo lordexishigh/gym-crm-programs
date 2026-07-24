@@ -57,4 +57,63 @@ jobs:
         run: npm run build
 
       - name: Test (RLS isolation smoke tests + schema checks)
+        # test/setup/db-safety.ts fails (not skips) the run if DATABASE_URL is
+        # missing while GITHUB_ACTIONS is set, so the DB-backed RLS suites can
+        # never be silently under-verified here.
         run: npm test
+
+      - name: Smoke test the assembled product (boot & probe)
+        # Reproduces the "final product smoke test": start the BUILT app (the
+        # same `.next` output produced above) and hit the three unauthenticated
+        # entry points a health check would probe. Unit/integration tests can be
+        # green while the assembled product fails — e.g. /api/health returns 503
+        # whenever no database is reachable — so this step exercises that path.
+        # It runs against the job's throwaway Postgres (DATABASE_URL above), the
+        # migrations having already been applied, so /api/health resolves to 200.
+        env:
+          APP_BASE_URL: http://localhost:3000
+          # Migrations already ran in earlier steps; don't spawn the boot-time
+          # auto-migrate/seed child processes here.
+          AUTO_MIGRATE: "0"
+          AUTO_SEED: "0"
+        run: |
+          npm run start > /tmp/next-start.log 2>&1 &
+          SERVER_PID=$!
+          # Wait (up to 60s) for the server to accept connections on `/`.
+          up=0
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:3000/; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != "1" ]; then
+            echo "::error::App did not become ready within 60s"
+            cat /tmp/next-start.log
+            kill "$SERVER_PID" 2>/dev/null || true
+            exit 1
+          fi
+          fail=0
+          for path in / /login /api/health; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000$path")
+            echo "GET $path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::Smoke check failed: GET $path returned $code (expected 200)"
+              fail=1
+            fi
+          done
+          kill "$SERVER_PID" 2>/dev/null || true
+          if [ "$fail" != "0" ]; then cat /tmp/next-start.log; fi
+          exit $fail
+
+      - name: Verify committed tree (nothing untracked or modified)
+        # CI checks out the committed tree, so every step above already ran
+        # against committed code only — a file that exists on a developer's
+        # disk but was never committed fails the type check/build/tests here.
+        # This step closes the remaining gap: it fails if any build/test step
+        # generated files that are neither committed nor gitignored, so such
+        # artifacts can't silently accumulate as "works locally" state.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Working tree is dirty after build & tests — commit or gitignore the files below:"
+            git status --porcelain
+            exit 1
+          fi

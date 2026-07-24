@@ -1,6 +1,11 @@
 -- 0003_library_and_templates.sql
 -- Exercise library + program templates (alpha-exercise-library-001/002).
 --
+-- NOTE: this file KEEPS its 0003 number even though two sibling files that once
+-- shared the `0003_` prefix were renumbered to 0011/0012. It must run BEFORE
+-- 0009 (adds columns to exercise_library) and 0010 (unique index on it), which
+-- extend the exercise_library table created here. It is now the only `0003_`.
+--
 -- Adds three tenant-scoped tables that extend the authoring loop with reuse:
 --   exercise_library  - a reusable per-gym catalog of exercises, independent of
 --                       any program, that trainers insert into programs.
