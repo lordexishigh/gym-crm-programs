@@ -195,17 +195,20 @@ across 263 resolved packages.)
 15.x line; the most recent batch is fixed *exactly* in 15.5.21, so nothing
 lower passes audit:
 
-| Advisory | CVE | Severity | Fixed in |
-| --- | --- | --- | --- |
-| [GHSA-89xv-2m56-2m9x](https://github.com/advisories/GHSA-89xv-2m56-2m9x) — SSRF in Server Actions on custom servers | CVE-2026-64649 | high | **15.5.21** |
-| [GHSA-m99w-x7hq-7vfj](https://github.com/advisories/GHSA-m99w-x7hq-7vfj) — DoS in App Router using Server Actions | CVE-2026-64641 | high | **15.5.21** |
-| [GHSA-p9j2-gv94-2wf4](https://github.com/advisories/GHSA-p9j2-gv94-2wf4) — SSRF in rewrites via attacker-controlled destination | CVE-2026-64645 | high | **15.5.21** |
-| [GHSA-26hh-7cqf-hhc6](https://github.com/advisories/GHSA-26hh-7cqf-hhc6) — middleware/proxy bypass via segment-prefetch routes (incomplete-fix follow-up) | CVE-2026-45109 | high | 15.5.18 |
-| [GHSA-492v-c6pp-mqqv](https://github.com/advisories/GHSA-492v-c6pp-mqqv) — middleware/proxy bypass via dynamic route parameter injection | CVE-2026-44574 | high | 15.5.16 |
-| [GHSA-c4j6-fc7j-m34r](https://github.com/advisories/GHSA-c4j6-fc7j-m34r) — SSRF via WebSocket upgrades | CVE-2026-44578 | high | 15.5.16 |
-| [GHSA-267c-6grr-h53f](https://github.com/advisories/GHSA-267c-6grr-h53f) — middleware/proxy bypass via segment-prefetch routes | CVE-2026-44575 | high | 15.5.16 |
-| [GHSA-mg66-mrh9-m8jx](https://github.com/advisories/GHSA-mg66-mrh9-m8jx) — DoS via connection exhaustion (Cache Components) | CVE-2026-44579 | high | 15.5.16 |
-| [GHSA-9qr9-h5gf-34mp](https://github.com/advisories/GHSA-9qr9-h5gf-34mp) — RCE in React flight protocol | — | **critical** | 15.5.7 |
+Advisories are identified by their GHSA slug (the npm advisory database's
+primary identifier); consult each linked advisory for any CVE assignment.
+
+| Advisory | Severity | Fixed in |
+| --- | --- | --- |
+| [GHSA-89xv-2m56-2m9x](https://github.com/advisories/GHSA-89xv-2m56-2m9x) — SSRF in Server Actions on custom servers | high | **15.5.21** |
+| [GHSA-m99w-x7hq-7vfj](https://github.com/advisories/GHSA-m99w-x7hq-7vfj) — DoS in App Router using Server Actions | high | **15.5.21** |
+| [GHSA-p9j2-gv94-2wf4](https://github.com/advisories/GHSA-p9j2-gv94-2wf4) — SSRF in rewrites via attacker-controlled destination | high | **15.5.21** |
+| [GHSA-26hh-7cqf-hhc6](https://github.com/advisories/GHSA-26hh-7cqf-hhc6) — middleware/proxy bypass via segment-prefetch routes (incomplete-fix follow-up) | high | 15.5.18 |
+| [GHSA-492v-c6pp-mqqv](https://github.com/advisories/GHSA-492v-c6pp-mqqv) — middleware/proxy bypass via dynamic route parameter injection | high | 15.5.16 |
+| [GHSA-c4j6-fc7j-m34r](https://github.com/advisories/GHSA-c4j6-fc7j-m34r) — SSRF via WebSocket upgrades | high | 15.5.16 |
+| [GHSA-267c-6grr-h53f](https://github.com/advisories/GHSA-267c-6grr-h53f) — middleware/proxy bypass via segment-prefetch routes | high | 15.5.16 |
+| [GHSA-mg66-mrh9-m8jx](https://github.com/advisories/GHSA-mg66-mrh9-m8jx) — DoS via connection exhaustion (Cache Components) | high | 15.5.16 |
+| [GHSA-9qr9-h5gf-34mp](https://github.com/advisories/GHSA-9qr9-h5gf-34mp) — RCE in React flight protocol | **critical** | 15.5.7 |
 
 (Plus the moderate/low 15.5.21-fixed advisories GHSA-68g3-v927-f742,
 GHSA-4633-3j49-mh5q, GHSA-4c39-4ccg-62r3, GHSA-955p-x3mx-jcvp — all cleared by
@@ -217,9 +220,9 @@ the same pin.)
 a direct dependency; the `overrides` entry in `package.json` forces the
 resolved version wherever it installs:
 
-| Advisory | CVEs | Severity | Fixed in |
-| --- | --- | --- | --- |
-| [GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) — inherited libvips vulnerabilities | CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 | high | 0.35.0 |
+| Advisory | Severity | Fixed in |
+| --- | --- | --- |
+| [GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) — inherited libvips vulnerabilities | high | 0.35.0 |
 
 The override (`0.35.3` in the lockfile) sits above the 0.35.0 fix boundary.
 
