@@ -125,6 +125,19 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      - name: Upload rendered screenshots (every run)
+        # e2e/capture.ts saves full-page PNGs of the landing page, both sign-in
+        # pages, the invite-accept form, and the authenticated member portal at
+        # desktop + mobile viewports. Published unconditionally so visual
+        # coherence can be reviewed from real renders on any commit.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-screenshots
+          path: e2e-screenshots/
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Verify committed tree (nothing untracked or modified)
         # CI checks out the committed tree, so every step above already ran
         # against committed code only — a file that exists on a developer's

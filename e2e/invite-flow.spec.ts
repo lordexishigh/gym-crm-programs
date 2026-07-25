@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { captureResponsive } from "./capture";
 
 /**
  * Journey test: invite → accept → login → portal view (the complete member
@@ -119,6 +120,7 @@ test.describe("member onboarding journey", () => {
       page.getByRole("heading", { name: "Set up your account" }),
     ).toBeVisible();
     await expect(page.getByText("Hi E2E Member")).toBeVisible();
+    await captureResponsive(page, "04-invite-accept");
 
     // 2. Choose a password → the action provisions the auth user, consumes the
     //    invite, signs the member in, and redirects to the portal.
@@ -131,6 +133,9 @@ test.describe("member onboarding journey", () => {
     // 3. The RLS-scoped portal shows the member's OWN assigned program.
     await expect(page.getByText(programName)).toBeVisible();
     await expect(page.getByText("Back Squat")).toBeVisible();
+    // Rendered evidence of the authenticated member portal — the surface the
+    // public visual-capture spec can't reach without a session.
+    await captureResponsive(page, "05-member-portal");
 
     // 4. The invite is single-use: revisiting the link shows the used notice.
     await page.goto(`/invite/accept?token=${encodeURIComponent(rawInviteToken)}`);

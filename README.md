@@ -26,6 +26,19 @@ Gyms and fitness businesses in Cyprus need to manage members and deliver trainin
 - Program assignment: a trainer assigns a built program to a specific member within their gym
 - Member portal (read-only, mobile-first responsive web): an invited member logs in on their phone browser and sees the training program assigned to them
 
+## Screenshots
+
+Rendered by the Playwright visual-capture suite (`e2e/visual-capture.spec.ts`)
+against the production build, at desktop (1280×800) and mobile (390×844)
+viewports. CI regenerates and uploads the full set — including the
+authenticated invite-accept and member-portal surfaces — as the
+`rendered-screenshots` artifact on every run.
+
+| Landing | Staff sign-in | Member portal sign-in |
+| --- | --- | --- |
+| ![Landing page](docs/screenshots/01-landing-desktop.png) | ![Staff sign-in](docs/screenshots/02-staff-login-desktop.png) | ![Member portal sign-in](docs/screenshots/03-portal-login-desktop.png) |
+| ![Landing page, mobile](docs/screenshots/01-landing-mobile.png) | ![Staff sign-in, mobile](docs/screenshots/02-staff-login-mobile.png) | ![Member portal sign-in, mobile](docs/screenshots/03-portal-login-mobile.png) |
+
 ## Getting started
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for how to install dependencies,
