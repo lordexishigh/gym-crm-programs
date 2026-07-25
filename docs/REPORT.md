@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-83%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-81%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 83/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 81/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 90 | `██████████████████░░` |
-| Code quality | 83 | `█████████████████░░░` |
-| Robustness & error handling | 74 | `███████████████░░░░░` |
-| Builds & tests | 88 | `██████████████████░░` |
-| UX & design | 72 | `██████████████░░░░░░` |
+| Spec coverage | 88 | `██████████████████░░` |
+| Code quality | 82 | `████████████████░░░░` |
+| Robustness & error handling | 70 | `██████████████░░░░░░` |
+| Builds & tests | 86 | `█████████████████░░░` |
+| UX & design | 74 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -42,21 +42,21 @@
 
 ## Strengths
 
-- Adversarial cross-tenant isolation: the 25KB isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and probes every tenanted table for SELECT/UPDATE/DELETE/forged-INSERT — far above average security depth for an MVP.
-- RLS-first architecture: tenant_id enforcement lives at the database layer through withTenantContext and app_user role GUCs so application code can never accidentally bypass it, and lib/identity.ts derives identity from the signed JWT server-side.
-- Complete spec delivery: all 8 promised features are genuinely implemented with real UI components, server actions, and migration-backed schema — no stubs, no TODOs in the feature paths.
-- Production-ready observability: global error boundaries at every route segment, structured logging in lib/observability/logger.ts, captureException wired into server actions, and web vitals budget tests.
+- Comprehensive RLS isolation proof: isolation-comprehensive.test.ts seeds two fully-conflicting tenants and exhaustively asserts SELECT/UPDATE/DELETE/INSERT is blocked across every tenanted table for both cross-tenant and cross-member axes via the real withTenantContext GUC path — adversarial, not incidental.
+- All 8 spec features are genuinely wired end-to-end: the invite flow runs from email delivery (lib/email/resend.ts) through token acceptance (lib/invite-acceptance.ts) to portal session bootstrap, with no placeholder routes or TODO comments in the critical path.
+- 239 tests across 26 files with layered coverage — unit (members, programs, GDPR), 7 dedicated RLS suites, axe-core a11y across 10+ components, and Playwright e2e — backed by a CI workflow that enforces the full suite on every push.
+- GDPR is production-grade: migrations 0004+0006 add gdpr_subjects and gdpr_audit_events tables, lib/gdpr/export.ts implements full data export, and test/gdpr-erasure.test.ts + test/gdpr-export.test.ts both exercise real DB paths rather than mocking.
 
 ## To improve
 
-- Add rate limiting to app/login/actions.ts and app/portal/login/actions.ts — neither route has a token bucket, sliding window, or middleware-level rate check, leaving credential brute-force completely unprotected on the only two auth surfaces.
-- Fix the one remaining <img> without alt text flagged by the readiness check — audit app/portal/ and app/dashboard/ components (likely a workout or program image), add a descriptive alt attribute, and add the affected surface to the axe-core render loop in test/a11y.test.ts to guard it going forward.
-- The 2 high-severity dependency vulnerabilities (next, sharp) are still flagged by the readiness check despite Round 3 claiming to address them — verify the installed versions in package-lock.json and upgrade to the patched releases so the WARN clears.
-- Add emergency_contact, membership_status, and photo fields to the member record: the MemberForm.tsx and members table schema are missing these, which are table-stakes for gym staff to action safety incidents and renewals without leaving the CRM.
+- Two high-severity dependency vulnerabilities remain unpatched (next and sharp per the readiness WARN): update next to its patched minor release in package.json and revise the sharp override in the overrides block — these are the only open CVEs the check flags and both have fixes available.
+- Auth endpoints (/login actions, /portal/login actions, /api/email/webhook) have no rate limiting: add an in-process token-bucket in middleware.ts keyed on IP + path to reject requests exceeding ~5 auth attempts per minute, eliminating the credential brute-force vector the readiness WARN identifies.
+- One <img> element still lacks an alt attribute (readiness WARN unresolved): locate the bare <img in portal or dashboard view components, add a descriptive alt string, and add a rendering assertion in test/a11y.test.ts for that surface so the gap is caught in CI going forward.
+- app/dashboard/members/actions.ts (16KB) and lib/gdpr/export.ts (17KB) bundle multiple distinct concerns in single files: extract the GDPR anonymise and export calls from members/actions.ts into lib/gdpr/, and split lib/gdpr/export.ts into separate erasure.ts and export.ts modules to keep files under ~300 lines and reduce merge-conflict surface area.
 
 ## Summary
 
-A well-engineered, feature-complete implementation of the spec with standout security depth and a genuinely comprehensive test suite; auth-endpoint rate limiting, a residual alt-text accessibility gap, and two unresolved high-severity dependency vulnerabilities are the main remaining gaps before this build is production-hardened.
+A solid, feature-complete MVP that faithfully implements all 8 spec commitments with genuinely wired code, 239 passing tests, and an adversarial cross-tenant RLS proof suite; the remaining score drag is two unpatched high-severity dependency vulnerabilities, no rate limiting on auth endpoints, and a single missing img alt attribute.
 
 ---
-_Scored 2026-07-26 01:22 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-26 01:35 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
