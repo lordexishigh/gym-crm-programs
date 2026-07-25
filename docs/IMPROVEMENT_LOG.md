@@ -2,6 +2,13 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-26 00:42 — manual session
+
+- Rounds: 1 (0 approved, 1 rejected) · 10.7 min · subscription (unmetered)
+- Score: 79 → 86
+- Effort mix: market ×8
+- 1 of 1 round(s) were rejected by review — that work was paid for and thrown away.
+
 ## 2026-07-25 17:29 — auto session
 
 - Rounds: 2 (0 approved, 2 rejected) · 19.8 min · subscription (unmetered)
