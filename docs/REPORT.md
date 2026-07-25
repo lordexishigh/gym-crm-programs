@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-83%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 83/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 90 | `██████████████████░░` |
-| Code quality | 85 | `█████████████████░░░` |
-| Robustness & error handling | 72 | `██████████████░░░░░░` |
-| Builds & tests | 86 | `█████████████████░░░` |
-| UX & design | 76 | `███████████████░░░░░` |
+| Spec coverage | 88 | `██████████████████░░` |
+| Code quality | 81 | `████████████████░░░░` |
+| Robustness & error handling | 67 | `█████████████░░░░░░░` |
+| Builds & tests | 79 | `████████████████░░░░` |
+| UX & design | 72 | `██████████████░░░░░░` |
 
 ## Readiness checks
 
@@ -42,21 +42,22 @@
 
 ## Strengths
 
-- All eight spec features are genuinely implemented and wired to real Postgres RLS — no stubs or TODO placeholders found across the sampled server actions, lib modules, or components.
-- Adversarial isolation test suite (test/isolation-comprehensive.test.ts, 25KB) seeds two fully-populated conflicting tenants and proves cross-tenant SELECT/UPDATE/DELETE/INSERT blocking through the real withTenantContext/app_user role path.
-- Complete invite-to-portal onboarding is end-to-end — token generation, email delivery tracking (migrations/0007), invite acceptance, member linking, auto-signin, and portal redirect are all wired with a Playwright journey spec (e2e/invite-flow.spec.ts) that exercises the real built app against a local Postgres.
-- 239 passing tests across 26 files covering unit, RLS, GDPR, a11y (axe-core), e2e Playwright, and visual-capture paths, with a CI workflow and a db-safety guard that refuses to run destructive tests against a non-local database URL.
+- Every one of the eight spec features is fully wired end-to-end — no stubs or TODOs; the program authoring flow (ProgramBuilder → ExerciseDraftList → LibraryPicker → AssignPanel) is the most complete expression of the product's wedge.
+- The adversarial cross-tenant isolation suite (test/isolation-comprehensive.test.ts, 25KB) seeds two fully-populated conflicting tenants and probes every tenanted table for SELECT/UPDATE/DELETE/INSERT leakage — this is meaningfully better than per-feature RLS spot checks.
+- GDPR compliance is a first-class citizen: lib/gdpr/export.ts + erasure, migration 0004_gdpr_rights.sql, audit trails, data-retention policy, and dedicated test suites — rare at this stage of a product.
+- E2E Playwright coverage includes the complete invite-accept-portal journey against a real Postgres, with visual captures at mobile and desktop viewports committed as build artifacts.
 
 ## To improve
 
-- Auth endpoints in app/login/actions.ts and app/portal/login/actions.ts have no rate limiting — add a sliding-window IP check at the middleware layer (middleware.ts already runs on every request) so repeated failed logins are rejected before they reach the Server Action.
-- Two high-severity dependency vulnerabilities (next, sharp) remain in package.json despite the dependency-update task — run npm audit fix, pin the patched versions, and add an npm audit --audit-level=high step to .github/workflows/ci.yml so regressions are caught in CI.
-- One <img> element is missing an alt attribute (readiness WARN still present) — locate the image in the portal or dashboard components (likely app/portal/ProgramView.tsx or app/dashboard/page.tsx), add a descriptive alt, and extend test/a11y.test.ts to render that surface so the rule is enforced going forward.
-- Staff role separation between owner and trainer is absent — every authenticated staff session has identical access including any future billing/revenue surfaces; add a role enum column to the users table and a requireRole('owner') guard (mirroring requireStaff in lib/auth/session.ts) so trainers cannot reach owner-only routes.
+- Add rate limiting to app/login/actions.ts and app/portal/login/actions.ts — both are unprotected credential endpoints; a simple in-memory token-bucket (or Vercel's edge rate-limit middleware) would close the brute-force vector flagged by the automated readiness check.
+- Upgrade next and sharp to their patched versions — both have high-severity CVEs that were flagged in round 3 and remain; update the lockfile and re-run the readiness check to clear the WARN.
+- Locate and fix the single <img> without alt text that the readiness check still WARNs on — search app/portal/ and app/dashboard/ for bare <img> tags or next/image usages without an alt prop, add a descriptive alt string, and extend test/a11y.test.ts to render that surface so the regression is guarded.
+- Wire an error-tracking sink into lib/observability/monitoring.ts and the global-error.tsx handler — the readiness check flags that production failures are invisible; even a simple POST to an ops webhook on captureException would satisfy the operational gap without adding a paid dependency.
+- Introduce a trainer vs. owner role distinction in lib/auth/session.ts and the dashboard layout — currently a single staff role means owners cannot gate billing or revenue data away from trainers; add a role column to the users table and a requireOwner() guard for any future billing routes to unblock the staff role separation market-fit gap.
 
 ## Summary
 
-A genuinely complete and well-tested CRM build — all eight spec features are wired to real Postgres RLS, 239 tests pass, and the assembled product boots and passes the final smoke test. The remaining gaps are operational rather than structural: no rate limiting on auth endpoints, two high-severity dependency vulnerabilities unpatched, and a single missing alt attribute — all fixable without architectural change.
+A complete, well-architected multi-tenant CRM that genuinely delivers all eight promised spec features with strong database-layer security and an unusually rigorous adversarial isolation test suite; the main score drag is operational readiness — unpatched high-severity dependencies, no auth rate limiting, and no error-tracking sink — rather than missing product features.
 
 ---
-_Scored 2026-07-25 17:06 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-25 17:18 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
