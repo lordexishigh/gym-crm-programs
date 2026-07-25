@@ -27,11 +27,14 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
-      # Public build-time placeholders. No JWT secret is needed — access tokens
-      # are verified against the project's JWKS at runtime; the identity unit
-      # test stubs that endpoint.
-      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
+      # Build-time auth endpoint. Next.js inlines NEXT_PUBLIC_* at build time,
+      # so this points at the local GoTrue stand-in (e2e/auth-stub.mjs) that the
+      # Playwright journey test starts — the SAME build is then used for both
+      # the smoke probe and the e2e journey. No JWT secret is needed — access
+      # tokens are verified against the (stub's) JWKS; the identity unit test
+      # stubs that endpoint itself.
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_e2e_stub
 
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +106,24 @@ jobs:
           kill "$SERVER_PID" 2>/dev/null || true
           if [ "$fail" != "0" ]; then cat /tmp/next-start.log; fi
           exit $fail
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end journey test (invite → accept → login → portal)
+        # Playwright starts the GoTrue auth stand-in AND the built app itself
+        # (see playwright.config.ts webServer); the journey seeds its fixtures
+        # into the job's throwaway Postgres and cleans them up after.
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Verify committed tree (nothing untracked or modified)
         # CI checks out the committed tree, so every step above already ran

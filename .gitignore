@@ -19,6 +19,11 @@ next-env.d.ts
 .env
 .env.*
 
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+
 # OS / editor
 .DS_Store
 .idea/
