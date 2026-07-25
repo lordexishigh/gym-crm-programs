@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-86%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 86/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 88 | `██████████████████░░` |
-| Code quality | 81 | `████████████████░░░░` |
-| Robustness & error handling | 67 | `█████████████░░░░░░░` |
-| Builds & tests | 79 | `████████████████░░░░` |
-| UX & design | 72 | `██████████████░░░░░░` |
+| Spec coverage | 92 | `██████████████████░░` |
+| Code quality | 87 | `█████████████████░░░` |
+| Robustness & error handling | 80 | `████████████████░░░░` |
+| Builds & tests | 90 | `██████████████████░░` |
+| UX & design | 77 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -23,7 +23,7 @@
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
 - ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
-- ⚠️ Rate limiting — auth endpoints have no rate limiting — credential brute-force and abuse are unprotected
+- ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
 - ✅ Automated tests — test files present
@@ -42,22 +42,21 @@
 
 ## Strengths
 
-- Every one of the eight spec features is fully wired end-to-end — no stubs or TODOs; the program authoring flow (ProgramBuilder → ExerciseDraftList → LibraryPicker → AssignPanel) is the most complete expression of the product's wedge.
-- The adversarial cross-tenant isolation suite (test/isolation-comprehensive.test.ts, 25KB) seeds two fully-populated conflicting tenants and probes every tenanted table for SELECT/UPDATE/DELETE/INSERT leakage — this is meaningfully better than per-feature RLS spot checks.
-- GDPR compliance is a first-class citizen: lib/gdpr/export.ts + erasure, migration 0004_gdpr_rights.sql, audit trails, data-retention policy, and dedicated test suites — rare at this stage of a product.
-- E2E Playwright coverage includes the complete invite-accept-portal journey against a real Postgres, with visual captures at mobile and desktop viewports committed as build artifacts.
+- Adversarial RLS isolation coverage is exceptional: test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and asserts blocked SELECT/UPDATE/DELETE/INSERT on every tenanted table for both the cross-tenant and cross-member axes, making the isolation guarantee testable rather than assumed.
+- GDPR implementation is production-grade: lib/gdpr/export.ts (17KB), lib/gdpr/audit.ts, four migration files for rights/subjects/retention, erasure and export test suites, and a complete docs/legal/ directory — far beyond the typical alpha-build checkbox.
+- Full-stack observability is wired end-to-end: instrumentation.ts, lib/observability/{logger,monitoring,report-client,web-vitals}.ts, an /api/observability/report route, a web-vitals budget test, and global+per-route error boundaries — production failure visibility is structurally present even if the external sink is unconfirmed.
+- E2e test architecture is honest: visual-capture.spec.ts captures real renders with heading/label assertions (not blind screenshots), and invite-flow.spec.ts gates on a local DB rather than silently skipping in CI, ensuring the build's assembled behaviour is verified rather than its unit seams alone.
 
 ## To improve
 
-- Add rate limiting to app/login/actions.ts and app/portal/login/actions.ts — both are unprotected credential endpoints; a simple in-memory token-bucket (or Vercel's edge rate-limit middleware) would close the brute-force vector flagged by the automated readiness check.
-- Upgrade next and sharp to their patched versions — both have high-severity CVEs that were flagged in round 3 and remain; update the lockfile and re-run the readiness check to clear the WARN.
-- Locate and fix the single <img> without alt text that the readiness check still WARNs on — search app/portal/ and app/dashboard/ for bare <img> tags or next/image usages without an alt prop, add a descriptive alt string, and extend test/a11y.test.ts to render that surface so the regression is guarded.
-- Wire an error-tracking sink into lib/observability/monitoring.ts and the global-error.tsx handler — the readiness check flags that production failures are invisible; even a simple POST to an ops webhook on captureException would satisfy the operational gap without adding a paid dependency.
-- Introduce a trainer vs. owner role distinction in lib/auth/session.ts and the dashboard layout — currently a single staff role means owners cannot gate billing or revenue data away from trainers; add a role column to the users table and a requireOwner() guard for any future billing routes to unblock the staff role separation market-fit gap.
+- Two high-severity dependency vulnerabilities (next and sharp) are still flagged by the readiness check after being assigned in Round 3 — run `npm audit fix` or pin to the patched versions in package.json and verify `npm audit` exits clean before the next submission.
+- One img element is still missing alt text (readiness WARN, also flagged in Round 1) — grep for `<img` without `alt` across app/ and portal/, add a descriptive alt attribute, and extend test/a11y.test.ts to render the containing component so the rule is enforced going forward.
+- The error-visibility readiness WARN conflicts with the presence of global-error.tsx and instrumentation.ts — wire instrumentation.ts to an external sink (e.g. Sentry DSN via NEXT_PUBLIC_SENTRY_DSN) or confirm captureException in lib/observability/monitoring.ts routes to a real endpoint, so the check resolves to PASS rather than WARN.
+- app/dashboard/members/actions.ts at 16KB conflates member CRUD, invite dispatch, and GDPR mutations in one file — extract GDPR-specific server actions (anonymiseMember, exportMemberData call sites) into app/dashboard/members/gdpr-actions.ts to keep the file under ~8KB and make the GDPR surface auditable in isolation.
 
 ## Summary
 
-A complete, well-architected multi-tenant CRM that genuinely delivers all eight promised spec features with strong database-layer security and an unusually rigorous adversarial isolation test suite; the main score drag is operational readiness — unpatched high-severity dependencies, no auth rate limiting, and no error-tracking sink — rather than missing product features.
+A genuinely complete alpha: all eight spec features are implemented and wired (not stubbed), the RLS isolation story is exhaustively tested, and GDPR/observability coverage exceeds expectations for this stage. Two lingering high-severity dependency vulnerabilities and an unresolved img alt-text warn are the clearest near-term fixes, and the error-tracking instrumentation needs a confirmed external sink before the error-visibility check can resolve green.
 
 ---
-_Scored 2026-07-25 17:18 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-26 00:42 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
