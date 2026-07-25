@@ -159,3 +159,37 @@ phase:
 - Per-exercise set logging (carries forward `ga-engagement-002`).
 - Live, navigable dashboard overview.
 - Resolve duplicate `0003` migration numbering.
+
+## 2026-07-25 — GDPR erasure bug fix + next steps
+
+**Bug found and fixed this pass:** `anonymiseMember` (`lib/gdpr/export.ts`,
+beta-gdpr-002) scrubs a member's `workout_log.note` on erasure, but
+`app_user` was never granted `UPDATE` on `workout_log` — migration 0008
+deliberately grants only `select, insert, delete` ("a log is immutable once
+written"). Postgres checks table-level UPDATE privilege before the `WHERE`
+clause runs, so **every** erasure request hit
+`permission denied for table workout_log` and failed outright, regardless of
+whether the member had any logs. Right-to-erasure has been broken since the
+GDPR feature shipped; DB-backed tests skip on developer machines by design
+(production `DATABASE_URL` guard, see `test/setup/db-safety.ts`), so this
+only surfaces where a real Postgres runs the suite. Fixed by
+`migrations/0014_workout_log_erasure_grant.sql`: a narrow
+`grant update (note) on workout_log to app_user` plus a staff-only,
+tenant-scoped RLS policy — logs stay immutable in every other respect.
+Regression coverage added in `test/workout-logs-rls.test.ts`.
+
+Since local DB-backed tests are normally skipped (the production `.env` guard
+above), it's worth periodically running the suite against a real throwaway
+Postgres locally (`npm run migrate && npm test` with `DATABASE_URL` pointed at
+a local instance) rather than relying solely on CI, to catch this class of
+grant/RLS-policy drift earlier.
+
+**Next steps (not yet done, worth picking up):**
+
+- Land the roster-level engagement badge → GDPR export path check: confirm no
+  other write path added since beta-gdpr-002 shipped has the same
+  missing-grant shape (e.g. any future member-written table needs its erasure
+  scrub path's grants added in the SAME migration as the scrub code, not
+  assumed from the table's original grant).
+- CRM-IDEAS "Apply now" #5 (trainer follow-up tasks / reminders on a member)
+  is still open — a good next single-PR pick once this fix lands.
