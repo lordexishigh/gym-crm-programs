@@ -20,11 +20,25 @@ export type MemberRow = {
   status: MemberStatus;
   notes: string | null;
   auth_user_id: string | null;
+  photo_url: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  membership_status: MembershipStatus;
   created_at: string;
   updated_at: string;
 };
 
 export type MemberStatus = "active" | "inactive";
+
+/** Billing/renewal lifecycle — distinct from the roster `status` above. */
+export type MembershipStatus = "active" | "expired" | "frozen" | "cancelled";
+
+export const MEMBERSHIP_STATUSES: MembershipStatus[] = [
+  "active",
+  "expired",
+  "frozen",
+  "cancelled",
+];
 
 /** Normalised, validated values ready to persist. */
 export type MemberInput = {
@@ -34,6 +48,10 @@ export type MemberInput = {
   phone: string | null;
   status: MemberStatus;
   notes: string | null;
+  photoUrl: string | null;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  membershipStatus: MembershipStatus;
 };
 
 export type ValidationResult =
@@ -63,6 +81,10 @@ export function validateMemberInput(raw: {
   phone?: unknown;
   status?: unknown;
   notes?: unknown;
+  photoUrl?: unknown;
+  emergencyContactName?: unknown;
+  emergencyContactPhone?: unknown;
+  membershipStatus?: unknown;
 }): ValidationResult {
   const fullName = typeof raw.fullName === "string" ? raw.fullName.trim() : "";
   if (!fullName) {
@@ -96,7 +118,58 @@ export function validateMemberInput(raw: {
   }
   const notes = notesRaw.length > 0 ? notesRaw : null;
 
-  return { ok: true, value: { fullName, email, phone, status: statusRaw, notes } };
+  const photoUrlRaw = typeof raw.photoUrl === "string" ? raw.photoUrl.trim() : "";
+  if (photoUrlRaw.length > 0 && !isHttpUrl(photoUrlRaw)) {
+    return { ok: false, error: "Photo URL must be a valid http(s) link." };
+  }
+  const photoUrl = photoUrlRaw.length > 0 ? photoUrlRaw : null;
+
+  const ecNameRaw =
+    typeof raw.emergencyContactName === "string" ? raw.emergencyContactName.trim() : "";
+  if (ecNameRaw.length > 200) {
+    return { ok: false, error: "Emergency contact name is too long (max 200 characters)." };
+  }
+  const emergencyContactName = ecNameRaw.length > 0 ? ecNameRaw : null;
+
+  const ecPhoneRaw =
+    typeof raw.emergencyContactPhone === "string" ? raw.emergencyContactPhone.trim() : "";
+  if (ecPhoneRaw.length > 0 && !PHONE_RE.test(ecPhoneRaw)) {
+    return { ok: false, error: "Enter a valid emergency contact phone number." };
+  }
+  const emergencyContactPhone = ecPhoneRaw.length > 0 ? ecPhoneRaw : null;
+
+  const membershipStatusRaw =
+    typeof raw.membershipStatus === "string" ? raw.membershipStatus : "active";
+  if (!MEMBERSHIP_STATUSES.includes(membershipStatusRaw as MembershipStatus)) {
+    return { ok: false, error: "Membership status is not valid." };
+  }
+  const membershipStatus = membershipStatusRaw as MembershipStatus;
+
+  return {
+    ok: true,
+    value: {
+      fullName,
+      email,
+      phone,
+      status: statusRaw,
+      notes,
+      photoUrl,
+      emergencyContactName,
+      emergencyContactPhone,
+      membershipStatus,
+    },
+  };
+}
+
+// Pragmatic http(s) URL check for a pasted photo link (avatar hosting, cloud
+// storage, etc.) — same "trust but keep tidy" spirit as EMAIL_RE/PHONE_RE.
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +280,9 @@ export function rosterListSql(clause: string, paramCount: number): string {
   const lim = paramCount + 2;
   const off = paramCount + 3;
   return `select m.id, m.email, m.full_name, m.phone, m.status, m.notes,
-                m.auth_user_id, m.created_at, m.updated_at,
+                m.auth_user_id, m.photo_url, m.emergency_contact_name,
+                m.emergency_contact_phone, m.membership_status,
+                m.created_at, m.updated_at,
                 wl.last_completed_at,
                 coalesce(wl.recent_sessions, 0)::int as recent_sessions
            from member m

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { logoutAction } from "@/lib/auth/actions";
+import { getStaffRole } from "@/lib/staff";
 import { NavLink } from "./NavLink";
 
 // Session/identity is request-derived; never statically rendered.
@@ -14,14 +15,20 @@ export const dynamic = "force-dynamic";
  * The gym name is resolved through `withTenantContext` so RLS confirms the
  * session resolves to exactly one tenant — the staff member's own gym.
  */
-const NAV = [
+const BASE_NAV = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/members", label: "Members" },
   { href: "/dashboard/invites", label: "Invites" },
+  { href: "/dashboard/classes", label: "Classes" },
+  { href: "/dashboard/checkin", label: "Check-in" },
   { href: "/dashboard/programs", label: "Programs" },
   { href: "/dashboard/exercises", label: "Exercises" },
   { href: "/dashboard/templates", label: "Templates" },
 ];
+
+// Owner-only: billing/revenue data, hidden from trainers server-side (the nav
+// is cosmetic — the actual gate is `requireOwner` on the /plans route itself).
+const OWNER_NAV = [{ href: "/dashboard/plans", label: "Plans" }];
 
 export default async function DashboardLayout({
   children,
@@ -30,14 +37,25 @@ export default async function DashboardLayout({
 }) {
   const session = await requireStaff();
 
-  // Resolve the tenant name under RLS — the only gym row this session can read.
-  const gymName = await withTenantContext(session.identity, async (c) => {
-    const { rows } = await c.query<{ name: string }>(
+  // Resolve the tenant name + owner/trainer role under RLS in one round trip.
+  const { gymName, staffRole } = await withTenantContext(session.identity, async (c) => {
+    const gym = await c.query<{ name: string }>(
       "select name from gym where id = $1",
       [session.identity.tenantId],
     );
-    return rows[0]?.name ?? "Your gym";
+    const role = session.identity.userId
+      ? await c.query<{ role: "owner" | "trainer" }>(
+          "select role from users where auth_user_id = $1",
+          [session.identity.userId],
+        )
+      : { rows: [] };
+    return {
+      gymName: gym.rows[0]?.name ?? "Your gym",
+      staffRole: role.rows[0]?.role ?? "trainer",
+    };
   });
+
+  const NAV = staffRole === "owner" ? [...BASE_NAV, ...OWNER_NAV] : BASE_NAV;
 
   return (
     <div className="flex min-h-screen flex-col">

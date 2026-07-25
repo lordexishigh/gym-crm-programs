@@ -14,6 +14,7 @@ import {
 import { sendEmail } from "@/lib/email/resend";
 import { captureException, reportHandledError } from "@/lib/observability/monitoring";
 import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
+import { generateUniquePinCode } from "@/lib/checkin";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -56,18 +57,45 @@ export async function createMemberAction(
     phone: formData.get("phone"),
     status: formData.get("status"),
     notes: formData.get("notes"),
+    photoUrl: formData.get("photoUrl"),
+    emergencyContactName: formData.get("emergencyContactName"),
+    emergencyContactPhone: formData.get("emergencyContactPhone"),
+    membershipStatus: formData.get("membershipStatus"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, phone, status, notes } = parsed.value;
+  const {
+    fullName,
+    email,
+    phone,
+    status,
+    notes,
+    photoUrl,
+    emergencyContactName,
+    emergencyContactPhone,
+    membershipStatus,
+  } = parsed.value;
 
   let newId: string;
   try {
     newId = await withTenantContext(session.identity, async (c) => {
       const { rows } = await c.query<{ id: string }>(
-        `insert into member (tenant_id, full_name, email, phone, status, notes)
-         values ($1, $2, $3, $4, $5, $6)
+        `insert into member
+           (tenant_id, full_name, email, phone, status, notes, photo_url,
+            emergency_contact_name, emergency_contact_phone, membership_status)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          returning id`,
-        [session.identity.tenantId, fullName, email, phone, status, notes],
+        [
+          session.identity.tenantId,
+          fullName,
+          email,
+          phone,
+          status,
+          notes,
+          photoUrl,
+          emergencyContactName,
+          emergencyContactPhone,
+          membershipStatus,
+        ],
       );
       const id = rows[0].id;
       // Seed the status history with the initial status (old_status null).
@@ -77,6 +105,9 @@ export async function createMemberAction(
          values ($1, $2, null, $3, $4)`,
         [session.identity.tenantId, id, status, await staffUserId(c, session.identity.userId)],
       );
+      // Every member gets a check-in PIN from day one (market gap #5) — the
+      // qr_token column already defaults itself via gen_random_uuid().
+      await generateUniquePinCode(c, session.identity.tenantId, id);
       return id;
     });
   } catch (err) {
@@ -106,9 +137,23 @@ export async function updateMemberAction(
     phone: formData.get("phone"),
     status: formData.get("status"),
     notes: formData.get("notes"),
+    photoUrl: formData.get("photoUrl"),
+    emergencyContactName: formData.get("emergencyContactName"),
+    emergencyContactPhone: formData.get("emergencyContactPhone"),
+    membershipStatus: formData.get("membershipStatus"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, phone, status, notes } = parsed.value;
+  const {
+    fullName,
+    email,
+    phone,
+    status,
+    notes,
+    photoUrl,
+    emergencyContactName,
+    emergencyContactPhone,
+    membershipStatus,
+  } = parsed.value;
 
   let updated: number;
   try {
@@ -125,9 +170,22 @@ export async function updateMemberAction(
       const res = await c.query(
         `update member
             set full_name = $2, email = $3, phone = $4, status = $5,
-                notes = $6, updated_at = now()
+                notes = $6, photo_url = $7, emergency_contact_name = $8,
+                emergency_contact_phone = $9, membership_status = $10,
+                updated_at = now()
           where id = $1`,
-        [id, fullName, email, phone, status, notes],
+        [
+          id,
+          fullName,
+          email,
+          phone,
+          status,
+          notes,
+          photoUrl,
+          emergencyContactName,
+          emergencyContactPhone,
+          membershipStatus,
+        ],
       );
 
       if (prev.status !== status) {
@@ -345,6 +403,23 @@ export async function revokeInviteAction(
   revalidatePath("/dashboard/invites");
   if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
   return { success: "Invite revoked." };
+}
+
+/**
+ * Issue a fresh check-in PIN for a member (market gap #5) — used for a
+ * pre-existing member created before PINs existed, or when a member forgets
+ * theirs and asks for a new one.
+ */
+export async function regeneratePinAction(formData: FormData): Promise<void> {
+  const session = await requireStaff();
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId) return;
+
+  await withTenantContext(session.identity, (c) =>
+    generateUniquePinCode(c, session.identity.tenantId, memberId),
+  );
+
+  revalidatePath(`/dashboard/members/${memberId}`);
 }
 
 // ---------------------------------------------------------------------------

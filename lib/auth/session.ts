@@ -13,6 +13,7 @@ import {
   REFRESH_TOKEN_COOKIE,
   sessionCookieOptions,
 } from "@/lib/auth/cookies";
+import { getStaffRole, type StaffRole } from "@/lib/staff";
 
 /**
  * Server-side session: cookie storage + JWT-derived identity.
@@ -79,6 +80,21 @@ export async function requireStaff(): Promise<Session> {
   if (!session) redirect("/login");
   if (session.role !== "staff") redirect("/portal");
   return session;
+}
+
+/**
+ * Guard for owner-only staff routes (billing, plans, revenue). Redirects a
+ * signed-in trainer back to the dashboard overview — the owner/trainer split
+ * (issue: "staff role separation") is enforced here, server-side, so a
+ * trainer can never reach a billing view by guessing the URL; the role check
+ * reads `users.role` from the DB (see lib/staff.ts) since the JWT only carries
+ * the staff/member audience, not the owner/trainer distinction.
+ */
+export async function requireOwner(): Promise<Session & { staffRole: StaffRole }> {
+  const session = await requireStaff();
+  const staffRole = await getStaffRole(session.identity);
+  if (staffRole !== "owner") redirect("/dashboard");
+  return { ...session, staffRole };
 }
 
 /**

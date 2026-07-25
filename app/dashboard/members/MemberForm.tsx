@@ -16,6 +16,10 @@ type Defaults = {
   phone?: string;
   status?: "active" | "inactive";
   notes?: string;
+  photoUrl?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  membershipStatus?: "active" | "expired" | "frozen" | "cancelled";
 };
 
 /**
@@ -90,6 +94,57 @@ export function MemberForm({
           <option value="inactive">Inactive</option>
         </select>
       </label>
+
+      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        Membership status
+        <select
+          name="membershipStatus"
+          defaultValue={defaults.membershipStatus ?? "active"}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+        >
+          <option value="active">Active</option>
+          <option value="expired">Expired</option>
+          <option value="frozen">Frozen</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+        Photo URL <span className="font-normal text-slate-400">(optional)</span>
+        <input
+          type="url"
+          name="photoUrl"
+          defaultValue={defaults.photoUrl ?? ""}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+          placeholder="https://…/photo.jpg"
+        />
+      </label>
+
+      <fieldset className="flex flex-col gap-3 rounded-lg border border-slate-200 p-3">
+        <legend className="px-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+          Emergency contact
+        </legend>
+        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+          Name <span className="font-normal text-slate-400">(optional)</span>
+          <input
+            type="text"
+            name="emergencyContactName"
+            defaultValue={defaults.emergencyContactName ?? ""}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+            placeholder="Next of kin"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+          Phone <span className="font-normal text-slate-400">(optional)</span>
+          <input
+            type="tel"
+            name="emergencyContactPhone"
+            defaultValue={defaults.emergencyContactPhone ?? ""}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+            placeholder="+357 99 123456"
+          />
+        </label>
+      </fieldset>
 
       <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
         Notes <span className="font-normal text-slate-400">(optional)</span>

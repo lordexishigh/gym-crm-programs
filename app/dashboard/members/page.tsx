@@ -153,13 +153,30 @@ export default async function MembersPage({
                   href={`/dashboard/members/${m.id}`}
                   className="flex items-center justify-between gap-4 px-4 py-3 transition hover:bg-slate-50"
                 >
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium text-slate-900">
-                      {m.full_name}
-                    </span>
-                    <span className="truncate text-sm text-slate-500">
-                      {m.email ?? "No email"}
-                    </span>
+                  <div className="flex min-w-0 items-center gap-3">
+                    {m.photo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={m.photo_url}
+                        alt={`${m.full_name} profile photo`}
+                        className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-slate-200"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-500 ring-1 ring-slate-200"
+                      >
+                        {m.full_name.charAt(0).toUpperCase()}
+                      </span>
+                    )}
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate font-medium text-slate-900">
+                        {m.full_name}
+                      </span>
+                      <span className="truncate text-sm text-slate-500">
+                        {m.email ?? "No email"}
+                      </span>
+                    </div>
                   </div>
                   <span className="flex shrink-0 items-center gap-2">
                     <EngagementBadge
@@ -173,6 +190,11 @@ export default async function MembersPage({
                     {m.auth_user_id ? (
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                         Portal active
+                      </span>
+                    ) : null}
+                    {m.membership_status !== "active" ? (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium capitalize text-amber-700">
+                        {m.membership_status}
                       </span>
                     ) : null}
                     <span

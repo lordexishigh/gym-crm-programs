@@ -23,6 +23,10 @@ describe("validateMemberInput", () => {
         phone: null,
         status: "active",
         notes: null,
+        photoUrl: null,
+        emergencyContactName: null,
+        emergencyContactPhone: null,
+        membershipStatus: "active",
       },
     });
   });
@@ -43,6 +47,10 @@ describe("validateMemberInput", () => {
       phone: null,
       status: "active",
       notes: null,
+      photoUrl: null,
+      emergencyContactName: null,
+      emergencyContactPhone: null,
+      membershipStatus: "active",
     });
   });
 
@@ -86,6 +94,50 @@ describe("validateMemberInput", () => {
   it("accepts an explicit inactive status", () => {
     const r = validateMemberInput({ fullName: "X", status: "inactive" });
     expect(r.ok && r.value.status).toBe("inactive");
+  });
+
+  it("accepts a valid photo URL and rejects a non-http one", () => {
+    const r = validateMemberInput({
+      fullName: "X",
+      photoUrl: "https://example.com/photo.jpg",
+    });
+    expect(r.ok && r.value.photoUrl).toBe("https://example.com/photo.jpg");
+    expect(
+      validateMemberInput({ fullName: "X", photoUrl: "javascript:alert(1)" }).ok,
+    ).toBe(false);
+    const blank = validateMemberInput({ fullName: "X", photoUrl: "  " });
+    expect(blank.ok && blank.value.photoUrl).toBe(null);
+  });
+
+  it("accepts an emergency contact name + phone", () => {
+    const r = validateMemberInput({
+      fullName: "X",
+      emergencyContactName: " Jane Doe ",
+      emergencyContactPhone: " +357 99 000000 ",
+    });
+    expect(r.ok && r.value.emergencyContactName).toBe("Jane Doe");
+    expect(r.ok && r.value.emergencyContactPhone).toBe("+357 99 000000");
+  });
+
+  it("rejects an invalid emergency contact phone", () => {
+    expect(
+      validateMemberInput({ fullName: "X", emergencyContactPhone: "call me" }).ok,
+    ).toBe(false);
+  });
+
+  it("defaults membership status to active and rejects an out-of-range value", () => {
+    const r = validateMemberInput({ fullName: "X" });
+    expect(r.ok && r.value.membershipStatus).toBe("active");
+    expect(
+      validateMemberInput({ fullName: "X", membershipStatus: "vip" }).ok,
+    ).toBe(false);
+  });
+
+  it("accepts every valid membership status", () => {
+    for (const status of ["active", "expired", "frozen", "cancelled"]) {
+      const r = validateMemberInput({ fullName: "X", membershipStatus: status });
+      expect(r.ok && r.value.membershipStatus).toBe(status);
+    }
   });
 });
 
