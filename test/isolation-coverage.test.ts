@@ -49,6 +49,7 @@ const EXPECTED_TENANTED_TABLES = [
   // Member profile photographs — the most identifying data the CRM stores, so
   // its isolation is pinned explicitly rather than left to discovery alone.
   "member_photo",
+  "member_task",
 ] as const;
 
 type CatalogRow = {

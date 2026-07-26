@@ -126,6 +126,13 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
         [gymA, classA1, memberA1],
       );
 
+      // A staff follow-up task on member A1 (staff export should include it;
+      // CRM-IDEAS "Apply now" #5).
+      await c.query(
+        "insert into member_task (tenant_id, member_id, title, created_by) values ($1,$2,'Check in about missed sessions',$3)",
+        [gymA, memberA1, staffA],
+      );
+
       Object.assign(seed, {
         gymA,
         gymB,
@@ -168,6 +175,10 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
       class_name: "Spin",
       status: "booked",
     });
+    // Staff follow-up tasks are a staff-only export field (CRM-IDEAS "Apply
+    // now" #5), same as status_history/invites.
+    expect(data!.tasks).toHaveLength(1);
+    expect(data!.tasks[0].title).toBe("Check in about missed sessions");
   });
 
   it("a cross-tenant export resolves to nothing (RLS isolation)", async () => {
@@ -191,6 +202,7 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
     // Staff-internal records are not exposed to a member self-export.
     expect(data!.invites).toHaveLength(0);
     expect(data!.status_history).toHaveLength(0);
+    expect(data!.tasks).toHaveLength(0);
   });
 
   it("a member cannot export another member (RLS hides the row)", async () => {

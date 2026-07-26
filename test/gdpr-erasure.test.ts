@@ -9,6 +9,7 @@ import {
 import {
   ERASED_INVITE_EMAIL,
   ERASED_MEMBER_NAME,
+  ERASED_TASK_TITLE,
   anonymiseMember,
   anonymiseStaff,
 } from "../lib/gdpr/export";
@@ -43,7 +44,7 @@ describe.skipIf(!hasDb)("GDPR erasure — anonymise & isolate", () => {
   });
 
   it("anonymises a member while preserving referential integrity", async () => {
-    const { gymA, memberId, assignmentId } = await withAdminContext(async (c) => {
+    const { gymA, memberId, assignmentId, taskId } = await withAdminContext(async (c) => {
       const gymA = (
         await c.query("insert into gym (name) values ('Erase Gym A') returning id")
       ).rows[0].id as string;
@@ -74,7 +75,15 @@ describe.skipIf(!hasDb)("GDPR erasure — anonymise & isolate", () => {
         "insert into workout_log (tenant_id, member_id, program_id, effort, note) values ($1,$2,$3,6,'sensitive note')",
         [gymA, memberId, programId],
       );
-      return { gymA, memberId, assignmentId };
+      // A follow-up task whose free-text title must be scrubbed on erasure
+      // (CRM-IDEAS "Apply now" #5) — it may name PII about the member.
+      const taskId = (
+        await c.query(
+          "insert into member_task (tenant_id, member_id, title) values ($1,$2,'sensitive task') returning id",
+          [gymA, memberId],
+        )
+      ).rows[0].id as string;
+      return { gymA, memberId, assignmentId, taskId };
     });
 
     const result = await anonymiseMember(staff(gymA), memberId);
@@ -121,6 +130,13 @@ describe.skipIf(!hasDb)("GDPR erasure — anonymise & isolate", () => {
         )
       ).rows[0];
       expect(log.note).toBeNull();
+
+      // Follow-up task title scrubbed; the row is kept anonymised (CRM-IDEAS
+      // "Apply now" #5).
+      const task = (
+        await c.query("select title from member_task where id = $1", [taskId])
+      ).rows[0];
+      expect(task.title).toBe(ERASED_TASK_TITLE);
 
       // Erasure logged for audit.
       const audit = (

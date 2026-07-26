@@ -20,11 +20,13 @@ import { buildMemberTimeline } from "@/lib/timeline";
 import { memberAdherence, recentWorkoutLogs } from "@/lib/workout-logs";
 import type { MembershipPlanRow, MemberPlanWithPlan } from "@/lib/plans";
 import { memberAvatarSrc } from "@/lib/member-photo";
+import { memberTasks } from "@/lib/member-tasks";
 import { Avatar } from "@/app/components/Avatar";
 import { MemberForm } from "../MemberForm";
 import { MemberPhotoPanel } from "../MemberPhotoPanel";
 import { Timeline } from "../Timeline";
 import { WorkoutAdherence } from "../WorkoutAdherence";
+import { MemberTasks } from "../MemberTasks";
 import { updateMemberAction, regeneratePinAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
 import { GdprPanel } from "../GdprPanel";
@@ -122,10 +124,11 @@ export default async function MemberDetailPage({
 
   // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
   // tenant-scoped by the `workout_log_staff_select` RLS policy.
-  const [adherence, workouts, staffRole] = await Promise.all([
+  const [adherence, workouts, staffRole, tasks] = await Promise.all([
     memberAdherence(session.identity, member.id),
     recentWorkoutLogs(session.identity, member.id),
     getStaffRole(session.identity),
+    memberTasks(session.identity, member.id),
   ]);
 
   // Billing data is owner-only (issue: staff role separation) — a trainer
@@ -294,6 +297,11 @@ export default async function MemberDetailPage({
           subscriptions={billing.subscriptions}
         />
       ) : null}
+
+      {/* Follow-ups sit above the timeline: they are the outstanding work on
+          this member, where the timeline is the record of what already
+          happened. */}
+      <MemberTasks memberId={member.id} tasks={tasks} />
 
       {/* Replaces the standalone StatusHistory panel: status changes,
           assignments, invites and workouts are one chronology, and reading
