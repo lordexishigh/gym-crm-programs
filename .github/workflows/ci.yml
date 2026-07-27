@@ -82,6 +82,26 @@ jobs:
         run: |
           npm run start > /tmp/next-start.log 2>&1 &
           SERVER_PID=$!
+
+          # Tear the server down COMPLETELY before the next step runs.
+          # `npm run start` spawns `next start` as a CHILD process: killing the
+          # npm wrapper alone orphans it, and the orphan keeps listening on 3000.
+          # The Playwright step then fails to start its own server with
+          # "http://localhost:3000/login is already used". So kill the children
+          # too, then block until the port is genuinely released.
+          stop_server() {
+            pkill -P "$SERVER_PID" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
+            pkill -f "next-server" 2>/dev/null || true
+            for _ in $(seq 1 30); do
+              if ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            echo "::warning::port 3000 still occupied after smoke-test teardown"
+          }
+
           # Wait (up to 60s) for the server to accept connections on `/`.
           up=0
           for i in $(seq 1 60); do
@@ -91,7 +111,7 @@ jobs:
           if [ "$up" != "1" ]; then
             echo "::error::App did not become ready within 60s"
             cat /tmp/next-start.log
-            kill "$SERVER_PID" 2>/dev/null || true
+            stop_server
             exit 1
           fi
           fail=0
@@ -103,7 +123,7 @@ jobs:
               fail=1
             fi
           done
-          kill "$SERVER_PID" 2>/dev/null || true
+          stop_server
           if [ "$fail" != "0" ]; then cat /tmp/next-start.log; fi
           exit $fail
 
