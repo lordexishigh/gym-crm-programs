@@ -67,7 +67,16 @@ function projectBaseUrl(): string {
 function getJwks(base: string): ReturnType<typeof createRemoteJWKSet> {
   const target = `${base}/auth/v1/.well-known/jwks.json`;
   if (!jwks || jwksUrl !== target) {
-    jwks = createRemoteJWKSet(new URL(target));
+    jwks = createRemoteJWKSet(new URL(target), {
+      // Bound the key fetch explicitly rather than inheriting whatever `jose`
+      // happens to default to. Token verification runs in MIDDLEWARE on every
+      // protected request, so an unreachable-but-accepting JWKS endpoint would
+      // otherwise stall /dashboard and /portal before any page or error
+      // boundary can render. On timeout `jwtVerify` rejects, the caller treats
+      // the token as invalid, and the user is redirected to login — degraded,
+      // not hung. Same rationale as the bounds in lib/db.ts and auth/supabase.ts.
+      timeoutDuration: 5_000,
+    });
     jwksUrl = target;
   }
   return jwks;
