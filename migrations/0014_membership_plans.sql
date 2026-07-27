@@ -41,6 +41,14 @@ create table if not exists member_plans (
   cancelled_at             timestamptz,
   created_at               timestamptz not null default now(),
   updated_at               timestamptz not null default now(),
+  -- Composite uniqueness on (id, tenant_id) — the same shape membership_plans
+  -- and member carry. A plain `primary key (id)` is NOT enough to be the target
+  -- of a tenant-scoped composite FK: 0017's payment_events.member_plan_fk
+  -- references member_plans (id, tenant_id) and Postgres rejects it with
+  -- "there is no unique constraint matching given keys" without this. Keeping
+  -- tenant_id in the referenced key is what stops a child row in one gym from
+  -- pointing at a parent row in another.
+  constraint member_plans_id_tenant_unique unique (id, tenant_id),
   constraint member_plans_member_fk
     foreign key (member_id, tenant_id) references member (id, tenant_id) on delete cascade,
   constraint member_plans_plan_fk
