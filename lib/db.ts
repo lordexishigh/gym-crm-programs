@@ -30,6 +30,33 @@ export type Identity = {
 
 let pool: Pool | null = null;
 
+/**
+ * Bounded waits for every database interaction.
+ *
+ * WITHOUT these, an unreachable database does not fail — it HANGS. `pg` inherits
+ * the operating system's TCP connect timeout (~21s on Windows, up to ~130s on
+ * Linux), so a firewalled/misconfigured/paused Postgres (a Supabase project that
+ * has gone to sleep, a missing egress rule, a stale host in DATABASE_URL) makes
+ * every DB-backed route sit there with an open, silent request. The user watches
+ * a blank tab, no error boundary ever renders (nothing has thrown yet), and
+ * readiness probes like /api/health blow past their own budget — the app looks
+ * dead rather than degraded.
+ *
+ * Bounding the wait converts that indefinite hang into a prompt, catchable
+ * error: the route throws, `error.tsx` renders a real message, and /api/health
+ * reports 503 quickly enough for a monitor or deploy gate to act on it.
+ *
+ * All four are overridable per environment (a cold serverless region may need a
+ * longer connect budget than a VM next to the database).
+ */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  // Ignore junk/negative values rather than silently disabling the bound.
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 /** Lazily-created singleton pool. Reads `DATABASE_URL` on first use. */
 export function getPool(): Pool {
   if (!pool) {
@@ -39,7 +66,20 @@ export function getPool(): Pool {
         "DATABASE_URL is not set. Configure it in the environment (see .env.example).",
       );
     }
-    pool = new Pool({ connectionString, max: 10 });
+    pool = new Pool({
+      connectionString,
+      max: 10,
+      // Fail fast when the server is unreachable instead of inheriting the OS
+      // TCP timeout. This is the bound that stops routes hanging indefinitely.
+      connectionTimeoutMillis: envMs("DB_CONNECT_TIMEOUT_MS", 5_000),
+      // Recycle idle clients so a pooler that silently drops them is not
+      // rediscovered as a stall on the next request.
+      idleTimeoutMillis: envMs("DB_IDLE_TIMEOUT_MS", 30_000),
+      // A connection that established but then stops responding mid-query is
+      // just as fatal as one that never connected; bound the query too.
+      statement_timeout: envMs("DB_STATEMENT_TIMEOUT_MS", 15_000),
+      query_timeout: envMs("DB_QUERY_TIMEOUT_MS", 15_000),
+    });
     // Boot/runtime resilience: `pg` emits an 'error' event on the POOL whenever a
     // backend or network error hits an *idle* pooled client — e.g. Supabase's
     // pooler dropping an idle connection, a transient network blip, or the DB

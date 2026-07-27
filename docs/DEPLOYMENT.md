@@ -146,6 +146,17 @@ In each inbox, open **Show original / View source** and confirm `SPF=pass`,
 - Users only ever see a friendly message plus a correlation id; stack traces stay
   server-side.
 
-Health check: `GET /api/health` returns `{ ok, status, db, email, time }` and
-**HTTP 503 when the database is unreachable** (200 when healthy) so uptime
-monitors alert on a real outage. Point an uptime monitor at it.
+Health check: `GET /api/health` returns
+`{ ok, status, db, db_latency_ms, email, time }` — plus `db_error` when the
+database is down — and **HTTP 503 when the database is unreachable** (200 when
+healthy) so uptime monitors alert on a real outage. Point an uptime monitor at it.
+
+The probe answers within `HEALTH_DB_TIMEOUT_MS` (default 3s) even when Postgres
+is completely unreachable, and the pool-level bounds in `.env.example`
+(`DB_CONNECT_TIMEOUT_MS` and friends) apply the same discipline to every request
+path. This matters more than it looks: without a connect bound, `pg` inherits the
+OS TCP timeout (~21s on Windows, up to ~130s on Linux), so a paused Supabase
+project or a missing egress rule makes every DB-backed route hang silently
+instead of erroring — users get a blank tab, no error boundary renders, and a
+monitor times out with no body, which reads as *crashed* rather than *degraded*.
+Keep `HEALTH_DB_TIMEOUT_MS` comfortably below your monitor's own timeout.
