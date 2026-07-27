@@ -44,6 +44,9 @@ export type ExportedMember = {
   phone: string | null;
   status: string;
   notes: string | null;
+  photo_url: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
   created_at: string;
   updated_at: string;
   erased_at: string | null;
@@ -112,6 +115,7 @@ export async function exportMemberData(
     const member = (
       await c.query<ExportedMember>(
         `select id, email, full_name, phone, status, notes,
+                photo_url, emergency_contact_name, emergency_contact_phone,
                 created_at, updated_at, erased_at
            from member where id = $1`,
         [memberId],
@@ -373,9 +377,15 @@ export async function anonymiseMember(
       return { ok: true as const, alreadyErased: true, authUserId: null };
     }
 
+    // pin_code/qr_token are check-in CREDENTIALS, not profile PII, but an
+    // erased member must lose kiosk access too — otherwise they could still
+    // check in (and accrue new attendance rows) after "erasure". qr_token is
+    // NOT NULL, so it is rotated (not cleared) to invalidate the old code.
     await c.query(
       `update member
           set full_name = $2, email = null, phone = null, notes = null,
+              emergency_contact_name = null, emergency_contact_phone = null,
+              photo_url = null, pin_code = null, qr_token = gen_random_uuid(),
               status = 'inactive', auth_user_id = null,
               erased_at = now(), updated_at = now()
         where id = $1`,
