@@ -212,6 +212,72 @@ export async function memberAdherence(
 }
 
 /**
+ * How many days of workout history to consider when computing a member's
+ * current streak (CRM-IDEAS "Next" #7 — engagement layer). Comfortably covers
+ * any realistic streak while keeping the query bounded.
+ */
+export const STREAK_LOOKBACK_DAYS = 400;
+
+// Raw timestamps only (no ::date cast — pg's `date` type parses in the server's
+// local timezone, which would silently misclassify a session logged near
+// midnight; `currentStreakDays` below does the calendar-day bucketing itself,
+// in UTC, from the full timestamp).
+const STREAK_LOG_TIMESTAMPS_SQL = `select completed_at
+   from workout_log
+  where member_id = $1
+    and completed_at >= now() - make_interval(days => $2)
+  order by completed_at desc`;
+
+/**
+ * Current daily training streak, computed from already-fetched logs. PURE (no
+ * DB, no env): counts consecutive UTC calendar days with at least one logged
+ * session, walking backward from today. A member who trained yesterday but
+ * has not yet logged today's session still sees their streak (it only resets
+ * once a full calendar day is missed), so the count doesn't flicker to zero
+ * the instant the clock rolls into a new UTC day.
+ */
+export function currentStreakDays(
+  logs: { completed_at: string }[],
+  now: Date = new Date(),
+): number {
+  const days = new Set(
+    logs.map((l) => new Date(l.completed_at).toISOString().slice(0, 10)),
+  );
+  if (days.size === 0) return 0;
+
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  const today = now.toISOString().slice(0, 10);
+  let cursor = days.has(today) ? now.getTime() : now.getTime() - ONE_DAY_MS;
+
+  let streak = 0;
+  while (days.has(new Date(cursor).toISOString().slice(0, 10))) {
+    streak += 1;
+    cursor -= ONE_DAY_MS;
+  }
+  return streak;
+}
+
+/**
+ * A member's current streak of consecutive days with a logged workout. Reuses
+ * the same RLS as `recentWorkoutLogs` (`workout_log_member_select` /
+ * `workout_log_staff_select`) — a cross-tenant or another member's id yields 0,
+ * not an error.
+ */
+export async function workoutStreakDays(
+  identity: Identity,
+  memberId: string,
+  lookbackDays: number = STREAK_LOOKBACK_DAYS,
+): Promise<number> {
+  return withTenantContext(identity, async (c) => {
+    const { rows } = await c.query<{ completed_at: string }>(
+      STREAK_LOG_TIMESTAMPS_SQL,
+      [memberId, lookbackDays],
+    );
+    return currentStreakDays(rows);
+  });
+}
+
+/**
  * Per-member engagement summary used by the staff roster at-a-glance signal
  * (review-hardening-roster-engagement-001 / ga-trainer-insights-002). The roster
  * computes these two values for every listed member in ONE aggregate join (see

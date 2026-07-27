@@ -78,6 +78,12 @@ Tags: **Impact** (member retention / trainer daily value) × **Effort** (for our
 
 7. **Member portal engagement layer: streaks & badges.** **Impact: High · Effort: Med.**
    Trainerize/Glofox lean hard on habit streaks and milestone badges because they measurably reduce early drop-off. Built on our logging data, this is computed server-side and rendered in the mobile portal — no native app required. Cheap psychology, high stickiness.
+   **Partially done (2026-07-27):** the current-streak half is shipped — `workoutStreakDays`
+   (`lib/workout-logs.ts`) counts a member's consecutive logged days (pure calendar-day
+   bucketing, unit-tested) and a `StreakBadge` (`app/portal/StreakBadge.tsx`) shows it in
+   the portal. No schema or RLS change — it's a read-only aggregate over `workout_log`
+   under the existing `workout_log_member_select` policy. Milestone **badges** (streak
+   milestones, PR-style callouts) are still open.
 
 8. **Saved roster views + faster trainer navigation.** **Impact: Med · Effort: Med.**
    Our roster state already lives in the URL (shareable/back-button friendly) — extend to named saved views ("At-risk", "New this month") and consider a command-palette jump-to-member (Linear-style) to feel modern next to "dated" incumbents.
