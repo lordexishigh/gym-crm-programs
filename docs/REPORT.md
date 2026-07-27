@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-77%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-75%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 77/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 75/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 84 | `█████████████████░░░` |
-| Code quality | 81 | `████████████████░░░░` |
-| Robustness & error handling | 72 | `██████████████░░░░░░` |
-| Builds & tests | 69 | `██████████████░░░░░░` |
-| UX & design | 71 | `██████████████░░░░░░` |
+| Spec coverage | 70 | `██████████████░░░░░░` |
+| Code quality | 80 | `████████████████░░░░` |
+| Robustness & error handling | 78 | `████████████████░░░░` |
+| Builds & tests | 82 | `████████████████░░░░` |
+| UX & design | 65 | `█████████████░░░░░░░` |
 
 ## Readiness checks
 
@@ -23,7 +23,7 @@
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
 - ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
-- ⚠️ Rate limiting — auth endpoints have no rate limiting — credential brute-force and abuse are unprotected
+- ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
 - ✅ Automated tests — test files present
@@ -42,21 +42,22 @@
 
 ## Strengths
 
-- Adversarial cross-tenant isolation is genuinely tested: test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and asserts SELECT, UPDATE, DELETE, and forged-INSERT are all blocked for a gym-B session reading gym-A rows through the real withTenantContext/app_user role path — not mocked.
-- The feature surface substantially exceeds the spec: Stripe billing with webhook handling (lib/stripe.ts, lib/stripe-events.ts, migrations/0014–0017), class scheduling with waitlist auto-promotion (lib/classes.ts, migration 0015), QR/PIN check-in (lib/checkin.ts, migration 0016), GDPR export and erasure (lib/gdpr/export.ts, migrations/0004/0006/0018), and automated email notifications are all present with proper schema backing.
-- Privilege minimisation is precise: migration 0018 grants UPDATE on only the note column of workout_log (not the whole row) and adds a staff-scoped UPDATE RLS policy, so GDPR erasure works without breaking the immutability invariant that every other column remains non-updatable at the privilege level.
-- 239 unit and integration tests across 26 files with DB-dependent suites cleanly skipping when DATABASE_URL is absent, plus E2E Playwright invite-flow and visual-capture specs and a dedicated a11y test suite — all green.
+- Adversarial cross-tenant isolation test in test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and probes every tenanted table for SELECT/UPDATE/DELETE/forged-INSERT leakage — this is a genuinely thorough security backstop, not a spot-check.
+- Production-grade observability stack: health probe returns 503 with per-dependency breakdown, instrumentation.ts wires onRequestError globally so uncaught server errors are captured without per-call instrumentation, and auth calls have bounded timeouts with regression tests.
+- Feature surface substantially exceeds the spec: Stripe billing, class scheduling with waitlist auto-promotion, QR/PIN check-in, GDPR export/erasure, workout logs, and membership plan tiers are all wired up with migrations, lib modules, and UI — the product is closer to a full gym CRM than a bare MVP.
+- 18 sequential, idempotent migrations with a schema_migrations guard give the schema a clear, auditable evolution history from blank to full feature set.
 
 ## To improve
 
-- Auth routes (/login, /portal/login) hang indefinitely rather than failing fast when the database is unreachable — in lib/auth/session.ts add a pool.connect() timeout (e.g. connectionTimeoutMillis on the Pool constructor in lib/db.ts) and have requireStaff/requireMember return a redirect to an error page or throw a Next.js notFound() within 2–3 seconds so the browser never hangs on a blank tab.
-- Auth Server Actions (app/login/actions.ts, app/portal/login/actions.ts) have no rate limiting — add an upstash/ratelimit sliding-window check keyed on IP before the credential query so brute-force and credential-stuffing are blocked at the application layer, closing the automated readiness WARN.
-- Two high-severity dependency vulnerabilities (next, sharp) remain unresolved from Round 3 — run npm audit fix targeting those two packages, update the pinned versions in package.json, and regenerate package-lock.json so the CI vulnerability scan goes green.
-- One img element is missing an alt attribute (automated readiness WARN) — locate it (likely in a portal or dashboard page component) and add a descriptive alt string, then add rendering coverage for that component in test/a11y.test.ts to prevent recurrence.
+- The product walkthrough shows /login and /portal/login timing out even though test/start-wrapper.test.ts passes — add a /api/health readiness poll inside scripts/start.mjs so the process does not signal readiness until the Next.js HTTP server is actually accepting connections on the port, preventing the QA crawler from racing against boot.
+- 2 high-severity vulnerabilities in next and sharp are still open per the automated readiness check — run npm audit fix (or pin next to the patched version listed in its advisory) and update sharp in the overrides block in package.json.
+- app/dashboard/members/actions.ts at 18,522 bytes combines invite dispatch, GDPR anonymisation/export, status-history writes, and check-in PIN generation in one file — split the GDPR actions into app/dashboard/members/gdpr-actions.ts and the invite actions into invite-actions.ts to restore single-responsibility and keep individual files reviewable.
+- The a11y readiness check still flags 1 img without alt text — locate the element (likely in app/portal/ProgramView.tsx or app/dashboard/exercises/ExerciseLibraryGrid.tsx where exercise images are rendered) and add a descriptive alt attribute, then add that component to the rendering surface covered by test/a11y.test.ts.
+- Bulk member CSV import is absent and flagged as a hard adoption blocker in the market-fit check — add a dashboard route app/dashboard/members/import/page.tsx with a server action that parses a uploaded CSV, previews the parsed rows, and bulk-inserts via withTenantContext so gyms migrating from incumbents do not have to hand-enter every record.
 
 ## Summary
 
-A well-engineered, feature-rich codebase that goes substantially beyond the spec — RLS isolation with adversarial tests, Stripe billing, class scheduling, check-in, and GDPR are all genuinely implemented — but a critical runtime defect causes auth routes to hang in the deployed app, making the product unreachable to real users despite static tests passing, which is the single most important fix before any further evaluation.
+The codebase is impressively complete — all 8 spec features are implemented with real code, RLS is enforced and adversarially tested, and the feature surface exceeds the spec significantly — but the product walkthrough could not confirm any authenticated flow because both auth entry points timed out at runtime, leaving the assembled product's usability unverified and dragging the overall score; fixing the startup-readiness race and the two open dependency vulnerabilities are the highest-leverage next steps.
 
 ---
-_Scored 2026-07-27 13:25 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-27 17:08 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
