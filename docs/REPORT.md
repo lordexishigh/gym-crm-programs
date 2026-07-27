@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-81%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-77%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 81/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 77/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 88 | `██████████████████░░` |
-| Code quality | 82 | `████████████████░░░░` |
-| Robustness & error handling | 70 | `██████████████░░░░░░` |
-| Builds & tests | 86 | `█████████████████░░░` |
-| UX & design | 74 | `███████████████░░░░░` |
+| Spec coverage | 84 | `█████████████████░░░` |
+| Code quality | 81 | `████████████████░░░░` |
+| Robustness & error handling | 72 | `██████████████░░░░░░` |
+| Builds & tests | 69 | `██████████████░░░░░░` |
+| UX & design | 71 | `██████████████░░░░░░` |
 
 ## Readiness checks
 
@@ -42,21 +42,21 @@
 
 ## Strengths
 
-- Comprehensive RLS isolation proof: isolation-comprehensive.test.ts seeds two fully-conflicting tenants and exhaustively asserts SELECT/UPDATE/DELETE/INSERT is blocked across every tenanted table for both cross-tenant and cross-member axes via the real withTenantContext GUC path — adversarial, not incidental.
-- All 8 spec features are genuinely wired end-to-end: the invite flow runs from email delivery (lib/email/resend.ts) through token acceptance (lib/invite-acceptance.ts) to portal session bootstrap, with no placeholder routes or TODO comments in the critical path.
-- 239 tests across 26 files with layered coverage — unit (members, programs, GDPR), 7 dedicated RLS suites, axe-core a11y across 10+ components, and Playwright e2e — backed by a CI workflow that enforces the full suite on every push.
-- GDPR is production-grade: migrations 0004+0006 add gdpr_subjects and gdpr_audit_events tables, lib/gdpr/export.ts implements full data export, and test/gdpr-erasure.test.ts + test/gdpr-export.test.ts both exercise real DB paths rather than mocking.
+- Adversarial cross-tenant isolation is genuinely tested: test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and asserts SELECT, UPDATE, DELETE, and forged-INSERT are all blocked for a gym-B session reading gym-A rows through the real withTenantContext/app_user role path — not mocked.
+- The feature surface substantially exceeds the spec: Stripe billing with webhook handling (lib/stripe.ts, lib/stripe-events.ts, migrations/0014–0017), class scheduling with waitlist auto-promotion (lib/classes.ts, migration 0015), QR/PIN check-in (lib/checkin.ts, migration 0016), GDPR export and erasure (lib/gdpr/export.ts, migrations/0004/0006/0018), and automated email notifications are all present with proper schema backing.
+- Privilege minimisation is precise: migration 0018 grants UPDATE on only the note column of workout_log (not the whole row) and adds a staff-scoped UPDATE RLS policy, so GDPR erasure works without breaking the immutability invariant that every other column remains non-updatable at the privilege level.
+- 239 unit and integration tests across 26 files with DB-dependent suites cleanly skipping when DATABASE_URL is absent, plus E2E Playwright invite-flow and visual-capture specs and a dedicated a11y test suite — all green.
 
 ## To improve
 
-- Two high-severity dependency vulnerabilities remain unpatched (next and sharp per the readiness WARN): update next to its patched minor release in package.json and revise the sharp override in the overrides block — these are the only open CVEs the check flags and both have fixes available.
-- Auth endpoints (/login actions, /portal/login actions, /api/email/webhook) have no rate limiting: add an in-process token-bucket in middleware.ts keyed on IP + path to reject requests exceeding ~5 auth attempts per minute, eliminating the credential brute-force vector the readiness WARN identifies.
-- One <img> element still lacks an alt attribute (readiness WARN unresolved): locate the bare <img in portal or dashboard view components, add a descriptive alt string, and add a rendering assertion in test/a11y.test.ts for that surface so the gap is caught in CI going forward.
-- app/dashboard/members/actions.ts (16KB) and lib/gdpr/export.ts (17KB) bundle multiple distinct concerns in single files: extract the GDPR anonymise and export calls from members/actions.ts into lib/gdpr/, and split lib/gdpr/export.ts into separate erasure.ts and export.ts modules to keep files under ~300 lines and reduce merge-conflict surface area.
+- Auth routes (/login, /portal/login) hang indefinitely rather than failing fast when the database is unreachable — in lib/auth/session.ts add a pool.connect() timeout (e.g. connectionTimeoutMillis on the Pool constructor in lib/db.ts) and have requireStaff/requireMember return a redirect to an error page or throw a Next.js notFound() within 2–3 seconds so the browser never hangs on a blank tab.
+- Auth Server Actions (app/login/actions.ts, app/portal/login/actions.ts) have no rate limiting — add an upstash/ratelimit sliding-window check keyed on IP before the credential query so brute-force and credential-stuffing are blocked at the application layer, closing the automated readiness WARN.
+- Two high-severity dependency vulnerabilities (next, sharp) remain unresolved from Round 3 — run npm audit fix targeting those two packages, update the pinned versions in package.json, and regenerate package-lock.json so the CI vulnerability scan goes green.
+- One img element is missing an alt attribute (automated readiness WARN) — locate it (likely in a portal or dashboard page component) and add a descriptive alt string, then add rendering coverage for that component in test/a11y.test.ts to prevent recurrence.
 
 ## Summary
 
-A solid, feature-complete MVP that faithfully implements all 8 spec commitments with genuinely wired code, 239 passing tests, and an adversarial cross-tenant RLS proof suite; the remaining score drag is two unpatched high-severity dependency vulnerabilities, no rate limiting on auth endpoints, and a single missing img alt attribute.
+A well-engineered, feature-rich codebase that goes substantially beyond the spec — RLS isolation with adversarial tests, Stripe billing, class scheduling, check-in, and GDPR are all genuinely implemented — but a critical runtime defect causes auth routes to hang in the deployed app, making the product unreachable to real users despite static tests passing, which is the single most important fix before any further evaluation.
 
 ---
-_Scored 2026-07-26 01:35 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-27 13:25 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
