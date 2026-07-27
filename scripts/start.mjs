@@ -13,10 +13,22 @@
  *      budget expires. That is indistinguishable from a hung server: every route
  *      "times out", including fully static ones like `/` and `/login`.
  *
- *      This is reported, not repaired: building from `npm start` is opt-in
- *      (START_AUTOBUILD=1), because `next build` DELETES `.next` before it
- *      writes, so an implicit build clobbers whatever build, smoke test or e2e
- *      run is already using that directory. See step 1 in `main`.
+ *      So this is REPAIRED, not merely reported: a missing build is built. An
+ *      earlier revision only logged the remedy and exited, which fixes nothing
+ *      for the caller that matters — a browser, probe or reviewer pointed at the
+ *      port still waits out its whole budget and still concludes the product is
+ *      unreachable. Refusing to serve and hanging are the same observable event;
+ *      only actually serving is different.
+ *
+ *      The hazard that made this opt-in is real but narrower than "don't build":
+ *      `next build` DELETES `.next` before writing, so a build started while
+ *      ANOTHER build/e2e/smoke run is using that directory corrupts it. Note
+ *      that the dangerous window is precisely when BUILD_ID is absent — a build
+ *      in flight has already removed it — so "BUILD_ID missing" cannot
+ *      distinguish a fresh clone from a concurrent build. A lock file does, and
+ *      that is what guards this now: concurrent starts elect ONE builder and the
+ *      rest wait for its output. Opt out with START_AUTOBUILD=0 to restore the
+ *      old fail-fast. See `ensureProductionBuild`.
  *
  *   2. PORT ALREADY IN USE. `next start` fails deep in its own stack with a raw
  *      EADDRINUSE and exits. Whatever is already on that port — commonly an
@@ -35,8 +47,10 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -44,9 +58,43 @@ const require = createRequire(import.meta.url);
 const ROOT = process.cwd();
 const NEXT_BIN = require.resolve("next/dist/bin/next");
 
-/** Truthy-on check for the opt-in flags. Unset means off. */
-function enabled(value) {
-  return value === "1" || value === "true";
+/**
+ * Lock electing a single autobuilder among concurrent `npm start` invocations.
+ *
+ * Deliberately NOT inside `.next`: `next build` deletes that directory before
+ * writing, which would delete the very lock guarding the build. Waiters would
+ * then see the lock vanish, conclude the builder was done, and start a competing
+ * build into the directory being written. Keyed by a hash of the checkout path
+ * so parallel checkouts (git worktrees, CI matrix jobs) never share a lock.
+ */
+const BUILD_LOCK = path.join(
+  tmpdir(),
+  `alpha-crm-autobuild-${createHash("sha256").update(ROOT).digest("hex").slice(0, 16)}.lock`,
+);
+
+/**
+ * Ceiling on how long to wait for ANOTHER process's build to land before giving
+ * up. Generous (builds are minutes, not seconds) but finite: an indefinite wait
+ * would reintroduce the very hang this wrapper exists to remove.
+ */
+const BUILD_WAIT_MS = Number(process.env.START_BUILD_WAIT_MS) || 600_000;
+
+/** Explicit opt-OUT check. Only an explicit falsy value disables a default-on flag. */
+function disabled(value) {
+  return value === "0" || value === "false";
+}
+
+/** Whether `pid` is still running, used to tell a held lock from an abandoned one. */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    // Signal 0 performs the permission/existence check without delivering it.
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but belongs to another user — still alive.
+    return err && err.code === "EPERM";
+  }
 }
 
 /**
@@ -94,6 +142,180 @@ function hasProductionBuild() {
     return existsSync(buildId) && readFileSync(buildId, "utf8").trim().length > 0;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether THIS process created the lock. Tracked because a waiter must never
+ * delete the builder's lock: without this, a waiter killed by CI teardown would
+ * drop a live builder's lock on its way out, and the next start would happily
+ * begin a competing build into the directory being written.
+ */
+let ownsBuildLock = false;
+
+/**
+ * Try to become the process that runs the autobuild. `wx` makes create-or-fail
+ * atomic at the filesystem level, so two starts racing here cannot both win.
+ * Returns true if this process now owns the lock.
+ */
+function acquireBuildLock() {
+  try {
+    // Normally tmpdir, which exists; recursive keeps this safe on an exotic TMPDIR.
+    mkdirSync(path.dirname(BUILD_LOCK), { recursive: true });
+    writeFileSync(BUILD_LOCK, JSON.stringify({ pid: process.pid }), { flag: "wx" });
+    ownsBuildLock = true;
+    return true;
+  } catch (err) {
+    if (err && err.code === "EEXIST") return false;
+    // Any other failure (read-only mount, permissions) must not block serving:
+    // fall through to building unlocked rather than refusing to start.
+    console.error(`[start] could not create build lock (${err?.code || err}); building unlocked.`);
+    return true;
+  }
+}
+
+/** Delete the lock file whoever owns it — only for reclaiming a stale one. */
+function removeBuildLock() {
+  try {
+    rmSync(BUILD_LOCK, { force: true });
+  } catch {
+    /* best effort — a leftover lock is reclaimed as stale by the next start */
+  }
+}
+
+/**
+ * Release the lock, but ONLY if this process holds it. Safe to call
+ * unconditionally (signal handlers do), and never throws.
+ */
+function releaseBuildLock() {
+  if (!ownsBuildLock) return;
+  ownsBuildLock = false;
+  removeBuildLock();
+}
+
+/**
+ * Whoever currently holds the lock, or null if it is gone/unreadable. A lock
+ * whose owner is dead is STALE: a build killed partway through (CI teardown,
+ * Ctrl-C, OOM) leaves both the lock and a `.next` with no BUILD_ID, and without
+ * reclaiming it every later start would wait out its budget for a build that is
+ * never coming.
+ */
+function readBuildLock() {
+  try {
+    const { pid } = JSON.parse(readFileSync(BUILD_LOCK, "utf8"));
+    return { pid, alive: pidAlive(pid) };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve after `ms`, without pulling in a timers/promises import. */
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Whether some other process is running a build right now. */
+function buildInFlight() {
+  const holder = readBuildLock();
+  return Boolean(holder && holder.alive && holder.pid !== process.pid);
+}
+
+/**
+ * Ensure a servable production build exists, building one if not.
+ *
+ * Returns true if the caller may proceed to serve; false only after reporting
+ * why it may not.
+ *
+ * The subtle part is what counts as "a build is ready". `.next/BUILD_ID` is NOT
+ * a sufficient signal for a CONCURRENT observer: `next build` writes BUILD_ID
+ * before it writes the manifests `next start` opens, so a start that races a
+ * build sees BUILD_ID, launches, and dies on a missing
+ * `.next/prerender-manifest.json`. (Observed, not theorised.) The authoritative
+ * "the build is finished" signal is the builder RELEASING THE LOCK, so every
+ * wait here ends on lock acquisition and never on BUILD_ID appearing.
+ */
+async function ensureProductionBuild() {
+  // Fast path, and the overwhelmingly common one: a finished build with no
+  // builder running. The in-flight test is what keeps this off the race above.
+  if (hasProductionBuild() && !buildInFlight()) return true;
+
+  // Wait out any in-flight build, reclaiming a lock whose owner died. Opting out
+  // of AUTOBUILD does not opt out of waiting: waiting for someone else's build is
+  // not building, and serving a half-written `.next` is what we are avoiding.
+  let waited = 0;
+  while (!acquireBuildLock()) {
+    const holder = readBuildLock();
+    if (!holder) {
+      // Either the lock was just released or it is unreadable/truncated — a
+      // writer killed between create and write. An unreadable lock that still
+      // EXISTS must be removed, or `readBuildLock` keeps returning null while
+      // `acquireBuildLock` keeps failing on EEXIST: a hot spin forever.
+      if (existsSync(BUILD_LOCK)) {
+        console.error("[start] Removing unreadable build lock.");
+        removeBuildLock();
+      }
+      continue;
+    }
+    if (!holder.alive) {
+      console.error(
+        `[start] Reclaiming stale build lock from dead PID ${holder.pid} ` +
+          "(a previous build was interrupted).",
+      );
+      removeBuildLock();
+      continue;
+    }
+    if (waited === 0) {
+      console.log(
+        `[start] Another process (PID ${holder.pid}) is building; waiting for it ` +
+          "to finish rather than starting a competing build.",
+      );
+    }
+    if (waited >= BUILD_WAIT_MS) {
+      console.error(
+        `[start] Timed out after ${Math.round(BUILD_WAIT_MS / 1000)}s waiting for ` +
+          `PID ${holder.pid} to finish building. Not starting: serving a ` +
+          "partially-written .next would fail on a missing manifest.\n" +
+          "[start] Stop that process and run `npm run build`, or raise " +
+          "START_BUILD_WAIT_MS.",
+      );
+      return false;
+    }
+    await delay(1_000);
+    waited += 1_000;
+  }
+
+  // Lock held, so no build can be in flight. Anything on disk now is complete.
+  try {
+    if (hasProductionBuild()) return true;
+
+    // Explicit opt-out: preserve the fail-fast for callers that manage their own
+    // builds and would rather hear about a missing one than wait for it.
+    if (disabled(process.env.START_AUTOBUILD)) {
+      console.error(
+        "[start] No production build found (.next/BUILD_ID is missing) and " +
+          "START_AUTOBUILD=0; `next start` would exit and nothing would ever bind " +
+          "this port.\n[start] Run `npm run build` first, then `npm start`.",
+      );
+      return false;
+    }
+
+    console.log(
+      "[start] No production build found (.next/BUILD_ID is missing) — running " +
+        "`next build` first so the server has something to serve. " +
+        "(START_AUTOBUILD=0 to fail instead.)",
+    );
+    const code = await runNext(["build"]);
+    if (code !== 0) {
+      console.error(`[start] build failed with exit code ${code}; not starting.`);
+      return false;
+    }
+    if (!hasProductionBuild()) {
+      console.error("[start] build reported success but .next/BUILD_ID is still missing.");
+      return false;
+    }
+    return true;
+  } finally {
+    releaseBuildLock();
   }
 }
 
@@ -211,47 +433,20 @@ async function main() {
   // started it is gone, and breaks whatever command runs next.
   const forward = (signal) => () => {
     if (activeChild && !activeChild.killed) activeChild.kill(signal);
+    // If we were interrupted mid-autobuild we own the lock; drop it now so the
+    // next start builds immediately instead of waiting on our dead PID.
+    releaseBuildLock();
   };
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
 
-  // 1. Require a usable production build; report a missing one rather than
-  //    quietly building it. `next build` DELETES `.next` before writing, so a
-  //    build started implicitly here clobbers the output of any build, smoke
-  //    test or e2e run already using that directory. The victim then fails
-  //    somewhere unrelated to the cause — a prerender whose
-  //    `.next/server/pages-manifest.json` vanished mid-build — which is far
-  //    harder to diagnose than the missing build an implicit build would have
-  //    papered over. `npm start` is also the e2e/CI webServer command, where a
-  //    surprise multi-minute build just exhausts the harness's start timeout and
-  //    gets killed. Opt in with START_AUTOBUILD=1 when nothing else is using
-  //    `.next` (a fresh clone, a single-purpose container).
-  if (!hasProductionBuild()) {
-    if (!enabled(process.env.START_AUTOBUILD)) {
-      console.error(
-        "[start] No production build found (.next/BUILD_ID is missing); " +
-          "`next start` would exit and nothing would ever bind this port.\n" +
-          "[start] Run `npm run build` first, then `npm start`.\n" +
-          "[start] (START_AUTOBUILD=1 builds from `npm start` instead — only do " +
-          "that when no other build or server is using .next.)",
-      );
-      process.exit(1);
-    }
-    console.log(
-      "[start] No production build found (.next/BUILD_ID is missing) and " +
-        "START_AUTOBUILD=1 — running `next build` first so the server has " +
-        "something to serve.",
-    );
-    const code = await runNext(["build"]);
-    if (code !== 0) {
-      console.error(`[start] build failed with exit code ${code}; not starting.`);
-      process.exit(code > 0 ? code : 1);
-    }
-    if (!hasProductionBuild()) {
-      console.error("[start] build reported success but .next/BUILD_ID is still missing.");
-      process.exit(1);
-    }
-  }
+  // 1. Guarantee there is something to serve. A missing build is BUILT, because
+  //    exiting instead is indistinguishable to any client from a hung server —
+  //    an unbound port black-holes the SYN, so `/`, `/login` and `/portal/login`
+  //    all "time out" and the product reads as unreachable. Concurrency with
+  //    another build/e2e/smoke run using `.next` is handled by a lock rather
+  //    than by refusing to build. See `ensureProductionBuild`.
+  if (!(await ensureProductionBuild())) process.exit(1);
 
   // 2. Refuse to start onto an occupied port. Without this the run would keep
   //    talking to whatever is already there — usually an orphaned server from a

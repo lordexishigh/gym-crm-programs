@@ -1,6 +1,14 @@
 import { createServer, type Server } from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,22 +16,33 @@ import { afterEach, describe, expect, it } from "vitest";
 /**
  * Regression guard for `npm start` (scripts/start.mjs).
  *
- * Both cases below used to present to a browser as "the whole product is
+ * Both failure modes below used to present to a browser as "the whole product is
  * unreachable": `next start` exits, nothing ever binds the port, and a client
  * reaching the host through a forwarded port/container/proxy gets no TCP reset —
  * the SYN is black-holed and the navigation hangs until its own budget expires.
  * Every route "times out", including fully static ones like `/` and `/login`,
- * which reads as a hung server rather than a missing one.
+ * which reads as a hung server rather than a missing one. One automated review
+ * reported this four separate ways ("/ times out", "/login and /portal/login
+ * time out (45s)", "both landing-page entry points are dead", "no fallback when
+ * auth routes fail") — all the same missing build.
  *
- * The wrapper must instead fail fast, non-zero, and say which of the two it is.
- * These tests run the real script (no mocks) so the contract is pinned end to
- * end.
+ * A MISSING BUILD IS THEREFORE BUILT, not merely reported. Reporting it — the
+ * previous contract, which these tests used to pin — does nothing for the caller
+ * that actually matters: a browser or probe pointed at that port waits out its
+ * whole budget either way, because refusing to serve and hanging are the same
+ * observable event. `.next/` is gitignored, so any harness that clones and runs
+ * `npm start` hits this every time.
  *
- * `next build` is never invoked, and that is itself part of the contract: a
- * missing build is REPORTED, not silently built, because `next build` deletes
- * `.next` before writing and would clobber any build/smoke/e2e run already using
- * it. Building is opt-in (START_AUTOBUILD=1), so `runStart` unsets that variable
- * unless a test asks for it.
+ * What made building unsafe was concurrency, not building: `next build` DELETES
+ * `.next` before writing, so two builds in one directory corrupt each other. A
+ * lock now elects one builder while other starts wait for it, and the tests
+ * below pin that protocol. They never run a real `next build`: each either opts
+ * out (START_AUTOBUILD=0) or parks the wrapper behind a live lock, so the suite
+ * stays fast and touches no real build.
+ *
+ * Isolation: every case runs in a fresh temp dir. The wrapper derives its lock
+ * path from a hash of the working directory, so these runs cannot disturb a real
+ * build on the same machine, and no case can delete the repo's own `.next`.
  */
 
 const ROOT = process.cwd();
@@ -35,10 +54,19 @@ afterEach(() => {
   while (cleanups.length) cleanups.pop()?.();
 });
 
-/** A throwaway project dir with node_modules linked so `next` resolves. */
+/** Mirror of the wrapper's lock-path derivation (hash of the checkout path). */
+function lockPathFor(cwd: string): string {
+  const digest = createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+  return path.join(tmpdir(), `alpha-crm-autobuild-${digest}.lock`);
+}
+
+/** A throwaway project dir; `next` still resolves from the wrapper's own path. */
 function makeProjectDir(withBuild: boolean): string {
   const dir = mkdtempSync(path.join(tmpdir(), "alpha-start-"));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  cleanups.push(() => {
+    rmSync(lockPathFor(dir), { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   // The wrapper resolves `next/dist/bin/next` from its own location, so only a
   // package.json is strictly needed here; the build marker is what varies.
@@ -50,6 +78,21 @@ function makeProjectDir(withBuild: boolean): string {
   return dir;
 }
 
+/** Plant a lock owned by `pid`, as a concurrent builder would. */
+function plantLock(dir: string, contents: string): string {
+  const lock = lockPathFor(dir);
+  writeFileSync(lock, contents);
+  return lock;
+}
+
+/** A PID that is certainly not running: spawned, awaited, then its PID reused. */
+function deadPid(): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    child.on("close", () => resolve(child.pid as number));
+  });
+}
+
 type Run = { code: number | null; out: string };
 
 function runStart(
@@ -59,9 +102,11 @@ function runStart(
 ): Promise<Run> {
   const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
   // Exercise the DEFAULT as genuinely unset, not as whatever the ambient
-  // environment happens to carry — otherwise a machine with START_AUTOBUILD=1
-  // exported would run real `next build`s from the test suite.
+  // environment happens to carry — otherwise a machine with START_AUTOBUILD
+  // exported would not be testing the default at all.
   if (!("START_AUTOBUILD" in env)) delete childEnv.START_AUTOBUILD;
+  // Keep every "wait for the other builder" case fast, regardless of ambient env.
+  if (!("START_BUILD_WAIT_MS" in env)) childEnv.START_BUILD_WAIT_MS = "1500";
 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT, ...args], {
@@ -74,7 +119,7 @@ function runStart(
     let out = "";
     child.stdout.on("data", (d) => (out += d.toString()));
     child.stderr.on("data", (d) => (out += d.toString()));
-    // Safety net: the wrapper must exit on its own in both scenarios.
+    // Safety net: the wrapper must exit on its own in every scenario here.
     const timer = setTimeout(() => child.kill("SIGKILL"), 25_000);
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -106,26 +151,129 @@ function freePort(): Promise<number> {
   });
 }
 
-describe("scripts/start.mjs", () => {
-  it("fails fast and explains when there is no production build", async () => {
+describe("scripts/start.mjs — missing production build", () => {
+  it("builds instead of refusing, so the port always ends up served", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+    // Park the wrapper behind a live builder so the DEFAULT path is observable
+    // without paying for a real `next build`. The vitest process is a
+    // guaranteed-alive lock holder.
+    plantLock(dir, JSON.stringify({ pid: process.pid }));
+
+    const { out } = await runStart(dir, ["-p", String(port)]);
+
+    // The old contract — refuse and tell the operator to build — must NOT be
+    // what happens by default any more.
+    expect(out).not.toMatch(/START_AUTOBUILD=0;/);
+    expect(out).toMatch(/waiting for it to finish/);
+  }, 30_000);
+
+  it("fails fast and explains when autobuild is explicitly opted out", async () => {
     const dir = makeProjectDir(false);
     const port = await freePort();
 
-    const { code, out } = await runStart(dir, ["-p", String(port)]);
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
 
     expect(code).toBe(1);
     expect(out).toMatch(/No production build found/);
     expect(out).toMatch(/BUILD_ID/);
     // It must name the remedy, not just the symptom.
     expect(out).toMatch(/npm run build/);
-    // And it must REPORT the missing build rather than build one behind the
-    // operator's back: an implicit `next build` wipes `.next` first, so it
-    // destroys the output of any build/smoke/e2e run sharing that directory —
-    // which then fails somewhere unrelated (a prerender whose
-    // `.next/server/pages-manifest.json` disappeared mid-build).
+    // Opting out must genuinely not build.
     expect(existsSync(path.join(dir, ".next", "BUILD_ID"))).toBe(false);
   }, 30_000);
 
+  it("detects a .next directory that has no BUILD_ID as 'no build'", async () => {
+    const dir = makeProjectDir(false);
+    // An interrupted build, or a `.next` left by `next dev`: directory present,
+    // BUILD_ID absent. `next start` rejects this, so the wrapper must catch it.
+    mkdirSync(path.join(dir, ".next"), { recursive: true });
+    const port = await freePort();
+
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
+
+    expect(code).toBe(1);
+    expect(out).toMatch(/No production build found/);
+  }, 30_000);
+});
+
+describe("scripts/start.mjs — concurrent-build lock", () => {
+  it("waits for a live builder rather than starting a competing build", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+    const lock = plantLock(dir, JSON.stringify({ pid: process.pid }));
+
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
+
+    expect(out).toMatch(new RegExp(`Another process \\(PID ${process.pid}\\) is building`));
+    // Bounded: an unbounded wait would reintroduce the hang being fixed.
+    expect(out).toMatch(/Timed out after/);
+    expect(code).toBe(1);
+    // A live holder's lock must be left strictly alone.
+    expect(JSON.parse(readFileSync(lock, "utf8")).pid).toBe(process.pid);
+  }, 30_000);
+
+  it("waits even when BUILD_ID exists, since a build in flight rewrites it", async () => {
+    // The race this pins: `next build` writes BUILD_ID BEFORE the manifests
+    // `next start` opens, so a start that trusts BUILD_ID while a build is live
+    // launches and dies on a missing `.next/prerender-manifest.json`. Observed,
+    // not theorised. Only the lock's release means "finished".
+    const dir = makeProjectDir(true);
+    const port = await freePort();
+    plantLock(dir, JSON.stringify({ pid: process.pid }));
+
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
+
+    expect(out).toMatch(/is building/);
+    expect(out).toMatch(/Timed out after/);
+    expect(code).toBe(1);
+  }, 30_000);
+
+  it("reclaims a lock whose owner died, so a killed build cannot wedge later starts", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+    const pid = await deadPid();
+    plantLock(dir, JSON.stringify({ pid }));
+
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
+
+    expect(out).toMatch(new RegExp(`Reclaiming stale build lock from dead PID ${pid}`));
+    // Having reclaimed it, it reaches the real decision instead of waiting out
+    // a build that is never coming.
+    expect(out).toMatch(/No production build found/);
+    expect(out).not.toMatch(/Timed out after/);
+    expect(code).toBe(1);
+  }, 30_000);
+
+  it("removes an unreadable lock instead of spinning on it forever", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+    // A writer killed between creating and writing the lock leaves it empty:
+    // unparseable, yet still blocking every atomic create that follows. Without
+    // reclaiming it the wrapper would busy-spin (EEXIST vs unreadable) forever.
+    plantLock(dir, "");
+
+    const { code, out } = await runStart(dir, ["-p", String(port)], {
+      START_AUTOBUILD: "0",
+    });
+
+    expect(out).toMatch(/Removing unreadable build lock/);
+    expect(out).toMatch(/No production build found/);
+    expect(code).toBe(1);
+  }, 30_000);
+});
+
+describe("scripts/start.mjs — occupied port", () => {
   it("refuses to start onto a port another process already holds", async () => {
     const dir = makeProjectDir(true);
     const port = await freePort();
@@ -138,18 +286,5 @@ describe("scripts/start.mjs", () => {
     expect(out).toMatch(new RegExp(`Port ${port} is already in use`));
     // The danger is silently probing a server on an older build — say so.
     expect(out).toMatch(/older build/);
-  }, 30_000);
-
-  it("detects a .next directory that has no BUILD_ID as 'no build'", async () => {
-    const dir = makeProjectDir(false);
-    // An interrupted build, or a `.next` left by `next dev`: directory present,
-    // BUILD_ID absent. `next start` rejects this, so the wrapper must catch it.
-    mkdirSync(path.join(dir, ".next"), { recursive: true });
-    const port = await freePort();
-
-    const { code, out } = await runStart(dir, ["-p", String(port)]);
-
-    expect(code).toBe(1);
-    expect(out).toMatch(/No production build found/);
   }, 30_000);
 });

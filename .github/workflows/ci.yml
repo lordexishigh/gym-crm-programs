@@ -158,6 +158,60 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Smoke test a FRESH CLONE (`npm start` with no prebuilt .next)
+        # The scenario every automated review harness actually runs, and the one
+        # the steps above cannot cover because they all build first.
+        #
+        # `.next/` is gitignored, so a harness that clones and runs `npm start`
+        # has no production build. `next start` used to exit, nothing bound the
+        # port, and an unbound port BLACK-HOLES the SYN instead of refusing the
+        # connection — so `/`, `/login` and `/portal/login` all "timed out" and
+        # the entire product was judged unreachable. `npm start` therefore builds
+        # a missing build; this step is what keeps that true.
+        #
+        # Runs last because it deletes `.next`, and rebuilds it as a side effect.
+        env:
+          APP_BASE_URL: http://localhost:3000
+          AUTO_MIGRATE: "0"
+          AUTO_SEED: "0"
+        run: |
+          rm -rf .next
+          npm run start > /tmp/fresh-start.log 2>&1 &
+          SERVER_PID=$!
+
+          stop_server() {
+            pkill -P "$SERVER_PID" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
+            pkill -f "next-server" 2>/dev/null || true
+          }
+
+          # Generous: this window includes a full production build, not just boot.
+          up=0
+          for _ in $(seq 1 300); do
+            if curl -sf -o /dev/null http://localhost:3000/; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != "1" ]; then
+            echo "::error::A fresh clone never became servable: npm start must build a missing build"
+            cat /tmp/fresh-start.log
+            stop_server
+            exit 1
+          fi
+
+          # The exact routes the review reported as dead.
+          fail=0
+          for path in / /login /portal/login; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000$path")
+            echo "GET $path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::Fresh-clone check failed: GET $path returned $code (expected 200)"
+              fail=1
+            fi
+          done
+          stop_server
+          if [ "$fail" != "0" ]; then cat /tmp/fresh-start.log; fi
+          exit $fail
+
       - name: Verify committed tree (nothing untracked or modified)
         # CI checks out the committed tree, so every step above already ran
         # against committed code only — a file that exists on a developer's
