@@ -77,6 +77,37 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fail fast, and by NAME, when a deploy secret is missing.
+      #
+      # Without this the job still fails, but far downstream and with an error
+      # that describes a symptom rather than the cause: an unset
+      # PRODUCTION_DATABASE_URL reaches the migrate step as an EMPTY string, so
+      # the runner reports "No connection string: set MIGRATE_DATABASE_URL or
+      # DATABASE_URL" — which reads like a bug in the migration script rather
+      # than an unconfigured repository secret. Every Deploy run failed that way
+      # for weeks while the code looked fine, so the live app silently froze
+      # while `master` moved on. Naming the missing secret up front makes the
+      # remedy obvious and keeps a config gap from masquerading as a code defect.
+      - name: Check deploy secrets are configured
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          missing=""
+          for name in PRODUCTION_DATABASE_URL VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!name}" ]; then missing="$missing  - $name\n"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy secrets missing::Production deploy is not configured."
+            printf "Missing repository secret(s):\n%b" "$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            echo "Until then the live app stays on its last successful deploy."
+            exit 1
+          fi
+          echo "All four deploy secrets are present."
+
       # Migrations run automatically on every deploy. Idempotent: applies only
       # new migrations, so it is safe against an existing production database.
       - name: Run database migrations (production)
@@ -84,9 +115,12 @@ jobs:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: npm run migrate
 
-      # Single deploy path: Vercel Git auto-deploy is disabled
-      # (vercel.json git.deploymentEnabled.main = false) so only this CLI step
-      # deploys, guaranteeing the migration above runs before the build goes live.
+      # Single deploy path: Vercel Git auto-deploy is disabled for BOTH release
+      # branches (vercel.json git.deploymentEnabled.master/main = false) so only
+      # this CLI step deploys, guaranteeing the migration above runs before the
+      # build goes live. `master` is listed explicitly because it is this repo's
+      # actual default branch — disabling only `main` left the real release
+      # branch free to auto-deploy straight past the migration gate.
       - name: Deploy to Vercel (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
