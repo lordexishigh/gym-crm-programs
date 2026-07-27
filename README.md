@@ -33,6 +33,14 @@ run, and verify the project. Architecture is documented in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the build plan is in
 [`docs/PLAN.md`](docs/PLAN.md).
 
+`.next/` is not committed, so **build before serving** — `npm run build && npm start`.
+`npm start` checks this for you: rather than letting `next start` exit and leave
+the port unbound (which a browser behind a forwarded port or proxy experiences as
+every route hanging, not as a connection error), it reports the missing build and
+what to run. It also refuses to start onto a port another process already holds,
+naming that process, so a run can never quietly probe an orphaned server that is
+still serving an older build.
+
 ### Demo accounts
 
 Alpha CRM has no public signup — members are invite-only and staff are

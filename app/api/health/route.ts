@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
@@ -32,6 +33,29 @@ function probeBudgetMs(): number {
   const raw = Number(process.env.HEALTH_DB_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3_000;
 }
+
+/**
+ * Identity of the process answering this probe.
+ *
+ * A port can outlive the run that opened it: an orphaned server from an earlier
+ * start keeps listening and keeps answering 200, so a smoke check, an e2e run or
+ * a human browsing can all be talking to a process that is serving a DIFFERENT,
+ * older build than the one just deployed — and every conclusion drawn from it is
+ * about stale code. `build_id` changes with every `next build`, so comparing it
+ * against the expected build (or simply against a second probe) makes that
+ * situation visible instead of silent; `pid` and `started_at` distinguish two
+ * servers that share a build.
+ */
+const BOOT_TIME = Date.now();
+
+const BUILD_ID: string = (() => {
+  try {
+    return readFileSync(".next/BUILD_ID", "utf8").trim() || "unknown";
+  } catch {
+    // `next dev`, or a deploy target that does not ship the file — not an error.
+    return process.env.VERCEL_DEPLOYMENT_ID || "unknown";
+  }
+})();
 
 type DbProbe = { state: "up" | "down"; latencyMs: number; error?: string };
 
@@ -85,6 +109,13 @@ export async function GET() {
       ...(db.error ? { db_error: db.error } : {}),
       email,
       time: new Date().toISOString(),
+      // Which process/build is actually answering — see BUILD_ID above.
+      instance: {
+        pid: process.pid,
+        build_id: BUILD_ID,
+        started_at: new Date(BOOT_TIME).toISOString(),
+        uptime_s: Math.round((Date.now() - BOOT_TIME) / 1000),
+      },
     },
     {
       status: ok ? 200 : 503,
