@@ -18,8 +18,12 @@ source. See [`.env.example`](../.env.example) for the full list.
 | `RESEND_WEBHOOK_SECRET` | Vercel (server-only) | Verifies inbound Resend bounce/complaint webhooks (`whsec_...`). |
 | `MONITORING_WEBHOOK_URL` / `ALERT_WEBHOOK_URL` | Vercel (server-only) | Optional. Error-monitoring sink + critical-alert sink (see Observability). |
 
-In CI/CD these live in GitHub repository **secrets** (`PRODUCTION_DATABASE_URL`,
-`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`).
+In CI/CD these live in GitHub repository **secrets**. The Deploy workflow needs
+`DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the daily
+membership-expiry job additionally needs `RESEND_API_KEY` and `INVITE_FROM_EMAIL`.
+Keep the secret names identical to the variable names above — the provisioner
+mirrors `.env.local` into Actions secrets by name, so a CI-only alias (there was a
+`PRODUCTION_DATABASE_URL` here) is a secret nothing can ever populate.
 
 ## Database migrations
 

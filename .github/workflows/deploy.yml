@@ -3,10 +3,20 @@ name: Deploy
 # Deploys the app from main and runs DB migrations against the production
 # (Supabase, EU) database before the new build goes live. Requires these
 # repository secrets to be configured (never stored in source):
-#   PRODUCTION_DATABASE_URL  - Supabase Postgres connection string (EU region)
-#   VERCEL_TOKEN             - Vercel deploy token
-#   VERCEL_ORG_ID            - Vercel org id
-#   VERCEL_PROJECT_ID        - Vercel project id
+#   DATABASE_URL    - Supabase Postgres connection string (EU region)
+#   VERCEL_TOKEN    - Vercel deploy token
+#   VERCEL_ORG_ID   - Vercel org id
+#   VERCEL_PROJECT_ID - Vercel project id
+#
+# The production connection string is `DATABASE_URL`, not `PRODUCTION_DATABASE_URL`.
+# The name matters: it is the one the provisioner writes to .env.local and can
+# therefore mirror into this repo's Actions secrets by itself. Under the old name
+# nothing on either side could ever supply it — the provisioner has no value under
+# that key and never will — so every Deploy run failed the gate below, eight in a
+# row, and the escalation repeated daily with no way to act on it. There is only
+# one database for this project; the "PRODUCTION_" prefix distinguished it from
+# nothing. The `test` job's own DATABASE_URL is a job-level literal pointing at a
+# throwaway service container and never reads this secret.
 
 on:
   push:
@@ -81,7 +91,7 @@ jobs:
       #
       # Without this the job still fails, but far downstream and with an error
       # that describes a symptom rather than the cause: an unset
-      # PRODUCTION_DATABASE_URL reaches the migrate step as an EMPTY string, so
+      # DATABASE_URL reaches the migrate step as an EMPTY string, so
       # the runner reports "No connection string: set MIGRATE_DATABASE_URL or
       # DATABASE_URL" — which reads like a bug in the migration script rather
       # than an unconfigured repository secret. Every Deploy run failed that way
@@ -90,13 +100,13 @@ jobs:
       # remedy obvious and keeps a config gap from masquerading as a code defect.
       - name: Check deploy secrets are configured
         env:
-          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           missing=""
-          for name in PRODUCTION_DATABASE_URL VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+          for name in DATABASE_URL VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
             if [ -z "${!name}" ]; then missing="$missing  - $name\n"; fi
           done
           if [ -n "$missing" ]; then
@@ -112,7 +122,7 @@ jobs:
       # new migrations, so it is safe against an existing production database.
       - name: Run database migrations (production)
         env:
-          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate
 
       # Single deploy path: Vercel Git auto-deploy is disabled for BOTH release
