@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-75%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-72%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 75/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 72/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 70 | `██████████████░░░░░░` |
-| Code quality | 80 | `████████████████░░░░` |
-| Robustness & error handling | 78 | `████████████████░░░░` |
-| Builds & tests | 82 | `████████████████░░░░` |
-| UX & design | 65 | `█████████████░░░░░░░` |
+| Spec coverage | 72 | `██████████████░░░░░░` |
+| Code quality | 83 | `█████████████████░░░` |
+| Robustness & error handling | 68 | `██████████████░░░░░░` |
+| Builds & tests | 76 | `███████████████░░░░░` |
+| UX & design | 60 | `████████████░░░░░░░░` |
 
 ## Readiness checks
 
@@ -23,10 +23,11 @@
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
 - ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
-- ✅ Rate limiting — rate limiting present on the API
+- ⚠️ Rate limiting — auth endpoints have no rate limiting — credential brute-force and abuse are unprotected
 
 **Quality**
 - ✅ Automated tests — test files present
+- ✅ No stub/placeholder code — no stub markers found
 - ✅ Dependencies pinned — lockfile/requirements present
 - ✅ License declared — license present
 - ✅ Builds & tests pass — final smoke test passed
@@ -42,22 +43,22 @@
 
 ## Strengths
 
-- Adversarial cross-tenant isolation test in test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and probes every tenanted table for SELECT/UPDATE/DELETE/forged-INSERT leakage — this is a genuinely thorough security backstop, not a spot-check.
-- Production-grade observability stack: health probe returns 503 with per-dependency breakdown, instrumentation.ts wires onRequestError globally so uncaught server errors are captured without per-call instrumentation, and auth calls have bounded timeouts with regression tests.
-- Feature surface substantially exceeds the spec: Stripe billing, class scheduling with waitlist auto-promotion, QR/PIN check-in, GDPR export/erasure, workout logs, and membership plan tiers are all wired up with migrations, lib modules, and UI — the product is closer to a full gym CRM than a bare MVP.
-- 18 sequential, idempotent migrations with a schema_migrations guard give the schema a clear, auditable evolution history from blank to full feature set.
+- Multi-tenant isolation is adversarially verified: test/isolation-comprehensive.test.ts seeds two conflicting tenants, probes every tenanted table for cross-SELECT/UPDATE/DELETE/forged-INSERT, and drives the real withTenantContext + app_user RLS path — not a mock.
+- Auth design is unusually careful: no @supabase/supabase-js dependency, GoTrue called over raw fetch with an explicit AbortSignal budget, JWT claims always re-verified server-side via lib/identity.ts, and test/auth-client.test.ts pins the bounded-wait contract against the pathological 'never-responds' case.
+- The build substantially exceeds the spec scope with genuinely wired features: Stripe payment events, class scheduling with waitlist auto-promotion (lib/classes.ts), QR/PIN check-in, GDPR right-to-erasure (lib/gdpr/export.ts, 18 KB), and per-tenant exercise library — none of these are stubs.
+- Test coverage is broad and purposeful: 239 tests including accessibility (axe-core via test/a11y.test.ts), a start-wrapper smoke test that builds and probes the assembled product, e2e invite-flow spec, and GDPR schema tests — all wired into CI.
 
 ## To improve
 
-- The product walkthrough shows /login and /portal/login timing out even though test/start-wrapper.test.ts passes — add a /api/health readiness poll inside scripts/start.mjs so the process does not signal readiness until the Next.js HTTP server is actually accepting connections on the port, preventing the QA crawler from racing against boot.
-- 2 high-severity vulnerabilities in next and sharp are still open per the automated readiness check — run npm audit fix (or pin next to the patched version listed in its advisory) and update sharp in the overrides block in package.json.
-- app/dashboard/members/actions.ts at 18,522 bytes combines invite dispatch, GDPR anonymisation/export, status-history writes, and check-in PIN generation in one file — split the GDPR actions into app/dashboard/members/gdpr-actions.ts and the invite actions into invite-actions.ts to restore single-responsibility and keep individual files reviewable.
-- The a11y readiness check still flags 1 img without alt text — locate the element (likely in app/portal/ProgramView.tsx or app/dashboard/exercises/ExerciseLibraryGrid.tsx where exercise images are rendered) and add a descriptive alt attribute, then add that component to the rendering surface covered by test/a11y.test.ts.
-- Bulk member CSV import is absent and flagged as a hard adoption blocker in the market-fit check — add a dashboard route app/dashboard/members/import/page.tsx with a server action that parses a uploaded CSV, previews the parsed rows, and bulk-inserts via withTenantContext so gyms migrating from incumbents do not have to hand-enter every record.
+- The member portal (/portal/login and /portal/*) times out on every request in the running product despite passing unit tests — trace why app/portal/login/page.tsx or its underlying Server Action (app/portal/login/actions.ts) hangs in the assembled build; the start-wrapper test passes in isolation but the full walkthrough disagrees, suggesting a middleware or environment-variable resolution failure that only manifests under next start.
+- Auth endpoints (/login and /portal/login) have no rate limiting — add a sliding-window counter in middleware.ts (keyed on IP + pathname) so credential brute-force is blocked before it reaches the GoTrue token endpoint; the readiness check flags this as an open attack surface.
+- Two high-severity dependency vulnerabilities remain unpatched (next and sharp flagged in the readiness WARN) — run npm audit fix or pin to the patched versions in package.json now; both have available fixes per the audit output.
+- One <img> element is missing an alt attribute (readiness WARN, carried across multiple rounds) — grep for <img without alt across app/portal/ and app/dashboard/ components, add a descriptive alt, and extend test/a11y.test.ts to render that surface so the regression is guarded.
+- The staff login page has no forgot-password link and no visible error state for wrong credentials — add a /login/forgot-password route handler that calls GoTrue's password-reset endpoint and surface a link beneath the Sign in button in app/login/page.tsx so locked-out users have a recovery path.
 
 ## Summary
 
-The codebase is impressively complete — all 8 spec features are implemented with real code, RLS is enforced and adversarially tested, and the feature surface exceeds the spec significantly — but the product walkthrough could not confirm any authenticated flow because both auth entry points timed out at runtime, leaving the assembled product's usability unverified and dragging the overall score; fixing the startup-readiness race and the two open dependency vulnerabilities are the highest-leverage next steps.
+Technically a strong build: all spec features are genuinely implemented (not stubbed), multi-tenant RLS is adversarially tested, auth hardening is thoughtful, and the scope far exceeds the original brief — but the member portal, the product's stated differentiator, times out on every runtime request despite passing unit tests, auth endpoints are unprotected against brute-force, and two high-severity dependency vulnerabilities remain open, leaving the assembled product not ready for first use.
 
 ---
-_Scored 2026-07-27 17:08 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-30 01:23 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
