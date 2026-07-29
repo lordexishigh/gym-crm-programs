@@ -2,6 +2,17 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-30 01:24 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 39.9 min · subscription (unmetered)
+- Score: 75 → 75
+- Product gaps: 5 → 5
+- Effort mix: product ×5, judge ×2, market ×1
+- Round(s) 1 made the product WORSE and were auto-reverted — that work had negative value; their items need a different approach.
+- 75% of the session's 39.9 min went to one stage: change (29.9 min). That's the coding agent itself — smaller batches (NOUS_IMPROVE_BATCH) and fewer features per round (NOUS_IMPROVE_FEATURES) land more of it.
+- Round(s) 1 landed some of their changes and not others — the rejected ones stay open and come back next round (before batching, one rejection threw away the whole round).
+- 5 issue(s) were never started — the round budget (NOUS_IMPROVE_ROUND_MINUTES) ran out first.
+
 ## 2026-07-27 13:25 — manual session
 
 - Rounds: 1 (1 approved, 0 rejected) · 34.4 min · subscription (unmetered)

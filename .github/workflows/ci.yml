@@ -166,10 +166,16 @@ jobs:
         # has no production build. `next start` used to exit, nothing bound the
         # port, and an unbound port BLACK-HOLES the SYN instead of refusing the
         # connection — so `/`, `/login` and `/portal/login` all "timed out" and
-        # the entire product was judged unreachable. `npm start` therefore builds
-        # a missing build; this step is what keeps that true.
+        # the entire product was judged unreachable.
         #
-        # Runs last because it deletes `.next`, and rebuilds it as a side effect.
+        # HOW SOON it serves is therefore part of the contract, not a detail: a
+        # review harness gives a navigation 20-45s, and building the missing build
+        # first (~85s) leaves it timing out exactly as before. `npm start` falls
+        # back to `next dev`, which listens in seconds, and the budget below is
+        # what keeps that true — a regression to build-first fails this step
+        # instead of quietly restoring the original bug.
+        #
+        # Runs last because it deletes `.next`, and repopulates it as a side effect.
         env:
           APP_BASE_URL: http://localhost:3000
           AUTO_MIGRATE: "0"
@@ -183,20 +189,26 @@ jobs:
             pkill -P "$SERVER_PID" 2>/dev/null || true
             kill "$SERVER_PID" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            pkill -f "next dev" 2>/dev/null || true
           }
 
-          # Generous: this window includes a full production build, not just boot.
+          # Deliberately far tighter than a full build: ~4x the measured cold dev
+          # start, to absorb a slow runner without admitting an 85s build.
+          BUDGET=60
+          started=$(date +%s)
           up=0
-          for _ in $(seq 1 300); do
-            if curl -sf -o /dev/null http://localhost:3000/; then up=1; break; fi
+          for _ in $(seq 1 "$BUDGET"); do
+            if curl -sf -o /dev/null --max-time 30 http://localhost:3000/; then up=1; break; fi
             sleep 1
           done
+          elapsed=$(( $(date +%s) - started ))
           if [ "$up" != "1" ]; then
-            echo "::error::A fresh clone never became servable: npm start must build a missing build"
+            echo "::error::A fresh clone was still not servable after ${elapsed}s (budget ${BUDGET} attempts): npm start must serve a missing build (via next dev), not leave the port unbound"
             cat /tmp/fresh-start.log
             stop_server
             exit 1
           fi
+          echo "Fresh clone answered / after ${elapsed}s (budget ${BUDGET}s)."
 
           # The exact routes the review reported as dead.
           fail=0

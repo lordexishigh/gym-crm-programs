@@ -34,12 +34,18 @@ run, and verify the project. Architecture is documented in
 [`docs/PLAN.md`](docs/PLAN.md).
 
 `.next/` is not committed, so **build before serving** — `npm run build && npm start`.
-`npm start` checks this for you: rather than letting `next start` exit and leave
-the port unbound (which a browser behind a forwarded port or proxy experiences as
-every route hanging, not as a connection error), it reports the missing build and
-what to run. It also refuses to start onto a port another process already holds,
-naming that process, so a run can never quietly probe an orphaned server that is
-still serving an older build.
+`npm start` stays usable if you forget. Plain `next start` would exit and leave the
+port unbound, and a client reaching it through a forwarded port, container or proxy
+does not get a connection error for an unbound port — the SYN is black-holed, so
+every route simply hangs and the whole product reads as unreachable. Building first
+is no better from the outside: it takes ~85s here, and the port is unbound for all
+of them. So a missing build falls back to **`next dev`**, which is listening in
+seconds and serves the real pages (more slowly), announced loudly on startup;
+`/`, `/login` and `/portal/login` are precompiled straight away so the first visit
+doesn't pay for it. Set `START_AUTOBUILD=0` to make a missing build a hard failure
+instead. `npm start` also refuses to start onto a port another process already
+holds, naming that process, so a run can never quietly probe an orphaned server
+that is still serving an older build.
 
 ### Demo accounts
 

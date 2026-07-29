@@ -26,19 +26,24 @@ import { afterEach, describe, expect, it } from "vitest";
  * time out (45s)", "both landing-page entry points are dead", "no fallback when
  * auth routes fail") — all the same missing build.
  *
- * A MISSING BUILD IS THEREFORE BUILT, not merely reported. Reporting it — the
- * previous contract, which these tests used to pin — does nothing for the caller
- * that actually matters: a browser or probe pointed at that port waits out its
- * whole budget either way, because refusing to serve and hanging are the same
- * observable event. `.next/` is gitignored, so any harness that clones and runs
- * `npm start` hits this every time.
+ * A MISSING BUILD IS THEREFORE SERVED ANYWAY, not merely reported. Reporting it
+ * does nothing for the caller that actually matters: a browser or probe pointed
+ * at that port waits out its whole budget either way, because refusing to serve
+ * and hanging are the same observable event. `.next/` is gitignored, so any
+ * harness that clones and runs `npm start` hits this every time.
  *
- * What made building unsafe was concurrency, not building: `next build` DELETES
- * `.next` before writing, so two builds in one directory corrupt each other. A
- * lock now elects one builder while other starts wait for it, and the tests
- * below pin that protocol. They never run a real `next build`: each either opts
- * out (START_AUTOBUILD=0) or parks the wrapper behind a live lock, so the suite
- * stays fast and touches no real build.
+ * Nor is BUILDING the repair, which is what these tests used to pin: `next build`
+ * takes ~85s on this project and the port is unbound for every one of those
+ * seconds, so the timeout the caller sees is unchanged. The fallback is `next dev`
+ * — listening in ~8s, serving the real pages — announced loudly, and skipped
+ * entirely whenever a production build exists.
+ *
+ * The one hazard shared by both is concurrency: `next build` DELETES `.next`
+ * before writing, and the dev server writes there too, so two of them in one
+ * directory corrupt each other. A lock elects one owner while other starts wait,
+ * and the tests below pin that protocol. They never run a real build: each either
+ * opts out (START_AUTOBUILD=0) or parks the wrapper behind a live lock, so the
+ * suite stays fast and touches no real `.next`.
  *
  * Isolation: every case runs in a fresh temp dir. The wrapper derives its lock
  * path from a hash of the working directory, so these runs cannot disturb a real
@@ -152,20 +157,74 @@ function freePort(): Promise<number> {
 }
 
 describe("scripts/start.mjs — missing production build", () => {
-  it("builds instead of refusing, so the port always ends up served", async () => {
+  it("serves with `next dev` instead of refusing, so the port answers in seconds", async () => {
     const dir = makeProjectDir(false);
     const port = await freePort();
-    // Park the wrapper behind a live builder so the DEFAULT path is observable
-    // without paying for a real `next build`. The vitest process is a
-    // guaranteed-alive lock holder.
+
+    const { out } = await runStart(dir, ["-p", String(port)]);
+
+    // The default must be to serve, and to say so.
+    expect(out).toMatch(/No production build found/);
+    expect(out).toMatch(/serving with `next dev`/);
+    // The old contract — refuse and tell the operator to build — must NOT be
+    // what happens by default any more.
+    expect(out).not.toMatch(/START_AUTOBUILD=0;/);
+    // Dev mode is a stand-in, never silent about it.
+    expect(out).toMatch(/DEVELOPMENT server/);
+  }, 30_000);
+
+  it("does not build first, because the port stays unbound for the whole build", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+
+    const { out } = await runStart(dir, ["-p", String(port)]);
+
+    // A build would take ~85s here; the reported symptom (every route times out)
+    // is identical while it runs, so this path must not choose it.
+    expect(out).not.toMatch(/running `next build` first/);
+    // ...and must explain the trade-off it made instead.
+    expect(out).toMatch(/UNBOUND/);
+  }, 30_000);
+
+  it("prefers Turbopack, and retries on webpack if it dies before serving", async () => {
+    // The temp dir has no `app`/`pages`, so `next dev` exits within seconds —
+    // which is exactly the "could not start" case the retry exists for. A
+    // Turbopack that cannot run on some host would otherwise reproduce the very
+    // failure this path prevents: nothing bound, every route timing out.
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+
+    const { out } = await runStart(dir, ["-p", String(port)]);
+
+    expect(out).toMatch(/Turbopack/);
+    expect(out).toMatch(/Retrying without Turbopack/);
+    // Two attempts, so the failure is reported twice by `next` itself.
+    expect(out.match(/Couldn't find any `pages` or `app` directory/g)?.length).toBe(2);
+  }, 40_000);
+
+  it("honours START_DEV_TURBOPACK=0 by not using Turbopack at all", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+
+    const { out } = await runStart(dir, ["-p", String(port)], {
+      START_DEV_TURBOPACK: "0",
+    });
+
+    expect(out).toMatch(/serving with `next dev`/);
+    expect(out).not.toMatch(/Turbopack/);
+  }, 40_000);
+
+  it("waits for a live owner of .next rather than serving on top of it", async () => {
+    const dir = makeProjectDir(false);
+    const port = await freePort();
+    // The vitest process is a guaranteed-alive lock holder, standing in for a
+    // concurrent build; the dev fallback writes `.next` too, so it must wait.
     plantLock(dir, JSON.stringify({ pid: process.pid }));
 
     const { out } = await runStart(dir, ["-p", String(port)]);
 
-    // The old contract — refuse and tell the operator to build — must NOT be
-    // what happens by default any more.
-    expect(out).not.toMatch(/START_AUTOBUILD=0;/);
     expect(out).toMatch(/waiting for it to finish/);
+    expect(out).not.toMatch(/serving with `next dev`/);
   }, 30_000);
 
   it("fails fast and explains when autobuild is explicitly opted out", async () => {

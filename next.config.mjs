@@ -19,6 +19,14 @@ const nextConfig = {
   compress: true,
   productionBrowserSourceMaps: false,
   poweredByHeader: false,
+
+  // `npm start` on a checkout with no production build serves with `next dev`
+  // instead, so the port answers in seconds rather than after an ~85s build
+  // (scripts/start.mjs explains why that matters). In that mode the dev server is
+  // standing in for the real one, and the floating dev-tools indicator would
+  // overlay every page of the product with a debug badge — so it is off for that
+  // mode only. Plain `npm run dev` does not set this and keeps the indicator.
+  ...(process.env.START_DEV_FALLBACK === "1" ? { devIndicators: false } : {}),
 };
 
 export default nextConfig;
