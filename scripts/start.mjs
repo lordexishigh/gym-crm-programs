@@ -36,17 +36,37 @@
  *      answering, so the run silently probes the wrong process and any result it
  *      produces is about stale code.
  *
- * This wrapper turns both into something deterministic: it refuses to start
- * without a usable production build, naming the remedy, and it refuses to hand
- * the port to `next start` when another process already holds it, naming that
- * process instead of failing anonymously.
+ *   3. THE COLD-START WINDOW. Building a missing build (mode 1) fixes the end
+ *      state but not the ~100s it takes to get there: for that entire window the
+ *      port is STILL unbound, so every request is still black-holed and the
+ *      product still reads as dead. Measured on a clean checkout of this repo:
+ *      `next build` takes ~98s, and a probe 12s in gets no connection at all.
+ *      That is exactly how it presents to a reviewer — `goto('/')` exceeding a
+ *      20s budget, `/login` and `/portal/login` exceeding 45s — even though
+ *      those three routes are PRERENDERED STATIC pages with no server-side work
+ *      that could possibly hang. Nothing was hanging; nothing was listening.
+ *
+ *      So the port is now bound BEFORE the slow work, by a small front-door
+ *      server that answers immediately with an honest "starting up" page (503 +
+ *      Retry-After) and then transparently proxies to the real server the moment
+ *      it is ready. A cold start is thus slow — which cannot be helped, a build
+ *      takes as long as it takes — but never silent. This matters because a hang
+ *      is strictly worse than a slow answer: it is indistinguishable from a
+ *      crash, it defeats every readiness probe, and it gives a caller nothing to
+ *      report except "unreachable".
+ *
+ * This wrapper turns all three into something deterministic: it builds a missing
+ * build rather than refusing to serve, it always answers on its port even while
+ * that build runs, and it refuses to hand the port to `next start` when another
+ * process already holds it, naming that process instead of failing anonymously.
  *
  * Everything here is dependency-free (node: builtins only) so it runs before any
  * install-time assumptions hold.
  */
 
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { createConnection, createServer } from "node:net";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -129,6 +149,28 @@ function resolveHost(argv) {
     if (inline) return inline[1];
   }
   return process.env.HOSTNAME || "0.0.0.0";
+}
+
+/**
+ * Drop any `-p/--port` and `-H/--hostname` from forwarded argv, keeping every
+ * other flag. Used when a front door holds the public port and the real server
+ * has to be moved to loopback: the caller's own port/host flags describe where
+ * the PRODUCT should be reachable, which is the front door's address now, so
+ * passing them through would put both listeners on the same port.
+ */
+function stripPortAndHost(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    // Separated form: skip the flag and the value that follows it.
+    if (arg === "-p" || arg === "--port" || arg === "-H" || arg === "--hostname") {
+      i += 1;
+      continue;
+    }
+    if (/^--port=/.test(arg) || /^--hostname=/.test(arg)) continue;
+    out.push(arg);
+  }
+  return out;
 }
 
 /**
@@ -420,6 +462,341 @@ function describePortHolder(port) {
   });
 }
 
+/* ---------------------------------------------------------------------------
+ * Front door — bind the port before the slow work, so a cold start is never a
+ * black hole. See failure mode 3 in the header comment.
+ * ------------------------------------------------------------------------- */
+
+/** What we tell a client to wait before retrying while the build runs. */
+const WARMUP_RETRY_SECONDS = 3;
+
+/**
+ * Ceiling on how long to wait for `next start` to begin listening once a build
+ * exists. Finite for the usual reason: an unbounded wait is the hang being
+ * removed. `next start` normally binds in about a second.
+ */
+const READY_WAIT_MS = Number(process.env.START_READY_WAIT_MS) || 120_000;
+
+/**
+ * The "starting up" page. Self-contained (no build output exists yet, so it can
+ * use neither Tailwind nor the app's stylesheet) but it declares the same tokens
+ * as app/globals.css so the dark surfaces and emerald accent match the real UI
+ * rather than flashing an unstyled white page.
+ *
+ * `<meta http-equiv="refresh">` matters as much as the styling: a human who
+ * opened the app during a cold start lands on the real page on their own,
+ * without having to guess when to reload.
+ */
+const WARMING_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="${WARMUP_RETRY_SECONDS}">
+<title>Starting up — Alpha CRM</title>
+<style>
+  :root {
+    --page: #0a0e17;
+    --surface: #151c2b;
+    --border: #29344c;
+    --brand: #047857;
+    --brand-text: #34d399;
+    --text: #e8ecf4;
+    --text-muted: #9aa6bd;
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 24px;
+    background: var(--page); color: var(--text); font-family: var(--font-sans);
+  }
+  .card {
+    width: 100%; max-width: 26rem; display: flex; flex-direction: column;
+    align-items: center; gap: 16px; text-align: center;
+    padding: 32px 24px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  }
+  .logo {
+    display: flex; align-items: center; justify-content: center;
+    height: 36px; width: 36px; border-radius: 8px;
+    background: var(--brand); color: #fff; font-weight: 700; font-size: 16px;
+  }
+  h1 { margin: 0; font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+  p { margin: 0; font-size: 0.875rem; line-height: 1.5; color: var(--text-muted); }
+  .spinner {
+    height: 20px; width: 20px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--brand-text);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+</style>
+</head>
+<body>
+  <main class="card">
+    <span class="logo" aria-hidden="true">A</span>
+    <div class="spinner" role="status" aria-label="Starting up"></div>
+    <h1>Starting up</h1>
+    <p>
+      Alpha CRM is compiling its production build. This happens once, on a first
+      start, and takes a minute or two. This page refreshes itself — no need to
+      reload.
+    </p>
+  </main>
+</body>
+</html>
+`;
+
+/** Headers that describe a single hop and must never be forwarded onward. */
+const HOP_BY_HOP = [
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
+/**
+ * Headers to send upstream: the client's own, minus the hop-by-hop ones, plus
+ * standard reverse-proxy provenance.
+ *
+ * `x-forwarded-host` is not optional here. Without it Next builds absolute URLs
+ * from the address it is itself listening on — the loopback port behind this
+ * proxy — so middleware's redirect to /login came back as
+ * `Location: http://localhost:<loopback-port>/login`. Any client that is not on
+ * this machine (a forwarded port, a container, a reviewer's browser) cannot reach
+ * that address, so the entire auth wall would bounce visitors somewhere dead.
+ * Observed while verifying this change, not theorised.
+ *
+ * An existing chain is preserved rather than overwritten, which is what a
+ * well-behaved proxy does when it sits behind another one.
+ */
+function upstreamHeaders(req) {
+  const headers = { ...req.headers };
+  for (const name of HOP_BY_HOP) delete headers[name];
+  if (!headers["x-forwarded-host"] && req.headers.host) {
+    headers["x-forwarded-host"] = req.headers.host;
+  }
+  // The front door always terminates plain HTTP; a TLS terminator further out
+  // will already have set this, hence the guard.
+  if (!headers["x-forwarded-proto"]) headers["x-forwarded-proto"] = "http";
+  const remote = req.socket?.remoteAddress;
+  if (remote) {
+    headers["x-forwarded-for"] = headers["x-forwarded-for"]
+      ? `${headers["x-forwarded-for"]}, ${remote}`
+      : remote;
+  }
+  return headers;
+}
+
+/**
+ * Rewrite a `Location` that points at the internal server back to the public
+ * address the client actually used.
+ *
+ * Next constructs absolute redirect URLs using the port IT is listening on — the
+ * loopback port behind this proxy — and ignores `x-forwarded-host` when doing so.
+ * Middleware's auth-wall redirect therefore came back as
+ * `Location: http://localhost:<loopback-port>/login`, which no client outside
+ * this machine can follow: every visit to /dashboard or /portal would bounce to a
+ * dead address. Measured, then fixed here rather than guessed at.
+ *
+ * Only a Location whose port is exactly the internal one is touched, so genuine
+ * off-site redirects (Stripe checkout, an email link) are passed through
+ * untouched. This is the same correction Apache makes with `ProxyPassReverse`.
+ */
+function rewriteLocation(location, targetPort, publicHost) {
+  if (!location || !publicHost) return location;
+  let url;
+  try {
+    url = new URL(location);
+  } catch {
+    // Relative Location ("/login") needs no rewriting — the client resolves it
+    // against the public origin it already used.
+    return location;
+  }
+  if (url.port !== String(targetPort)) return location;
+  url.host = publicHost;
+  return url.toString();
+}
+
+/** Ask the OS for a free loopback port to run the real server on. */
+function freeLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/** Whether something is accepting connections on `port` right now. */
+function canConnect(port) {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: "127.0.0.1" });
+    const done = (value) => {
+      socket.destroy();
+      resolve(value);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(1_000, () => done(false));
+  });
+}
+
+/**
+ * Poll until the real server is listening. Returns false on timeout rather than
+ * waiting forever, so a server that dies during boot is reported instead of
+ * leaving the front door serving "starting up" indefinitely.
+ */
+async function waitForServer(port, budgetMs) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    if (await canConnect(port)) return true;
+    await delay(200);
+  }
+  return false;
+}
+
+/**
+ * A server that holds the public port for the whole process lifetime: it answers
+ * "starting up" until `pointAt` is called, and proxies to the real server after.
+ *
+ * Proxying rather than closing-and-rebinding is deliberate. Handing the port over
+ * would mean closing this listener and having `next start` bind it, and the gap
+ * between those two events is a window where the port is unbound again — the
+ * exact black hole this exists to close (and on Windows the rebind can also lose
+ * to a lingering socket). Instead the real server runs on loopback and this stays
+ * in front of it. It is only ever used on a cold start; when a build already
+ * exists (production, CI, any second start) `next start` binds the public port
+ * directly and no proxy is involved at all.
+ */
+function createFrontDoor(port, host) {
+  /** Loopback port of the real server, or null while still building. */
+  let target = null;
+  const sockets = new Set();
+
+  const respondWarming = (req, res) => {
+    const wantsHtml = String(req.headers.accept || "").includes("text/html");
+    const body = wantsHtml
+      ? WARMING_HTML
+      : `${JSON.stringify({ status: "starting", detail: "Building the production bundle." })}\n`;
+    // 503 is the honest status, and it keeps readiness probes correct: a caller
+    // that waits for a non-5xx (Playwright's `webServer.url`, a deploy gate, the
+    // CI smoke loop) must keep waiting rather than start testing this page.
+    res.writeHead(503, {
+      "Content-Type": wantsHtml
+        ? "text/html; charset=utf-8"
+        : "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Retry-After": String(WARMUP_RETRY_SECONDS),
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(req.method === "HEAD" ? undefined : body);
+  };
+
+  const proxy = (req, res, targetPort) => {
+    // `host` is passed through untouched on purpose: Next compares it against
+    // `origin` when validating Server Actions, so rewriting it here would break
+    // form submissions on the login pages. `x-forwarded-host` (see
+    // `upstreamHeaders`) is what tells Next the public address for redirects.
+    const headers = upstreamHeaders(req);
+    const upstream = httpRequest(
+      { host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers },
+      (upstreamRes) => {
+        const headers = { ...upstreamRes.headers };
+        if (headers.location) {
+          headers.location = rewriteLocation(headers.location, targetPort, req.headers.host);
+        }
+        res.writeHead(upstreamRes.statusCode ?? 502, headers);
+        upstreamRes.pipe(res);
+      },
+    );
+    upstream.on("error", (err) => {
+      console.error("[start] front door could not reach the server:", err.message);
+      if (!res.headersSent) {
+        res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+      }
+      res.end("The application server is not responding.\n");
+    });
+    req.on("error", () => upstream.destroy());
+    req.pipe(upstream);
+  };
+
+  const server = createHttpServer((req, res) => {
+    if (target === null) respondWarming(req, res);
+    else proxy(req, res, target);
+  });
+
+  // Proxy protocol upgrades too, so nothing is silently dropped on this path.
+  server.on("upgrade", (req, socket, head) => {
+    if (target === null) {
+      socket.destroy();
+      return;
+    }
+    const headers = upstreamHeaders(req);
+    const upstream = httpRequest({
+      host: "127.0.0.1",
+      port: target,
+      method: req.method,
+      path: req.url,
+      headers: { ...headers, connection: "Upgrade", upgrade: req.headers.upgrade || "" },
+    });
+    upstream.on("upgrade", (upstreamRes, upstreamSocket, upstreamHead) => {
+      const lines = Object.entries(upstreamRes.headers).map(([k, v]) => `${k}: ${v}`);
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\n${lines.join("\r\n")}\r\n\r\n`);
+      if (upstreamHead?.length) socket.unshift(upstreamHead);
+      upstreamSocket.pipe(socket).pipe(upstreamSocket);
+    });
+    upstream.on("error", () => socket.destroy());
+    if (head?.length) upstream.write(head);
+    upstream.end();
+  });
+
+  // Track live sockets so `close()` actually releases the port: an idle
+  // keep-alive connection would otherwise hold the listener open.
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  return {
+    listen: () =>
+      new Promise((resolve, reject) => {
+        const onError = (err) => reject(err);
+        server.once("error", onError);
+        const onListening = () => {
+          server.removeListener("error", onError);
+          // From here on an error must be logged, not thrown: an unhandled
+          // 'error' event would take the whole wrapper down mid-build.
+          server.on("error", (err) => {
+            console.error("[start] front door error:", err.message);
+          });
+          resolve();
+        };
+        if (host === "0.0.0.0" || host === "::") server.listen(port, onListening);
+        else server.listen(port, host, onListening);
+      }),
+    pointAt: (targetPort) => {
+      target = targetPort;
+    },
+    close: () => {
+      try {
+        server.close();
+        for (const socket of sockets) socket.destroy();
+      } catch {
+        /* shutting down anyway */
+      }
+    },
+  };
+}
+
 async function main() {
   // Everything after `--` (or any extra argv) is forwarded to `next start`.
   const forwarded = process.argv.slice(2).filter((a) => a !== "--");
@@ -431,26 +808,24 @@ async function main() {
   // This matters most for the build: `next build` rewrites `.next` from scratch,
   // so an orphaned one keeps mutating the directory long after the wrapper that
   // started it is gone, and breaks whatever command runs next.
+  /** The front door, once bound. Null whenever a build was already present. */
+  let frontDoor = null;
+
   const forward = (signal) => () => {
     if (activeChild && !activeChild.killed) activeChild.kill(signal);
     // If we were interrupted mid-autobuild we own the lock; drop it now so the
     // next start builds immediately instead of waiting on our dead PID.
     releaseBuildLock();
+    frontDoor?.close();
   };
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
 
-  // 1. Guarantee there is something to serve. A missing build is BUILT, because
-  //    exiting instead is indistinguishable to any client from a hung server —
-  //    an unbound port black-holes the SYN, so `/`, `/login` and `/portal/login`
-  //    all "time out" and the product reads as unreachable. Concurrency with
-  //    another build/e2e/smoke run using `.next` is handled by a lock rather
-  //    than by refusing to build. See `ensureProductionBuild`.
-  if (!(await ensureProductionBuild())) process.exit(1);
-
-  // 2. Refuse to start onto an occupied port. Without this the run would keep
-  //    talking to whatever is already there — usually an orphaned server from a
-  //    previous run, serving an older build.
+  // 1. Refuse to start onto an occupied port. Checked FIRST — before the build,
+  //    which is the expensive step — so a conflict is reported in milliseconds
+  //    instead of after a minute of work that is about to be thrown away.
+  //    Without this the run would keep talking to whatever is already there,
+  //    usually an orphaned server from a previous run serving an older build.
   if (await portInUse(port, host)) {
     const holder = await describePortHolder(port);
     console.error(
@@ -462,24 +837,86 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Hand off to `next start`. The signal handlers installed above now target
+  // 2. If serving is going to have to wait — for our own build or someone
+  //    else's — take the port NOW, before that wait begins. An unbound port
+  //    black-holes the SYN, so without this every request during the build hangs
+  //    until the client's own budget expires and the product reads as dead
+  //    (failure mode 3). The front door answers immediately instead.
+  if (!hasProductionBuild() || buildInFlight()) {
+    frontDoor = createFrontDoor(port, host);
+    try {
+      await frontDoor.listen();
+      console.log(
+        `[start] Listening on http://${host}:${port} with a "starting up" page ` +
+          "while the production build is prepared.",
+      );
+    } catch (err) {
+      // Not fatal: serving late is still better than not serving. Fall back to
+      // the plain path, where `next start` binds the port itself.
+      console.error(`[start] could not bind the front door (${err?.code || err}).`);
+      frontDoor = null;
+    }
+  }
+
+  // 3. Guarantee there is something to serve. A missing build is BUILT, because
+  //    exiting instead is indistinguishable to any client from a hung server.
+  //    Concurrency with another build/e2e/smoke run using `.next` is handled by
+  //    a lock rather than by refusing to build. See `ensureProductionBuild`.
+  if (!(await ensureProductionBuild())) {
+    frontDoor?.close();
+    process.exit(1);
+  }
+
+  // 4. Hand off to `next start`. The signal handlers installed above now target
   //    the server, so it is reaped on Ctrl-C / CI teardown instead of being
   //    orphaned onto the port.
-  const args = ["start", ...forwarded];
-  if (!forwarded.some((a) => a === "-p" || a === "--port" || a.startsWith("--port="))) {
-    args.push("-p", String(port));
+  //
+  //    With a front door holding the public port, the real server goes on
+  //    loopback behind it; otherwise it binds the public port directly, exactly
+  //    as before — the production path is unchanged and involves no proxy.
+  const args = ["start"];
+  let serverPort = port;
+  if (frontDoor) {
+    serverPort = await freeLoopbackPort();
+    args.push(...stripPortAndHost(forwarded), "-H", "127.0.0.1", "-p", String(serverPort));
+  } else {
+    args.push(...forwarded);
+    if (!forwarded.some((a) => a === "-p" || a === "--port" || a.startsWith("--port="))) {
+      args.push("-p", String(port));
+    }
   }
 
   const server = spawnNext(args);
 
   server.on("error", (err) => {
     console.error("[start] failed to launch `next start`:", err);
+    frontDoor?.close();
     process.exit(1);
   });
   server.on("close", (code, signal) => {
+    frontDoor?.close();
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
   });
+
+  // 5. Once the real server is up, put it behind the front door. Until this
+  //    happens the front door is still answering "starting up", so there is no
+  //    moment at which the port is silent.
+  if (frontDoor) {
+    if (await waitForServer(serverPort, READY_WAIT_MS)) {
+      frontDoor.pointAt(serverPort);
+      console.log(`[start] ready — serving the application on http://${host}:${port}`);
+    } else {
+      console.error(
+        `[start] the server did not start listening within ` +
+          `${Math.round(READY_WAIT_MS / 1000)}s; giving up rather than serving a ` +
+          `"starting up" page forever.`,
+      );
+      if (activeChild && !activeChild.killed) activeChild.kill("SIGTERM");
+      frontDoor.close();
+      process.exit(1);
+    }
+  }
 }
 
 main().catch((err) => {

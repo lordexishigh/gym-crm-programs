@@ -2,6 +2,14 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-27 17:08 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 153.3 min · subscription (unmetered)
+- Score: 77 → 75
+- Product gaps: 5 → 5
+- Effort mix: product ×5, market ×2, judge ×1
+- Round(s) 1 were approved but moved neither the score nor the gap count — likely mistargeted or cosmetic-only work.
+
 ## 2026-07-27 13:25 — manual session
 
 - Rounds: 1 (1 approved, 0 rejected) · 34.4 min · subscription (unmetered)

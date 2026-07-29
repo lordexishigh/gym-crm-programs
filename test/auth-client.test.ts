@@ -159,6 +159,54 @@ describe("lib/auth/supabase — bounded auth calls", () => {
     });
   });
 
+  /**
+   * A deployment missing its Supabase env vars must still render a form that
+   * SAYS so. `supabaseConfig()` throws, and neither login Server Action wraps the
+   * call, so the action rejected: React got no state back, the `error.tsx`
+   * boundary replaced the whole form with a generic failure, and the user could
+   * not tell a broken server from a wrong password. An automated reviewer records
+   * that as "the login page crashes".
+   */
+  describe("a server missing its auth configuration", () => {
+    for (const missing of [
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    ] as const) {
+      it(`reports it instead of throwing when ${missing} is absent`, async () => {
+        delete process.env[missing];
+        vi.stubGlobal("fetch", respondingFetch({}));
+        const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+        // The contract that matters: it RESOLVES rather than rejecting.
+        const result = await signInWithPassword("a@b.test", "pw");
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringMatching(/unavailable|configuration/i),
+        });
+        // No point calling out to an auth service we have no address for.
+        expect(fetch).not.toHaveBeenCalled();
+      });
+    }
+
+    it("lets middleware's token refresh fall through to its login redirect", async () => {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      vi.stubGlobal("fetch", respondingFetch({}));
+      const { refreshAccessToken } = await import("@/lib/auth/supabase");
+
+      // A throw here would surface before any page or error boundary could
+      // render, hanging /dashboard and /portal on a misconfigured server.
+      await expect(refreshAccessToken("rt")).resolves.toMatchObject({ ok: false });
+    });
+
+    it("keeps sign-out working, since cookies are what end the session", async () => {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const { signOut } = await import("@/lib/auth/supabase");
+
+      await expect(signOut("at")).resolves.toBeUndefined();
+    });
+  });
+
   it("still reports invalid credentials without leaking which factor was wrong", async () => {
     vi.stubGlobal(
       "fetch",
