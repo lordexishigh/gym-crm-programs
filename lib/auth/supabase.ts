@@ -110,36 +110,7 @@ async function postToken(
   grant: "password" | "refresh_token",
   payload: Record<string, string>,
 ): Promise<AuthResult> {
-  /*
-   * A MISCONFIGURED server must degrade visibly, not crash.
-   *
-   * `supabaseConfig()` throws when its env vars are absent, and neither login
-   * Server Action wraps this call — so the action REJECTED. React then had no
-   * returned state to render, the `error.tsx` boundary replaced the whole form
-   * with a generic "something went wrong", and the user could not tell a broken
-   * deployment from a wrong password. The same throw hit middleware's token
-   * refresh on every /dashboard and /portal request.
-   *
-   * Returning `ok: false` instead routes it through the path every caller
-   * already handles: the form shows a real message, and middleware falls through
-   * to its redirect-to-login. The operator detail goes to the log, not the page.
-   */
-  let url: string;
-  let publishableKey: string;
-  try {
-    ({ url, publishableKey } = supabaseConfig());
-  } catch (err) {
-    console.error(
-      "[auth] cannot reach the auth service:",
-      err instanceof Error ? err.message : err,
-    );
-    return {
-      ok: false,
-      error:
-        "Sign-in is unavailable: this server is missing its authentication configuration.",
-    };
-  }
-
+  const { url, publishableKey } = supabaseConfig();
   let res: Response;
   try {
     res = await fetch(`${url}/auth/v1/token?grant_type=${grant}`, {
