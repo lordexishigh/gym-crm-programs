@@ -39,13 +39,25 @@ port unbound, and a client reaching it through a forwarded port, container or pr
 does not get a connection error for an unbound port — the SYN is black-holed, so
 every route simply hangs and the whole product reads as unreachable. Building first
 is no better from the outside: it takes ~85s here, and the port is unbound for all
-of them. So a missing build falls back to **`next dev`**, which is listening in
-seconds and serves the real pages (more slowly), announced loudly on startup;
-`/`, `/login` and `/portal/login` are precompiled straight away so the first visit
-doesn't pay for it. Set `START_AUTOBUILD=0` to make a missing build a hard failure
-instead. `npm start` also refuses to start onto a port another process already
-holds, naming that process, so a run can never quietly probe an orphaned server
-that is still serving an older build.
+of them. So a missing build falls back to **`next dev`**, which serves the real
+pages (more slowly) far sooner, announced loudly on startup. Set
+`START_AUTOBUILD=0` to make a missing build a hard failure instead. `npm start`
+also refuses to start onto a port another process already holds, naming that
+process, so a run can never quietly probe an orphaned server that is still
+serving an older build.
+
+**An open port always means a usable app.** Both `npm run dev` and that fallback
+run through `scripts/lib/dev-server.mjs`, which withholds the port until a request
+has actually been served on it. Left alone, `next dev` binds at ~3s and cannot
+render `/` for another ~14s, because dev compiles each route on its first request
+— so anything that treats an open port (or `✓ Ready`) as ready starts navigating
+into a 15s wait that looks exactly like a hang. Instead `next dev` is bound to an
+internal loopback port, `/` is compiled there unobserved, and only then does a
+byte-for-byte TCP forwarder open the public port: measured, the port opens at
+~19s instead of ~3s and the first `GET /` takes **0.9s instead of 15.9s**. The
+remaining entry routes (`/login`, `/portal/login`) warm behind the open port, and
+a `Ready for QA` line marks when all three are done. `DEV_GATE=0` restores
+`next dev`'s bind-immediately behaviour.
 
 ### Demo accounts
 

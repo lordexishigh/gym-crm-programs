@@ -21,13 +21,17 @@
  *      entire budget and still concludes the product is unreachable. Building
  *      silently and refusing to serve are the same observable event.
  *
- *      What binds the port in seconds and serves the REAL pages is `next dev`
- *      (measured: listening in ~8s, every route rendered with genuine content),
- *      so that is the fallback: no build, no placeholder page, no proxy — an
- *      actually working app, roughly an order of magnitude sooner. A placeholder
- *      that answers instantly was tried and is worse than it looks: the port
- *      responds, so callers stop waiting and start testing, and every one of them
- *      then judges a page that has none of the product on it.
+ *      What serves the REAL pages an order of magnitude sooner is `next dev`
+ *      (measured: `/` served at ~19s against a build's ~85s+), so that is the
+ *      fallback: no build, no placeholder page. A placeholder that answers
+ *      instantly was tried and is worse than it looks: the port responds, so
+ *      callers stop waiting and start testing, and every one of them then judges
+ *      a page that has none of the product on it.
+ *
+ *      The dev server is run through scripts/lib/dev-server.mjs, which withholds
+ *      the port until a request has actually been served on it — `next dev`
+ *      otherwise binds at ~3s and cannot render `/` for another ~14s, which is
+ *      the same "open but unresponsive" trap in a smaller form.
  *
  *      Dev mode is announced loudly, never silent: responses are slower and this
  *      is not how production should run. Production doesn't take this path —
@@ -60,13 +64,24 @@
  */
 
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+// The dev-mode fallback below is the same server `npm run dev` runs, gate and
+// all: shared rather than duplicated so a checkout with no build is served
+// exactly as well as one being developed. See scripts/lib/dev-server.mjs.
+import {
+  describePortHolder,
+  disabled,
+  portInUse,
+  resolveHost,
+  resolvePort,
+  serveDev,
+  stopDev,
+} from "./lib/dev-server.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = process.cwd();
@@ -95,11 +110,6 @@ const BUILD_LOCK = path.join(
  */
 const BUILD_WAIT_MS = Number(process.env.START_BUILD_WAIT_MS) || 600_000;
 
-/** Explicit opt-OUT check. Only an explicit falsy value disables a default-on flag. */
-function disabled(value) {
-  return value === "0" || value === "false";
-}
-
 /** Whether `pid` is still running, used to tell a held lock from an abandoned one. */
 function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -111,40 +121,6 @@ function pidAlive(pid) {
     // EPERM means the process exists but belongs to another user — still alive.
     return err && err.code === "EPERM";
   }
-}
-
-/**
- * Resolve the port the same way `next start` does, so the preflight check and
- * the server can never disagree: an explicit `-p/--port` flag wins, then `PORT`,
- * then Next's own default of 3000.
- */
-function resolvePort(argv) {
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "-p" || arg === "--port") {
-      const next = argv[i + 1];
-      if (next && /^\d+$/.test(next)) return Number(next);
-    }
-    const inline = /^--port=(\d+)$/.exec(arg);
-    if (inline) return Number(inline[1]);
-  }
-  if (process.env.PORT && /^\d+$/.test(process.env.PORT)) {
-    return Number(process.env.PORT);
-  }
-  return 3000;
-}
-
-/** The hostname `next start` will bind, mirroring its own flag handling. */
-function resolveHost(argv) {
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "-H" || argv[i] === "--hostname") {
-      const next = argv[i + 1];
-      if (next && !next.startsWith("-")) return next;
-    }
-    const inline = /^--hostname=(.+)$/.exec(argv[i]);
-    if (inline) return inline[1];
-  }
-  return process.env.HOSTNAME || "0.0.0.0";
 }
 
 /**
@@ -322,12 +298,16 @@ async function ensureServable() {
 
     console.warn(
       "[start] No production build found (.next/BUILD_ID is missing) — serving " +
-        "with `next dev` so this port answers within seconds.\n" +
+        "with `next dev` instead, and opening this port only once it can answer.\n" +
         "[start] Why not build first: `next build` takes ~85s on this project, " +
         "and for every one of those seconds the port stays UNBOUND. An unbound " +
         "port black-holes the connection instead of refusing it, so callers wait " +
         "out their whole budget and every route — even static ones like / and " +
         "/login — reads as timed out.\n" +
+        "[start] Expect roughly 15-20s before the port opens: that is `/` being " +
+        "compiled. The port stays shut until it has actually been served, so " +
+        "\"open\" means usable and a readiness loop cannot be waved through into a " +
+        "navigation that then times out.\n" +
         "[start] This is a DEVELOPMENT server: the pages are real and complete, " +
         "the responses are slower. For a production server run `npm run build` " +
         "first; `npm start` then serves that build directly. START_AUTOBUILD=0 " +
@@ -343,161 +323,12 @@ async function ensureServable() {
   }
 }
 
-/** Routes a first-time visitor lands on; see `warmUp`. */
-const WARMUP_PATHS = ["/", "/login", "/portal/login"];
-
 /**
- * Set once the dev server has answered anything at all.
- *
- * This is the only trustworthy "it managed to serve" signal: `next dev` exits
- * with code 0 even when it fails fatally at startup (observed: a project with no
- * `app`/`pages` directory prints the error and exits 0), so an exit code cannot
- * distinguish a server that ran from one that never got off the ground.
- */
-let devEverAnswered = false;
-
-/**
- * Compile the entry routes as soon as the dev server is listening, before any
- * real client asks for one.
- *
- * Dev mode compiles per route on FIRST request, and the first compile of a page
- * this size measures ~8s. That lands on whoever navigates first — precisely the
- * `/`, `/login` and `/portal/login` navigations that were reported as timing
- * out — while later ones take ~1s. Paying it here, off the clock, is the
- * difference between a first navigation that fits inside a client's budget and
- * one that does not.
- *
- * Strictly best-effort: every failure is ignored, since this is an optimisation
- * and the server is already serving without it. START_WARMUP=0 reduces it to the
- * readiness probe alone — that one request cannot be skipped, because whether it
- * ever succeeds is what `serveDev` uses to tell a server that ran from one that
- * never started.
- */
-async function warmUp(port, host) {
-  // A wildcard bind is reached over loopback; a specific bind only on itself.
-  const target = host === "0.0.0.0" || host === "::" || !host ? "127.0.0.1" : host;
-  const started = Date.now();
-  const [first, ...rest] = WARMUP_PATHS;
-
-  const request = (route) =>
-    fetch(`http://${target}:${port}${route}`, {
-      // Generous: this is a cold compile, not a health check.
-      signal: AbortSignal.timeout(60_000),
-      headers: { "user-agent": "alpha-crm-start-warmup" },
-    });
-
-  // The first route doubles as the readiness probe: retry until the server
-  // accepts a connection at all (it binds after ~8s), then stop retrying — a
-  // request that CONNECTS and is slow is the compile we came to pay for.
-  const deadline = started + 180_000;
-  for (;;) {
-    if (Date.now() > deadline) return;
-    try {
-      await request(first);
-      devEverAnswered = true;
-      break;
-    } catch {
-      await delay(500);
-    }
-  }
-
-  if (disabled(process.env.START_WARMUP)) return;
-  for (const route of rest) {
-    try {
-      await request(route);
-    } catch {
-      /* best effort: an uncompiled route just costs the first visitor instead */
-    }
-  }
-  console.log(
-    `[start] Dev server ready and entry routes precompiled in ` +
-      `${Math.round((Date.now() - started) / 1000)}s (${WARMUP_PATHS.join(", ")}).`,
-  );
-}
-
-/**
- * How long a dev server must survive before its exit counts as "it ran and then
- * stopped" rather than "it could not start". Cold start measures ~5s, so a
- * process that is gone well before this never served a request.
- */
-const DEV_PROBATION_MS = 20_000;
-
-/** Launch a dev server; resolves with how it ended, never rejects. */
-function runDevServer(port, host, { turbopack }) {
-  const args = ["dev"];
-  if (turbopack) args.push("--turbopack");
-  args.push("-p", String(port));
-  if (host && host !== "0.0.0.0") args.push("-H", host);
-
-  // START_DEV_FALLBACK tells next.config.mjs to drop the dev-tools indicator:
-  // this server is standing in for the real one, and a debug badge floating over
-  // every page is not part of the product.
-  const child = spawnNext(args, { START_DEV_FALLBACK: "1" });
-  return new Promise((resolve) => {
-    child.on("error", (err) => {
-      console.error("[start] failed to launch `next dev`:", err);
-      resolve({ code: -1, signal: null });
-    });
-    child.on("close", (code, signal) => resolve({ code: code ?? -1, signal }));
-  });
-}
-
-/**
- * Serve in dev mode, preferring Turbopack.
- *
- * Turbopack is preferred because per-route compilation is what a first visit to
- * any page costs in dev, and it is 2-4x cheaper there (measured on this project:
- * /login 1.6s vs 4.3s) — that margin is the difference between a journey step
- * fitting inside its budget and timing out.
- *
- * A Turbopack that cannot start on some host would, however, reproduce the exact
- * failure this whole path exists to prevent: nothing bound, every route timing
- * out. So an attempt that never answered a single request is retried on webpack
- * rather than trusted. Anything that DID answer is passed straight through —
- * retrying then would resurrect a server the operator deliberately stopped.
- */
-async function serveDev(port, host) {
-  // Started before the first attempt and shared by a retry: the readiness loop
-  // simply keeps waiting through the changeover.
-  void warmUp(port, host);
-
-  if (!disabled(process.env.START_DEV_TURBOPACK)) {
-    const startedAt = Date.now();
-    const first = await runDevServer(port, host, { turbopack: true });
-    const aliveMs = Date.now() - startedAt;
-    // Note the deliberate absence of an exit-code test: `next dev` exits 0 on a
-    // fatal startup error, so only `devEverAnswered` distinguishes the cases.
-    // `shuttingDown` is checked because Windows has no real signals — a child
-    // killed by our own SIGINT handler can report neither code nor signal, and
-    // relaunching a server the operator just interrupted would be indefensible.
-    const neverServed =
-      !shuttingDown &&
-      !first.signal &&
-      !devEverAnswered &&
-      aliveMs <= DEV_PROBATION_MS;
-    if (!neverServed) return first;
-    console.error(
-      `[start] \`next dev --turbopack\` exited (code ${first.code}) after ` +
-        `${(aliveMs / 1000).toFixed(1)}s without answering a single request. ` +
-        "Retrying without Turbopack so this port still ends up served. " +
-        "(START_DEV_TURBOPACK=0 skips Turbopack entirely.)",
-    );
-  }
-  return runDevServer(port, host, { turbopack: false });
-}
-
-/**
- * The `next` child this wrapper is currently responsible for — the production
- * server, or a dev server (possibly a second one, after a Turbopack retry).
- * Tracked so signal handlers can reap whichever one is live.
+ * The `next start` child this wrapper is responsible for, tracked so a signal
+ * handler can reap it. A dev-mode child belongs to scripts/lib/dev-server.mjs
+ * and is reaped through its `stopDev`.
  */
 let activeChild = null;
-
-/**
- * Set once a shutdown signal has been seen. `serveDev` consults it so an
- * interrupted server is never relaunched as a "failed to start" retry.
- */
-let shuttingDown = false;
 
 /** Spawn a `next` subcommand, recording it as the child to reap on a signal. */
 function spawnNext(args, extraEnv = {}) {
@@ -507,77 +338,6 @@ function spawnNext(args, extraEnv = {}) {
     stdio: "inherit",
   });
   return activeChild;
-}
-
-/**
- * Probe whether `port` can actually be bound, rather than assuming it is free.
- * Binds the same host `next start` will use so the answer reflects the real
- * conflict (a server on 0.0.0.0 does conflict with one on 127.0.0.1).
- */
-function portInUse(port, host) {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once("error", (err) => {
-      probe.close();
-      resolve(err && err.code === "EADDRINUSE");
-    });
-    probe.once("listening", () => probe.close(() => resolve(false)));
-    // `next start` binds all interfaces for 0.0.0.0; mirror that.
-    if (host === "0.0.0.0" || host === "::") probe.listen(port);
-    else probe.listen(port, host);
-  });
-}
-
-/**
- * Best-effort identification of whoever holds the port, so the operator gets a
- * name and a PID instead of just "in use". Platform-specific and entirely
- * optional — any failure degrades to no extra detail.
- */
-function describePortHolder(port) {
-  return new Promise((resolve) => {
-    const isWindows = process.platform === "win32";
-    const cmd = isWindows
-      ? { file: "netstat", args: ["-ano", "-p", "TCP"] }
-      : { file: "lsof", args: ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"] };
-
-    let out = "";
-    let child;
-    try {
-      child = spawn(cmd.file, cmd.args, { stdio: ["ignore", "pipe", "ignore"] });
-    } catch {
-      resolve("");
-      return;
-    }
-    const done = (value) => {
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      child.kill();
-      done("");
-    }, 3_000);
-
-    child.stdout.on("data", (d) => (out += d.toString()));
-    child.on("error", () => done(""));
-    child.on("close", () => {
-      const lines = out
-        .split(/\r?\n/)
-        .filter((l) =>
-          isWindows ? /LISTENING/.test(l) && l.includes(`:${port}`) : /LISTEN/.test(l),
-        );
-      if (lines.length === 0) {
-        done("");
-        return;
-      }
-      if (isWindows) {
-        const pid = lines[0].trim().split(/\s+/).pop();
-        done(pid ? ` (held by PID ${pid})` : "");
-      } else {
-        const parts = lines[0].trim().split(/\s+/);
-        done(parts.length > 1 ? ` (held by ${parts[0]} PID ${parts[1]})` : "");
-      }
-    });
-  });
 }
 
 async function main() {
@@ -591,7 +351,8 @@ async function main() {
   // the port (the next run then probes a stale process) and it keeps mutating
   // `.next`, which breaks whatever command runs next.
   const forward = (signal) => () => {
-    shuttingDown = true;
+    // Reaps a dev-mode server and its readiness forwarder; a no-op otherwise.
+    stopDev(signal);
     if (activeChild && !activeChild.killed) activeChild.kill(signal);
     // If we were interrupted while owning the lock, drop it now so the next start
     // proceeds immediately instead of waiting on our dead PID.
@@ -628,10 +389,18 @@ async function main() {
   //    server, so it is reaped on Ctrl-C / CI teardown instead of being orphaned
   //    onto the port.
   if (mode === "dev") {
-    // Arguments are rebuilt rather than forwarded: `next start`-only flags
+    // Arguments are deliberately NOT forwarded: `next start`-only flags
     // (--keepAliveTimeout and friends) would be rejected by `next dev`, and the
     // port/host were resolved above from exactly those arguments.
-    const { code, signal } = await serveDev(port, host);
+    //
+    // START_DEV_FALLBACK tells next.config.mjs to drop the dev-tools indicator:
+    // this server is standing in for the real one, and a debug badge floating
+    // over every page is not part of the product.
+    const { code, signal } = await serveDev({
+      port,
+      host,
+      env: { START_DEV_FALLBACK: "1" },
+    });
     // The lock is held for the dev server's lifetime, so it must be dropped when
     // that ends — otherwise the next start waits out its whole budget on a PID
     // that is already gone.

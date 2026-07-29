@@ -18,6 +18,26 @@ The exact commands depend on the tech stack (see `docs/ARCHITECTURE.md`). Genera
    - Frontend: `npm run build` then `npm run dev` / `npm start`
    - Backend:  start the app entrypoint documented in the architecture
 
+### `npm run dev` takes ~20s to open its port, on purpose
+
+`npm run dev` runs `scripts/dev.mjs`, which does not open the port until `/` has
+actually been served on it. `next dev` on its own binds at ~3s but cannot render
+`/` for another ~14s (dev compiles each route on its first request), so an open
+port used to mean "connections accepted, none answered" — and the first
+navigation, from a browser or a QA harness, waited out that whole compile and
+looked like a hang. Withholding the port turns that into "not open yet", which
+readiness loops already handle correctly; total time is unchanged, but the first
+page load drops from ~16s to under 1s.
+
+Once it is up, `/`, `/login` and `/portal/login` are already compiled and a
+`Ready for QA` line says so. Everything else behaves like plain `next dev`,
+HMR included — the port is fronted by a byte-for-byte TCP forwarder, not a proxy
+that rewrites anything.
+
+- `DEV_GATE=0` — bind immediately, exactly as `next dev` does
+- `START_DEV_TURBOPACK=0` — skip Turbopack
+- `npm run dev:next` — plain `next dev`, no wrapper at all
+
 ## Project layout
 
 - `docs/` — project brief, architecture, and the build plan

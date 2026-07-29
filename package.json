@@ -5,7 +5,8 @@
   "license": "UNLICENSED",
   "description": "Multi-tenant web CRM for Cyprus gyms — member-facing training programs.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev",
     "build": "next build",
     "start": "node scripts/start.mjs",
     "start:next": "next start",

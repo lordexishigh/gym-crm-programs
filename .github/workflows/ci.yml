@@ -171,9 +171,15 @@ jobs:
         # HOW SOON it serves is therefore part of the contract, not a detail: a
         # review harness gives a navigation 20-45s, and building the missing build
         # first (~85s) leaves it timing out exactly as before. `npm start` falls
-        # back to `next dev`, which listens in seconds, and the budget below is
-        # what keeps that true — a regression to build-first fails this step
-        # instead of quietly restoring the original bug.
+        # back to `next dev`, and the budget below is what keeps that true — a
+        # regression to build-first fails this step instead of quietly restoring
+        # the original bug.
+        #
+        # Note the loop below is also the readiness contract the dev path now
+        # guarantees: the port stays SHUT until `/` has actually been served
+        # (scripts/lib/dev-server.mjs), so early curls get a fast connection
+        # refusal rather than a socket that hangs for the whole compile. The first
+        # curl that connects is therefore the first one that can succeed.
         #
         # Runs last because it deletes `.next`, and repopulates it as a side effect.
         env:
@@ -193,8 +199,9 @@ jobs:
           }
 
           # Deliberately far tighter than a full build: ~4x the measured cold dev
-          # start, to absorb a slow runner without admitting an 85s build.
-          BUDGET=60
+          # start (~20s to a served `/` locally), to absorb a slow runner without
+          # admitting an 85s build.
+          BUDGET=90
           started=$(date +%s)
           up=0
           for _ in $(seq 1 "$BUDGET"); do
