@@ -2,6 +2,14 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-30 19:24 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 69.3 min · subscription (unmetered)
+- Score: 68 → 76
+- Product gaps: 5 → 4
+- Effort mix: judge ×4, product ×2, market ×2
+- 175% of the session's 69.3 min went to one stage: implement (121.0 min). The agent's first pass at the change. The dominant cost of a round; the lever is fewer/smaller items, not a shorter clock.
+
 ## 2026-07-30 17:58 — manual session
 
 - Rounds: 1 (1 approved, 0 rejected) · 157.3 min · subscription (unmetered)
