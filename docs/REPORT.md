@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-70%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-68%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 70/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 68/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 65 | `█████████████░░░░░░░` |
-| Code quality | 82 | `████████████████░░░░` |
-| Robustness & error handling | 68 | `██████████████░░░░░░` |
-| Builds & tests | 76 | `███████████████░░░░░` |
-| UX & design | 60 | `████████████░░░░░░░░` |
+| Spec coverage | 62 | `████████████░░░░░░░░` |
+| Code quality | 83 | `█████████████████░░░` |
+| Robustness & error handling | 63 | `█████████████░░░░░░░` |
+| Builds & tests | 65 | `█████████████░░░░░░░` |
+| UX & design | 70 | `██████████████░░░░░░` |
 
 ## Readiness checks
 
@@ -43,21 +43,21 @@
 
 ## Strengths
 
-- Security architecture is genuinely defence-in-depth: JWT claims verified server-side via JWKS (lib/identity.ts), withTenantContext enforced in every server action, RLS on all 18 migrated tables, and a 25 000-line comprehensive isolation audit that adversarially probes cross-tenant and cross-member write paths.
-- Test suite is meaningfully broad and well-motivated: 239 passing tests include regression guards that document the exact observed failure (quoted timing measurements, browser-tab symptoms) before pinning the fix—far above the stub-test level.
-- Feature implementation is complete and non-stub: all 8 spec features have real UI components, server actions, lib modules, and migrations wired together with no TODO markers or placeholder branches, confirmed by the automated stub check.
-- Dependency hygiene is solid: lockfile present, no copyleft conflicts, dependencies pinned, and the sharp/next vulnerabilities from round 3 were patched (package.json shows next ^15.5.21).
+- Comprehensive RLS enforcement: withTenantContext/withAdminContext is used uniformly across every mutation surface, and the isolation-comprehensive test seeds two conflicting tenants and adversarially probes every tenanted table — this is production-grade multi-tenancy, not a paper claim.
+- Resilient failure modelling: the invite acceptance path returns typed statuses ('invalid', 'expired', 'used', 'unavailable') rather than throwing, so a DB outage or dead email link lands on a readable page instead of the error boundary — a non-obvious correctness property that is regression-guarded by test/invite-lookup.test.ts.
+- Broad feature surface beyond the spec: classes, check-in, billing plans, Stripe webhooks, GDPR export/anonymisation, workout logs, and a class schedule on the member portal are all present and wired up with migrations, meaning the product is already closer to table stakes than the eight spec items imply.
+- Test depth: 239 passing tests include adversarial cross-tenant isolation, auth timeout contracts, and start-wrapper regression guards — the suite catches non-obvious failure modes that a simple happy-path suite would miss.
 
 ## To improve
 
-- The auth route cold-start timeout has persisted through rounds 5, 6, and 7 despite the dev-server readiness gate rewrite: extend the readiness gate in scripts/lib/dev-server.mjs to pre-warm /login and /portal/login (not just '/') with an HTTP GET before signalling ready, so the Playwright crawl does not land during the per-route compilation window.
-- Rate limiting is absent on app/login/actions.ts and app/portal/login/actions.ts (automated WARN): add an in-memory or Redis token-bucket guard (e.g. a middleware check keyed on IP with a 10-attempt/minute ceiling) before the GoTrue signIn call to block credential brute-force.
-- Error tracking is not wired up despite instrumentation.ts existing (automated WARN): integrate an exception reporter (Sentry DSN or equivalent) in instrumentation.ts register() and verify app/global-error.tsx actually calls captureException so production failures surface rather than disappearing silently.
-- The one remaining img without alt text (automated WARN) has not been fixed across multiple rounds: run 'grep -rn "<img" app/' to locate the offending element, add a descriptive alt attribute, and add a render assertion in test/a11y.test.ts covering that component so the gap cannot regress.
+- Fix the Next.js server startup race: the product walkthrough has timed out on '/' in every round since Round 5, including the current one — add an explicit readiness probe in scripts/dev.mjs (poll /api/health until it responds before yielding control) and mirror this in the CI smoke step in .github/workflows/ci.yml so the assembled server is verified to answer requests, not just to build.
+- Add rate limiting to auth entry points: the readiness check explicitly flags /login and /portal/login as unprotected against credential brute-force; implement middleware-level rate limiting (e.g. via an Upstash Redis counter in middleware.ts, keyed by IP) before these routes are reachable in production.
+- Patch the two high-severity dependency vulnerabilities: the readiness check flags next and sharp as having high-severity fixes available — run `npm audit fix` (or pin to the patched versions in package.json) and verify the build still passes; these are blocking for any security-conscious gym operator.
+- Surface demo credentials on the landing page: a first-time evaluator or QA tester cannot reach any feature without out-of-band setup; add a visible 'Try the demo: owner@demo.local / DemoOwner!2024' notice to app/page.tsx (conditionally rendered when NEXT_PUBLIC_DEMO_MODE=true) so the full flow can be walked without manual database seeding.
 
 ## Summary
 
-The codebase is a complete, well-architected implementation of the spec with strong security depth and a meaningful test suite, but the product is non-functional in practice: auth entry points have timed out on every walkthrough for three consecutive evaluation rounds, making every spec feature unreachable to a real user, which caps spec_coverage and ux_design scores regardless of what the source shows.
+The codebase is architecturally complete — all eight spec features are implemented, RLS is enforced at the DB layer, and 239 tests pass — but the assembled product has been consistently unreachable at runtime across eight evaluation rounds, making every promised feature impossible to verify or use. Until the server startup race is resolved and auth routes reliably respond, the score is dragged down by a deployment gap rather than a code gap.
 
 ---
-_Scored 2026-07-30 02:54 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-30 11:47 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
