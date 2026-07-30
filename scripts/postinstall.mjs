@@ -1,7 +1,18 @@
-#!/usr/bin/env node
 /**
  * Produce a production build at INSTALL time when the checkout has none
  * (`postinstall`).
+ *
+ * NO SHEBANG, DELIBERATELY. This module is imported by test/postinstall.test.ts
+ * to unit-test `decideBuild`, and Vitest transforms it through Vite first. Vite
+ * rewrites `import` of node builtins into CJS interop `const` declarations and
+ * HOISTS them to the top of the file — ahead of a shebang, which is only valid
+ * as the very first bytes of a source file. Anywhere else it is a bare `#`, so
+ * the transformed module died with "SyntaxError: Invalid or unexpected token"
+ * and the entire suite failed to load (0 tests, `npm test` red) while every
+ * assertion in it was still correct. Nothing executes this file directly — npm
+ * runs `node scripts/postinstall.mjs` (package.json), as does CI — so the
+ * shebang bought nothing and cost the whole regression guard for the
+ * install-time build.
  *
  * WHY THIS EXISTS
  *

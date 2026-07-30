@@ -54,11 +54,71 @@ On every push/PR, CI spins up a `postgres:16` service and:
 4. `npm test` — the RLS isolation smoke tests gate the build; if tenant/member
    isolation regresses, CI fails.
 
-## Deploy (`.github/workflows/deploy.yml`)
+## Deploy — `npm run deploy`
 
-On push to `main`: install deps → **run migrations against the production
-database** → deploy to Vercel production. Migrations therefore always run before
-the new build serves traffic.
+**`npm run deploy` ([`scripts/deploy.mjs`](../scripts/deploy.mjs)) is the deploy
+path. `git push` does not deploy anything.** That is not a preference, it is the
+current state of the two automated paths — both verified, not assumed:
+
+- **GitHub Actions cannot run.** Every workflow on this repo (Deploy, CI, the
+  scheduled expiry job) fails in 4–13s with the annotation *"The job was not
+  started because recent account payments have failed or your spending limit needs
+  to be increased."* All four deploy secrets (`DATABASE_URL`, `VERCEL_TOKEN`,
+  `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`) are present and correct — the jobs simply
+  never start. A red Deploy run currently tells you nothing about the code.
+- **Vercel's Git integration cannot cover for it.** The Vercel project has no Git
+  link at all (`GET /v9/projects/gym-crm-programs` → `link: undefined`), so a push
+  to GitHub reaches Vercel by no route. `vercel.json` also sets
+  `git.deploymentEnabled.master/main = false`, which is belt-and-braces rather
+  than the cause.
+
+Consequence, and the reason this section is emphatic: pushing to `master` moves
+nothing live, silently. A correct, pushed, reviewed fix stays invisible until
+somebody runs the CLI, which is how "built but not live" was reported round after
+round against features that were already implemented.
+
+```bash
+export VERCEL_TOKEN=...        # or `npx vercel login` once
+npm run deploy
+```
+
+What it does, in order:
+
+1. **Refuses to deploy an unpushed or dirty checkout.** "Push and redeploy" is two
+   steps and the first is the one that gets skipped; a production build made from
+   local-only commits cannot be reviewed or reverted, and leaves the live app
+   *ahead* of `master`. Override with `DEPLOY_ALLOW_DIRTY=1` for a hotfix.
+2. **Runs migrations before the new build serves traffic** when
+   `MIGRATE_DATABASE_URL`/`DATABASE_URL` is set locally. When it is not, the
+   deploy still proceeds: `instrumentation.ts` applies pending migrations in the
+   deployed process before its first request and `DATABASE_URL` is configured on
+   the Vercel project, so the ordering holds either way. Requiring production DB
+   credentials on a laptop would make the only working path unusable.
+3. `npx vercel@latest deploy --prod` — the same command `deploy.yml` uses, so the
+   two paths cannot drift.
+4. **Verifies the live URL, and fails the deploy if it is not serving the new
+   code.** This is the step that closes the defect. It waits for
+   `/api/health`'s `instance.build_id` to change (proving the production alias
+   actually moved onto the new build — a successful build that nothing was
+   aliased to is the exact failure mode), then requires `/`, `/login` and
+   `/portal/login` to each return 200 **and contain their rendered heading**. A
+   status alone is not evidence: Next.js serves error boundaries and `not-found`
+   shells with cheerful statuses, so a bare 200 check would sign off on an
+   unreachable product. A degraded `/api/health` warns but does not fail a deploy
+   whose pages all render.
+
+Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
+`https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
+`DEPLOY_SKIP_MIGRATE`, `DEPLOY_VERCEL_PKG`.
+
+### `.github/workflows/deploy.yml`
+
+Kept and correct — install deps → migrate the production database → deploy to
+Vercel production, so migrations always precede live traffic. It triggers on push
+to `master`/`main` and will resume working the moment the Actions billing block is
+lifted, at which point it becomes the primary path again and `npm run deploy`
+stays available for manual releases. **Until then it never starts**, so do not
+read its status as a deploy gate.
 
 ## Local development
 
