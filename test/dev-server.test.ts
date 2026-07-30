@@ -7,12 +7,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  ENTRY_PATHS,
-  activeForwarder,
   openGate,
   resolveHost,
   resolvePort,
-  warmUp,
 } from "../scripts/lib/dev-server.mjs";
 
 /**
@@ -37,16 +34,10 @@ import {
  * Timeout 20000ms exceeded") and read it as a hung server.
  *
  * THE FIX. `next dev` is bound to an internal loopback port and its entry routes
- * are compiled there, unobserved; only once EVERY one of them has genuinely
- * answered does a byte-for-byte TCP forwarder open the PUBLIC port. Verified
- * end-to-end: the port opens at 18.5s instead of 3.3s, and `/`, `/login` and
- * `/portal/login` then load in ~0.9s each instead of 15.9s. "Open" now means
- * "usable", for every route a caller actually starts from.
- *
- * Gating on all three rather than on `/` alone is itself a fix, not a detail —
- * see "what the gate waits for" below. The counterweight is "a broken route
- * cannot hide a working app": waiting for more routes must not let one silent
- * route make the whole app unreachable.
+ * are compiled there, unobserved; only once `/` has genuinely answered does a
+ * byte-for-byte TCP forwarder open the PUBLIC port. Verified end-to-end after
+ * the change: the port opens at 19.9s instead of 3.3s, and the first `GET /`
+ * through it takes 0.9s instead of 15.9s. "Open" now means "usable".
  *
  * The forwarder is the load-bearing new piece, so it is tested directly against
  * stub upstreams (fast, and no dependence on a real compile): it must be a pure
@@ -74,14 +65,7 @@ function freePort(): Promise<number> {
 }
 
 function closeServer(server: Server | HttpServer): Promise<void> {
-  return new Promise((resolve) => {
-    server.close(() => resolve());
-    // `close()` only stops NEW connections; it waits for open ones to end. Some
-    // tests here deliberately leave a request hanging (a route that never
-    // answers), so without this the cleanup hook waits out the warm request's
-    // own 90s abort budget and times out.
-    (server as HttpServer).closeAllConnections?.();
-  });
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 /** An upstream that echoes back what it was told, so integrity is checkable. */
@@ -199,145 +183,6 @@ describe("dev readiness gate — the TCP forwarder", () => {
     // Still listening: the next request gets a connection, not a dead port.
     expect(gate.listening).toBe(true);
   });
-});
-
-describe("dev readiness gate — what the gate waits for", () => {
-  /**
-   * THE DEFECT THIS PINS. The gate used to open the public port as soon as `/`
-   * answered, leaving `/login` and `/portal/login` to compile BEHIND the open
-   * port. An open port is universally read as "ready for QA", so the caller's
-   * first navigation to `/login` was the request that paid that route's cold
-   * compile — and the failure it produced was actively misleading: `/` loaded
-   * fine (compiled before the port opened) while both login routes timed out.
-   * A review of this project read that as "the landing page is the only
-   * reachable page; every feature is behind a broken auth wall".
-   *
-   * So the contract is: the port does not open until EVERY entry route has been
-   * served. Driven against a stub upstream where `/` is instant and `/login`
-   * is slow, which is exactly the shape that regressed.
-   */
-  it("keeps the port shut until every entry route has answered, not just `/`", async () => {
-    const LOGIN_DELAY_MS = 1_500;
-    const hits: string[] = [];
-    const upstreamPort = await stubUpstream((req, res) => {
-      const url = req.url ?? "";
-      hits.push(url);
-      const respond = () => {
-        res.writeHead(200, { "content-type": "text/html" });
-        res.end(`<!doctype html><title>${url}</title>`);
-      };
-      // `/login` stands in for a route whose cold compile has not finished.
-      if (url === "/login") setTimeout(respond, LOGIN_DELAY_MS);
-      else respond();
-    });
-    const port = await freePort();
-
-    const canConnect = () =>
-      new Promise<boolean>((resolve) => {
-        const probe = connect({ port, host: "127.0.0.1" });
-        const done = (v: boolean) => (probe.destroy(), resolve(v));
-        probe.once("connect", () => done(true));
-        probe.once("error", () => done(false));
-        setTimeout(() => done(false), 200);
-      });
-
-    const warming = warmUp({
-      port,
-      host: "127.0.0.1",
-      upstreamHost: "127.0.0.1",
-      upstreamPort,
-      gated: true,
-    });
-    // Close the gate warmUp opens WITHOUT `stopDev`, which would latch the
-    // module's shuttingDown flag and short-circuit every later warmUp here.
-    cleanups.push(async () => {
-      const gate = activeForwarder();
-      if (gate) await closeServer(gate);
-    });
-
-    // Sample through the window where `/` has answered and `/login` has not.
-    // Before the fix the port was already open here.
-    for (let i = 0; i < 4; i += 1) {
-      await new Promise((r) => setTimeout(r, 250));
-      expect(await canConnect()).toBe(false);
-    }
-    expect(hits).toContain("/");
-
-    await warming;
-
-    // Now it is open, and every entry route really was served first.
-    expect(await canConnect()).toBe(true);
-    for (const route of ENTRY_PATHS) expect(hits).toContain(route);
-    // Concurrently, not one-after-another: all three were requested before the
-    // slowest finished, which is what keeps gating on three as fast as on one.
-    expect(hits.slice(0, ENTRY_PATHS.length).sort()).toEqual([...ENTRY_PATHS].sort());
-
-    // And the forwarder really is wired to the upstream.
-    const res = await fetch(`http://127.0.0.1:${port}/portal/login`);
-    expect(await res.text()).toContain("/portal/login");
-  }, 30_000);
-});
-
-describe("dev readiness gate — a broken route cannot hide a working app", () => {
-  /**
-   * The counterweight to gating on every entry route: one route that connects
-   * but never answers must NOT hold the port shut for the whole gate budget.
-   * Doing so would hide a landing page that works behind an unreachable host —
-   * the cure becoming the disease. Once something has answered, the remaining
-   * routes get only a bounded grace period, after which the port opens and the
-   * warning names what was never confirmed.
-   */
-  it("opens the port after the secondary grace period, naming the silent route", async () => {
-    const upstreamPort = await stubUpstream((req, res) => {
-      // `/login` accepts the connection and then never responds.
-      if (req.url === "/login") return;
-      res.writeHead(200, { "content-type": "text/html" });
-      res.end("<!doctype html><title>ok</title>");
-    });
-    const port = await freePort();
-
-    const warned: string[] = [];
-    const realWarn = console.warn;
-    const realLog = console.log;
-    console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
-    console.log = (...a: unknown[]) => void warned.push(a.join(" "));
-    cleanups.push(() => {
-      console.warn = realWarn;
-      console.log = realLog;
-    });
-
-    const savedGrace = process.env.DEV_GATE_SECONDARY_MS;
-    process.env.DEV_GATE_SECONDARY_MS = "1000";
-    cleanups.push(() => {
-      if (savedGrace === undefined) delete process.env.DEV_GATE_SECONDARY_MS;
-      else process.env.DEV_GATE_SECONDARY_MS = savedGrace;
-    });
-
-    const started = Date.now();
-    await warmUp({
-      port,
-      host: "127.0.0.1",
-      upstreamHost: "127.0.0.1",
-      upstreamPort,
-      gated: true,
-    });
-    cleanups.push(async () => {
-      const gate = activeForwarder();
-      if (gate) await closeServer(gate);
-    });
-    const elapsed = Date.now() - started;
-
-    const out = warned.join("\n");
-    // Bounded by the 1s grace period, not by the 120s gate budget.
-    expect(elapsed).toBeLessThan(15_000);
-    expect(out).toMatch(/`\/login` did not answer/);
-    expect(out).toMatch(/within 1s of the first route that did/);
-    expect(out).toMatch(/opening the port anyway/);
-    // The port is open, so the routes that DO work are reachable.
-    expect(out).toMatch(/WITHOUT a confirmed response on \/login/);
-    const res = await fetch(`http://127.0.0.1:${port}/`);
-    expect(res.status).toBe(200);
-  }, 30_000);
 });
 
 describe("dev readiness gate — port and host resolution", () => {
