@@ -111,6 +111,30 @@ by a byte-for-byte TCP forwarder, not a proxy that rewrites anything.
 - `START_DEV_TURBOPACK=0` — skip Turbopack
 - `npm run dev:next` — plain `next dev`, no wrapper at all
 
+## `npm start` and unusable builds
+
+`npm start` treats "there is a build" as the whole artifact set `next start` opens,
+not just `.next/BUILD_ID`. This matters because `next start` checks BUILD_ID and
+then opens several manifests *without* checking them, so a partial `.next` dies on
+a bare `ENOENT` **and exits 0** — a dead server reporting success, with nothing
+bound to the port, which every caller sees as "`/` times out". Two states produce
+it routinely: an interrupted build (BUILD_ID is written before the manifests), and
+a dev server killed mid-write (a full set of files plus a dev-shaped
+`routes-manifest.json` with no `dataRoutes`, which crashes `next start` on
+`routesManifest.dataRoutes is not iterable`). Both are detected, named in the log,
+and rebuilt by the install-time build.
+
+Because a file check cannot catch a *corrupt* manifest or a build from another
+Next.js version, the wrapper also supervises the server it starts: if `next start`
+exits without ever answering a request, it falls back to `next dev` instead of
+exiting onto a dark port. An unbound port black-holes connections rather than
+refusing them, so leaving one dark is what turns a broken build into "the whole
+product is unreachable".
+
+- `START_PROD_FALLBACK=0` — make an unusable production build a hard failure
+- `START_PROD_READY_MS` — how long to wait for the first response (default 30s)
+- `START_AUTOBUILD=0` — make a *missing* build a hard failure
+
 ## Project layout
 
 - `docs/` — project brief, architecture, and the build plan

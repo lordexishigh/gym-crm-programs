@@ -46,6 +46,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   acquireBuildLock,
+  buildDefects,
   buildInFlight,
   hasProductionBuild,
   releaseBuildLock,
@@ -87,12 +88,21 @@ function buildToolchainPresent() {
  *
  * Pure and injectable so the policy — not a real 67s build — is what the tests
  * exercise. Returns `{ build, reason }`; `reason` is logged verbatim.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   built?: boolean,
+ *   toolchain?: boolean,
+ *   locked?: boolean,
+ *   defects?: string[] | null,
+ * }} [opts]
  */
 export function decideBuild({
   env = process.env,
   built = hasProductionBuild(ROOT),
   toolchain = buildToolchainPresent(),
   locked = buildInFlight(),
+  defects = null,
 } = {}) {
   // Explicit opt-out, for pipelines that build in their own named step (CI does)
   // and would otherwise pay for two identical builds.
@@ -144,7 +154,17 @@ export function decideBuild({
     };
   }
 
-  return { build: true, reason: "No production build found (.next/BUILD_ID is missing)." };
+  // Name what is actually wrong. This used to say "BUILD_ID is missing"
+  // unconditionally, which was wrong for the case that matters most here: a
+  // `.next` that is PRESENT but unusable (an interrupted build, or one a dev
+  // server overwrote). That state used to satisfy `built` and skip the rebuild
+  // forever — the sticky failure behind four consecutive rounds of "'/'
+  // unreachable" — so an install that now repairs it should say so precisely.
+  const detail = (defects ?? buildDefects(ROOT)).slice(0, 2).join("; ");
+  return {
+    build: true,
+    reason: `No usable production build found (${detail || ".next/BUILD_ID is missing"}).`,
+  };
 }
 
 /** Run `next build`, inheriting stdio so its output is part of the install log. */

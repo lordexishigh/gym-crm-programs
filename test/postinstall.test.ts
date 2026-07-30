@@ -43,6 +43,7 @@ function decide(
     built?: boolean;
     toolchain?: boolean;
     locked?: boolean;
+    defects?: string[];
   } = {},
 ): { build: boolean; reason: string } {
   return decideBuild({
@@ -69,6 +70,28 @@ describe("scripts/postinstall.mjs — decideBuild", () => {
 
     expect(build).toBe(false);
     expect(reason).toMatch(/already exists/);
+  });
+
+  it("REPAIRS a .next that is present but unusable, naming the actual defect", () => {
+    // The sticky failure this closes. `built` used to mean "BUILD_ID exists", so
+    // an interrupted build — or one a dev server overwrote — satisfied it, every
+    // install skipped the rebuild, and every `npm start` handed the same broken
+    // directory to `next start`, which dies on it (with status 0). Nothing bound
+    // the port, and an unbound port black-holes connections rather than refusing
+    // them, so every route read as TIMED OUT: four consecutive rounds of an
+    // automated review reporting "'/' unreachable". `built` is now the whole
+    // artifact set, so this state rebuilds itself at install time.
+    const { build, reason } = decide({
+      built: false,
+      defects: [
+        ".next/routes-manifest.json has no dataRoutes[] — it was written by `next dev`",
+      ],
+    });
+
+    expect(build).toBe(true);
+    // It must not claim BUILD_ID is missing when BUILD_ID is sitting right there.
+    expect(reason).toMatch(/dataRoutes/);
+    expect(reason).not.toMatch(/BUILD_ID is missing/);
   });
 
   it("honours ALPHA_SKIP_BUILD for pipelines that build in their own step", () => {

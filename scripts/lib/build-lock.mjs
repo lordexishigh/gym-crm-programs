@@ -52,17 +52,118 @@ export function pidAlive(pid) {
 }
 
 /**
- * A usable production build is `.next/BUILD_ID`. Checking the directory alone is
- * not enough: a build that was interrupted, or a `.next` left behind by
- * `next dev`, has the directory but no BUILD_ID, and `next start` rejects it.
+ * The files `next start` OPENS while booting, and therefore what "a usable
+ * production build" has to mean.
+ *
+ * BUILD_ID alone is not that, and trusting it is a defect with a very bad
+ * presentation. `next start` reads BUILD_ID first and reports its absence
+ * clearly (error E427, "Could not find a production build"), but immediately
+ * afterwards it opens these manifests with NO such guard: one of them missing is
+ * a raw ENOENT thrown out of startup, and — reproduced on this project — the
+ * process then exits with STATUS 0. So a `.next` holding BUILD_ID and not much
+ * else is indistinguishable from a good build up front, kills the server a
+ * moment later, and reports success while doing it. Nothing binds the port, and
+ * an unbound port black-holes the SYN instead of refusing it, so every caller
+ * waits out its whole budget and every route — `/` included — reads as TIMED
+ * OUT rather than as a missing build.
+ *
+ * That state is not exotic; it is what a half-finished or partly-removed `.next`
+ * looks like. `next build` writes BUILD_ID before these manifests, so an
+ * interrupted build leaves exactly this. So does a disk that filled mid-build, a
+ * partial copy of a checkout, or a cleanup that took some of `.next` and not all
+ * of it. And it is STICKY: BUILD_ID keeps satisfying the old check, so every
+ * later install skips the rebuild and every later start hands the same broken
+ * directory to `next start` again. An automated review of this project reported
+ * "'/' unreachable" for four consecutive rounds on precisely this shape.
+ *
+ * Validating the whole set closes that: a partial `.next` now reads as "no
+ * build", which makes scripts/postinstall.mjs rebuild it and scripts/start.mjs
+ * serve rather than die. Every entry is emitted by `next build` for this project
+ * (asserted against the repo's own build in test/start-wrapper.test.ts, so this
+ * list cannot silently over-require and send a GOOD build down the slow path).
+ */
+export const PRODUCTION_BUILD_FILES = [
+  "BUILD_ID",
+  "routes-manifest.json",
+  "prerender-manifest.json",
+  "build-manifest.json",
+  "app-path-routes-manifest.json",
+  "required-server-files.json",
+  path.join("server", "pages-manifest.json"),
+  path.join("server", "app-paths-manifest.json"),
+  path.join("server", "middleware-manifest.json"),
+];
+
+/**
+ * Everything wrong with `.next` as a production build, as strings worth logging —
+ * empty when it is complete and correctly shaped.
+ *
+ * Descriptions rather than a bare boolean because the states caught here are
+ * mistakable for each other and for a good build, so the log line has to say
+ * WHICH it is: an absent build, a half-written one, or one a dev server
+ * overwrote.
+ *
+ * That last case is why file existence alone is not the whole check. `next dev`
+ * writes its own `.next` in the same directory, and its `routes-manifest.json`
+ * omits the `dataRoutes`/`staticRoutes`/`dynamicRoutes` keys `next build`
+ * produces. If a dev run and a production build interleave — a dev server killed
+ * mid-write by a CI teardown, an `npm start` racing the tail of one — the
+ * directory is left holding a full set of files with a DEV-shaped routes
+ * manifest, and `next start` then dies on `routesManifest.dataRoutes is not
+ * iterable` (observed on this project, not theorised). Detecting the shape means
+ * that state gets REBUILT at install time, instead of quietly costing the
+ * production path for the life of the checkout.
+ */
+export function buildDefects(root = ROOT) {
+  const defects = [];
+
+  for (const rel of PRODUCTION_BUILD_FILES) {
+    const label = `.next/${rel.replace(/\\/g, "/")}`;
+    const file = path.join(root, ".next", rel);
+    try {
+      if (!existsSync(file)) {
+        defects.push(`${label} is missing`);
+        continue;
+      }
+      // Empty counts as missing: a file created but not yet written is what a
+      // build interrupted mid-write leaves, and `next start` fails on it too.
+      if (readFileSync(file, "utf8").trim().length === 0) {
+        defects.push(`${label} is empty`);
+      }
+    } catch (err) {
+      defects.push(`${label} is unreadable (${err?.code || err})`);
+    }
+  }
+
+  // Shape check, only worth running once the file is known to be present and
+  // non-empty — otherwise it would report the same problem twice.
+  const routesLabel = ".next/routes-manifest.json";
+  if (!defects.some((d) => d.startsWith(routesLabel))) {
+    try {
+      const manifest = JSON.parse(
+        readFileSync(path.join(root, ".next", "routes-manifest.json"), "utf8"),
+      );
+      if (!Array.isArray(manifest?.dataRoutes)) {
+        defects.push(
+          `${routesLabel} has no dataRoutes[] — it was written by \`next dev\`, ` +
+            "not `next build`, and `next start` crashes on it",
+        );
+      }
+    } catch (err) {
+      defects.push(`${routesLabel} is not valid JSON (${err?.message || err})`);
+    }
+  }
+
+  return defects;
+}
+
+/**
+ * Whether `.next` holds a build `next start` can actually serve. See
+ * `PRODUCTION_BUILD_FILES` and `buildDefects` for why this is not just a
+ * BUILD_ID check.
  */
 export function hasProductionBuild(root = ROOT) {
-  const buildId = path.join(root, ".next", "BUILD_ID");
-  try {
-    return existsSync(buildId) && readFileSync(buildId, "utf8").trim().length > 0;
-  } catch {
-    return false;
-  }
+  return buildDefects(root).length === 0;
 }
 
 /**
