@@ -12,6 +12,7 @@
     "start": "node scripts/start.mjs",
     "start:next": "next start",
     "typecheck": "tsc --noEmit",
+    "deploy": "node scripts/deploy.mjs",
     "migrate": "node scripts/migrate.mjs",
     "seed": "node scripts/seed.mjs",
     "notify:expiry": "node scripts/notify-membership-expiry.mjs",

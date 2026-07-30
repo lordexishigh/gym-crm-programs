@@ -2,17 +2,28 @@
  * Produce a production build at INSTALL time when the checkout has none
  * (`postinstall`).
  *
- * DELIBERATELY NO `#!/usr/bin/env node` LINE, unlike the other entry scripts here.
- * It is decorative — package.json invokes this as `node scripts/postinstall.mjs`,
- * never as an executable — and it silently disabled this file's own test suite.
- * Vitest's loader mishandles a shebang followed by a CRLF newline and throws
- * `SyntaxError: Invalid or unexpected token` at import, so `test/postinstall.test.ts`
- * failed to load ALL of its cases. Reproduced in isolation: an .mjs module with
- * `#!...\n` imports fine, the same module with `#!...\r\n` does not. The repo has no
- * `.gitattributes` and `core.autocrlf` is on, so every Windows checkout gets CRLF
- * while Linux CI gets LF — which is why the guard passed in CI and had never run on
- * a developer machine. Keep this file shebang-free rather than relying on line
- * endings a checkout controls.
+ * NO SHEBANG, DELIBERATELY, unlike the other entry scripts here. Nothing ever
+ * executes this file directly — package.json runs `node scripts/postinstall.mjs`,
+ * as does CI — so a `#!` line buys nothing, and it silently cost this file's
+ * entire regression guard.
+ *
+ * test/postinstall.test.ts imports `decideBuild` from here, so Vitest transforms
+ * the module through Vite first, and the transformed source died at import with
+ * `SyntaxError: Invalid or unexpected token`. ALL of the suite's cases failed to
+ * load — 0 tests, every assertion in them still correct. A shebang is only valid
+ * as the very first bytes of a file; anywhere else it is a bare `#`. Two separate
+ * rounds found two ways this file stopped satisfying that:
+ *
+ *   * Vite rewrites `import` of node builtins into CJS interop `const`
+ *     declarations and hoists them ABOVE the shebang.
+ *   * A shebang terminated by CRLF rather than LF also fails to parse. Reproduced
+ *     in isolation: `#!...\n` imports fine, `#!...\r\n` does not. The repo has no
+ *     `.gitattributes` and `core.autocrlf` is on, so Windows checkouts get CRLF
+ *     and Linux CI gets LF — which is why CI stayed green while no developer
+ *     machine had ever run this guard.
+ *
+ * Keep the file shebang-free rather than depending on a bundler's hoisting order
+ * or on line endings a checkout controls.
  *
  * WHY THIS EXISTS
  *
