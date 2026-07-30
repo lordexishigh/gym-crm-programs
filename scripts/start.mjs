@@ -40,9 +40,10 @@
  *      a page that has none of the product on it.
  *
  *      The dev server is run through scripts/lib/dev-server.mjs, which withholds
- *      the port until a request has actually been served on it — `next dev`
- *      otherwise binds at ~3s and cannot render `/` for another ~14s, which is
- *      the same "open but unresponsive" trap in a smaller form.
+ *      the port until every entry route (`/`, `/login`, `/portal/login`) has
+ *      actually been served on it — `next dev` otherwise binds at ~3s and cannot
+ *      render `/` for another ~14s, which is the same "open but unresponsive"
+ *      trap in a smaller form.
  *
  *      Dev mode is announced loudly, never silent: responses are slower and this
  *      is not how production should run. Production doesn't take this path —
@@ -209,10 +210,10 @@ async function ensureServable() {
         "port black-holes the connection instead of refusing it, so callers wait " +
         "out their whole budget and every route — even static ones like / and " +
         "/login — reads as timed out.\n" +
-        "[start] Expect roughly 15-20s before the port opens: that is `/` being " +
-        "compiled. The port stays shut until it has actually been served, so " +
-        "\"open\" means usable and a readiness loop cannot be waved through into a " +
-        "navigation that then times out.\n" +
+        "[start] Expect roughly 15-20s before the port opens: that is `/`, `/login` " +
+        "and `/portal/login` being compiled. The port stays shut until all three " +
+        "have actually been served, so \"open\" means usable and a readiness loop " +
+        "cannot be waved through into a navigation that then times out.\n" +
         "[start] This is a DEVELOPMENT server: the pages are real and complete, " +
         "the responses are slower. For a production server run `npm run build` " +
         "first; `npm start` then serves that build directly. START_AUTOBUILD=0 " +
