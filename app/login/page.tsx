@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { Suspense, useActionState } from "react";
 import Link from "next/link";
 import { loginAction, type LoginState } from "./actions";
 import { DemoSignInHint } from "../DemoSignInHint";
+import { SessionNotice } from "../SessionNotice";
 
 const initialState: LoginState = {};
 
@@ -38,6 +39,12 @@ export default function LoginPage() {
           </p>
         </div>
       </div>
+
+      {/* Why the visitor is on this form, when a guard sent them here. Inside
+          Suspense so the page still prerenders statically (see SessionNotice). */}
+      <Suspense fallback={null}>
+        <SessionNotice />
+      </Suspense>
 
       <form
         action={formAction}

@@ -2,8 +2,18 @@
 
 import { redirect } from "next/navigation";
 import { signInWithPassword } from "@/lib/auth/supabase";
-import { verifyAccessToken, sessionRole, claimValue } from "@/lib/identity";
+import {
+  identityFromClaims,
+  verifyAccessToken,
+  sessionRole,
+  type AccessTokenClaims,
+} from "@/lib/identity";
+import type { Identity } from "@/lib/db";
 import { establishSession } from "@/lib/auth/session";
+import {
+  ACCOUNT_NOT_LINKED_TO_GYM,
+  MEMBER_LANDING,
+} from "@/lib/auth/sign-in-reason";
 
 /**
  * Member portal sign-in (mvp-auth-003).
@@ -31,22 +41,42 @@ export async function memberLoginAction(
     return { error: result.error };
   }
 
-  let role: "staff" | "member";
-  let hasMemberId: boolean;
+  let claims: AccessTokenClaims;
   try {
-    const claims = await verifyAccessToken(result.tokens.accessToken);
-    role = sessionRole(claims);
-    hasMemberId = Boolean(claimValue(claims, "member_id"));
+    claims = await verifyAccessToken(result.tokens.accessToken);
   } catch {
     return { error: "Sign-in failed. Please try again." };
   }
 
-  if (role !== "member") {
+  if (sessionRole(claims) !== "member") {
     return {
       error: "This is a staff account — please use the staff sign-in page.",
     };
   }
-  if (!hasMemberId) {
+
+  /*
+   * Confirm `/portal` will accept this session BEFORE committing to it — see
+   * the longer note in app/login/actions.ts for the loop this prevents. The
+   * member side has two ways to fail the destination guard, and `requireMember`
+   * reads BOTH off the resolved identity, so we resolve the identity here and
+   * check the same two fields rather than re-deriving them from the raw claims:
+   *
+   *   - no `tenant_id` → `identityFromClaims` throws → `getSession` reports "no
+   *     session" → bounced back to this form.
+   *   - no `member_id` → `requireMember`'s own `!memberId` check → same bounce.
+   *
+   * Reading `identity.memberId` (rather than `claimValue(claims, "member_id")`)
+   * is deliberate: it is the exact value the guard gates on, so the two can't
+   * drift apart and reopen the loop.
+   */
+  let identity: Identity;
+  try {
+    identity = identityFromClaims(claims);
+  } catch {
+    return { error: ACCOUNT_NOT_LINKED_TO_GYM };
+  }
+
+  if (!identity.memberId) {
     return {
       error:
         "Your account setup isn't complete yet. Please use your invite link to finish setting up.",
@@ -54,5 +84,5 @@ export async function memberLoginAction(
   }
 
   await establishSession(result.tokens);
-  redirect("/portal");
+  redirect(MEMBER_LANDING);
 }

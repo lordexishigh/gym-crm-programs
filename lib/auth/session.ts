@@ -14,6 +14,7 @@ import {
   sessionCookieOptions,
 } from "@/lib/auth/cookies";
 import { getStaffRole, type StaffRole } from "@/lib/staff";
+import { signInPathWithReason } from "@/lib/auth/sign-in-reason";
 
 /**
  * Server-side session: cookie storage + JWT-derived identity.
@@ -74,10 +75,15 @@ export async function clearSession(): Promise<void> {
 /**
  * Guard for staff-only routes. Redirects to the staff login when there is no
  * valid staff session; a member who lands here is sent to the member portal.
+ *
+ * The login redirect carries a `reason` so the form can say why the visitor is
+ * back on it. Landing on a blank login form with no explanation is
+ * indistinguishable from sign-in having silently failed — see
+ * lib/auth/sign-in-reason.ts.
  */
 export async function requireStaff(): Promise<Session> {
   const session = await getSession();
-  if (!session) redirect("/login");
+  if (!session) redirect(signInPathWithReason("/login", "session-expired"));
   if (session.role !== "staff") redirect("/portal");
   return session;
 }
@@ -104,8 +110,15 @@ export async function requireOwner(): Promise<Session & { staffRole: StaffRole }
  */
 export async function requireMember(): Promise<Session> {
   const session = await getSession();
-  if (!session) redirect("/portal/login");
+  if (!session) {
+    redirect(signInPathWithReason("/portal/login", "session-expired"));
+  }
   if (session.role !== "member") redirect("/dashboard");
-  if (!session.identity.memberId) redirect("/portal/login");
+  // A member session with no member_id resolves to no Member row, so the portal
+  // has nothing to render. The reason distinguishes it from an expired session:
+  // signing in again cannot fix it, finishing the invite can.
+  if (!session.identity.memberId) {
+    redirect(signInPathWithReason("/portal/login", "setup-incomplete"));
+  }
   return session;
 }
