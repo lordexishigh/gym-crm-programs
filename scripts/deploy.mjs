@@ -68,6 +68,28 @@ import process from "node:process";
 const VERCEL_PKG = process.env.DEPLOY_VERCEL_PKG || "vercel@latest";
 
 /**
+ * The Vercel project to deploy to, passed EXPLICITLY on every deploy.
+ *
+ * Without this the CLI falls back to directory-based linking: it looks for
+ * `.vercel/project.json`, and finding none it creates a BRAND NEW PROJECT NAMED
+ * AFTER THE CURRENT DIRECTORY. `.vercel/` is gitignored, so any fresh clone — and
+ * every git worktree, which is how changes are prepared here — has no link.
+ *
+ * Observed, not theorised: the first run of this script from a worktree at
+ * `…/nous-wt-2-…/wt` built and deployed successfully to a new project called
+ * `wt` (aliased `wt-omega-steel.vercel.app`), reported "Deployment ready", and
+ * exited 0 — while `gym-crm-programs.vercel.app` went on serving the previous
+ * build. That is "built but not live" produced by the deploy tool itself, with a
+ * success message on top of it, and it is exactly what the post-deploy
+ * verification below caught.
+ *
+ * `VERCEL_PROJECT_ID` is honoured first so this agrees with
+ * `.github/workflows/deploy.yml`, which passes the id from repository secrets.
+ */
+const VERCEL_PROJECT =
+  process.env.DEPLOY_VERCEL_PROJECT || process.env.VERCEL_PROJECT_ID || "gym-crm-programs";
+
+/**
  * The URL a real user visits, which is the only URL whose behaviour this script
  * is allowed to conclude anything from. A deployment's immutable URL always
  * serves the build that was just uploaded, so checking it would pass even in the
@@ -305,7 +327,13 @@ async function verifyLive(previousBuildId) {
         `serving build ${previousBuildId}. The build succeeded but the production ` +
         "alias was never moved onto it, so the running app does not serve this " +
         "code — the exact 'built but not live' state this script exists to catch.\n" +
-        "[deploy] Check `npx vercel ls` and the project's production alias.",
+        "[deploy] Most likely cause, and the one seen in practice: THE DEPLOY WENT " +
+        `TO THE WRONG PROJECT. Check the "Production" URL the CLI printed above — if ` +
+        `it is not a ${VERCEL_PROJECT} URL, the CLI linked by directory name instead ` +
+        `of to ${VERCEL_PROJECT} (this run passed --project, so suspect a stale or ` +
+        "conflicting .vercel/project.json).\n" +
+        `[deploy] Otherwise the alias itself did not move: check \`npx vercel ls\` and ` +
+        `the production alias on the ${VERCEL_PROJECT} project.`,
     );
     return false;
   }
@@ -428,7 +456,7 @@ async function main() {
   // 4. Deploy. `--yes` so it never waits on a prompt in a non-interactive run.
   //    Built as a quoted command line because `npx` is a `.cmd` shim on Windows
   //    and can only be spawned through a shell (see `run`).
-  let command = `npx --yes ${VERCEL_PKG} deploy --prod --yes`;
+  let command = `npx --yes ${VERCEL_PKG} deploy --prod --yes --project "${VERCEL_PROJECT}"`;
   if (token) command += ` --token "${token}"`;
   else {
     console.log(
@@ -436,7 +464,9 @@ async function main() {
         "Set VERCEL_TOKEN for a non-interactive deploy.",
     );
   }
-  console.log(`[deploy] Running: npx ${VERCEL_PKG} deploy --prod`);
+  console.log(
+    `[deploy] Running: npx ${VERCEL_PKG} deploy --prod --project ${VERCEL_PROJECT}`,
+  );
   const deployed = await run(command, [], { echo: true, line: true });
   if (deployed.code !== 0) {
     console.error(`[deploy] \`vercel deploy\` failed (exit ${deployed.code}). Production unchanged.`);
