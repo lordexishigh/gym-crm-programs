@@ -3,9 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { requireMember } from "@/lib/auth/session";
 import { logWorkout, validateWorkoutLogInput } from "@/lib/workout-logs";
-import { bookClass, cancelBooking } from "@/lib/classes";
+import { bookClass, cancelBooking, markPromotionNotified } from "@/lib/classes";
 import { withTenantContext } from "@/lib/db";
-import { sendBookingConfirmationEmail } from "@/lib/notifications";
+import {
+  sendBookingConfirmationEmail,
+  notifyWaitlistPromotions,
+} from "@/lib/notifications";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
@@ -110,7 +113,16 @@ export async function bookClassAction(
 
 export type CancelBookingState = { error?: string; success?: string };
 
-/** Cancel the member's own class booking; RLS scopes it to their own row. */
+/**
+ * Cancel the member's own class booking; RLS scopes it to their own row.
+ *
+ * The freed spot does not stay empty: `cancelBooking` auto-promotes the
+ * longest-waiting member off that class's waitlist, and we email whoever moved
+ * up. That notify step is deliberately best-effort and swallowed — the
+ * cancelling member's request already succeeded, and a mail failure must not
+ * be reported back to them as a failed cancellation. The promotion itself is
+ * committed either way and shows in the promoted member's portal.
+ */
 export async function cancelClassBookingAction(
   _prev: CancelBookingState,
   formData: FormData,
@@ -122,6 +134,23 @@ export async function cancelClassBookingAction(
   const result = await cancelBooking(session.identity, bookingId);
   if (!result.ok) return { error: result.error };
 
+  if (result.promoted.length > 0) {
+    try {
+      const notified = await notifyWaitlistPromotions(result.promoted);
+      await markPromotionNotified(session.identity.tenantId, notified);
+    } catch (err) {
+      await reportHandledError(err, "waitlist-promotion-notify", {
+        tenantId: session.identity.tenantId,
+        bookingId,
+      });
+    }
+  }
+
   revalidatePath("/portal");
-  return { success: "Booking cancelled." };
+  return {
+    success:
+      result.promoted.length > 0
+        ? "Booking cancelled — your spot went to the next member on the waitlist."
+        : "Booking cancelled.",
+  };
 }
