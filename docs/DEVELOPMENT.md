@@ -45,6 +45,41 @@ when devDependencies are absent (`--omit=dev` cannot build), and when another
 process already owns `.next`. It never fails an install: if the build fails,
 `npm start` still serves via its `next dev` fallback.
 
+### Never install without devDependencies
+
+That last sentence has one exception, and it used to be this project's worst bug.
+The `next dev` fallback is **not** a safety net for a tree installed with
+`--omit=dev` (or `NODE_ENV=production`, which npm treats identically), because
+the packages that turn source into HTML are themselves devDependencies:
+`tailwindcss` and `autoprefixer` are the PostCSS plugins named by
+`postcss.config.mjs`, `app/globals.css` is imported by `app/layout.tsx` on every
+route, and every route is TypeScript. Without them nothing compiles — not a
+build, not a dev server, not one page.
+
+The result was total unreachability that named nothing: install quietly skipped
+the build, `next dev` shelled out to npm mid-boot to install TypeScript for
+itself, no route ever compiled, the readiness gate waited on entry routes that
+could never answer, and every caller reported a timeout. Reproduced end to end:
+`NODE_ENV=production npm ci` installed **70** packages instead of 230, and
+`GET /` returned nothing for 222s and then timed out at exactly 45.005s. That is
+the "member portal is completely unreachable — `/login` and `/portal/login` time
+out at 45s" finding, and it recurred for several review rounds because every
+verification used a normal `npm ci`, which is the one install that works.
+
+Two things now prevent it:
+
+- **`.npmrc` sets `include=dev`.** `include` is the inverse of `omit` and wins
+  over it wherever either is set, so devDependencies survive both an inherited
+  `NODE_ENV=production` and an explicit `--omit=dev` on the command line.
+  Verified: `npm ci --omit=dev` installs all 230 packages.
+- **`npm start` preflights them** (`missingRenderDeps` in
+  `scripts/lib/dev-server.mjs`) and refuses to start in under a second, naming
+  the missing packages and the fix, rather than holding a port that could never
+  answer. A hand-pruned `node_modules` therefore fails loudly instead of mutely.
+
+CI asserts the first of these on every run (`npm ci --omit=dev --dry-run` must
+still plan to install tailwindcss, autoprefixer and typescript).
+
 ### `npm run dev` takes ~20s to open its port, on purpose
 
 `npm run dev` runs `scripts/dev.mjs`, which does not open the port until every

@@ -50,6 +50,10 @@ import {
   hasProductionBuild,
   releaseBuildLock,
 } from "./lib/build-lock.mjs";
+// The single list of packages without which nothing renders, shared with
+// scripts/start.mjs so an install-time skip and a start-time refusal can never
+// disagree about what "cannot build" means.
+import { missingRenderDeps } from "./lib/dev-server.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = process.cwd();
@@ -62,20 +66,20 @@ function isSet(value) {
 /**
  * Whether the toolchain needed for `next build` is actually installed.
  *
- * Tailwind, PostCSS and autoprefixer are devDependencies, so an install run with
- * `--omit=dev` (or NODE_ENV=production, which npm treats the same way) cannot
- * build. Attempting it there would fail noisily on every production install for
- * no benefit.
+ * Tailwind, PostCSS, autoprefixer and typescript are devDependencies, so an
+ * install run with `--omit=dev` (or NODE_ENV=production, which npm treats the
+ * same way) cannot build. Attempting it there would fail noisily on every
+ * production install for no benefit.
+ *
+ * Note what skipping does NOT buy: such a tree cannot be served by the `next dev`
+ * fallback either, so the app is not merely unbuilt, it is unrenderable. The
+ * committed `.npmrc` (include=dev) exists to stop that install from happening at
+ * all; `npm start` refuses to start if it happened anyway.
  */
-function buildToolchainPresent(resolver = require.resolve) {
-  try {
-    // Resolved from THIS file, so it reflects the tree just installed.
-    resolver("tailwindcss");
-    resolver("postcss");
-    return true;
-  } catch {
-    return false;
-  }
+function buildToolchainPresent() {
+  // Resolved from the shared list in scripts/lib/dev-server.mjs, so this and the
+  // start-time preflight cannot drift apart.
+  return missingRenderDeps().length === 0;
 }
 
 /**
@@ -113,8 +117,11 @@ export function decideBuild({
       build: false,
       reason:
         "devDependencies are absent (--omit=dev / NODE_ENV=production), so " +
-        "`next build` cannot run — skipping. Run `npm run build` with dev " +
-        "dependencies installed to produce a production build.",
+        "`next build` cannot run — skipping. WARNING: this tree cannot render a " +
+        "page at all — tailwindcss/autoprefixer/typescript are required to compile " +
+        "every route, so `npm start`'s `next dev` fallback cannot serve it either " +
+        "and it will refuse to start. Reinstall with `npm install --include=dev` " +
+        "(the committed .npmrc does this unless overridden).",
     };
   }
 

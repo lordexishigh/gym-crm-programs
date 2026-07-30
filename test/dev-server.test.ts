@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   ENTRY_PATHS,
+  RENDER_DEPS,
   activeForwarder,
+  missingRenderDeps,
   openGate,
   resolveHost,
   resolvePort,
@@ -475,4 +477,103 @@ describe("scripts/dev.mjs", () => {
     expect(out).toMatch(/did not answer within 1s/);
     expect(out).toMatch(/opening the port anyway/);
   }, 45_000);
+
+  /**
+   * The gate's bounds must stay smaller than a caller's patience.
+   *
+   * THE DEFECT THIS PINS. The bounds above were 120s (max) and 45s (secondary
+   * grace). A review harness allows a navigation 20-45s, so when the entry routes
+   * could not answer — which happens for real: a tree installed without the
+   * render toolchain cannot compile a single route (see `missingRenderDeps`) — the
+   * port was still UNBOUND at the moment every one of those budgets expired. An
+   * unbound port black-holes the SYN instead of refusing it, so `/`, `/login` and
+   * `/portal/login` all reported TIMEOUT and the product was judged completely
+   * unreachable. Reproduced end to end before this was changed: the log read "did
+   * not answer within 120s; opening the port anyway" while a concurrent `GET /`
+   * timed out at 45.005s.
+   *
+   * The secondary grace was the worse of the two: at 45s it was EXACTLY a
+   * harness's navigation budget, so one silent route could hold a `/` that
+   * demonstrably worked behind a shut port for precisely as long as it took every
+   * caller to give up on it.
+   *
+   * So the defaults are part of the contract, not tuning. Asserted through a
+   * child process because they are module-level defaults read from the
+   * environment — this suite sets those variables elsewhere, and reading them
+   * in-process would test whatever a previous test left behind.
+   */
+  it("bounds the gate well inside a caller's navigation budget", async () => {
+    const url = new URL("../scripts/lib/dev-server.mjs", import.meta.url).href;
+    const script = [
+      `const m = await import(${JSON.stringify(url)});`,
+      // Drive the gate with no upstream at all and no route it can ever reach, so
+      // the only thing that can end `warmUp` is the ceiling itself.
+      "const started = Date.now();",
+      "await m.warmUp({ port: 0, host: '127.0.0.1', upstreamHost: '127.0.0.1',",
+      "  upstreamPort: 1, gated: false });",
+      "console.log('ELAPSED=' + (Date.now() - started));",
+    ].join("\n");
+
+    const { out } = await new Promise<{ out: string }>((resolve) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+        // A clean environment for the two variables under test: an inherited
+        // value would be exactly what this asserts is not relied upon.
+        env: { ...process.env, DEV_GATE_MAX_MS: "", DEV_GATE_SECONDARY_MS: "" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d.toString()));
+      child.stderr.on("data", (d) => (out += d.toString()));
+      child.on("close", () => resolve({ out }));
+    });
+
+    const elapsed = Number(/ELAPSED=(\d+)/.exec(out)?.[1]);
+    expect(Number.isFinite(elapsed)).toBe(true);
+    // The hard requirement: the ceiling fires inside the tightest budget a
+    // reviewer has used (45s), with room for the navigation that follows it. 120s
+    // failed this by a factor of four.
+    expect(elapsed).toBeLessThan(40_000);
+    // And it is a real wait, not an accidental instant return that would defeat
+    // the gate in the normal case.
+    expect(elapsed).toBeGreaterThan(5_000);
+  }, 60_000);
+});
+
+describe("render-toolchain preflight", () => {
+  /**
+   * THE DEFECT THIS PINS. `tailwindcss`, `autoprefixer` and `typescript` are
+   * devDependencies, so `npm ci --omit=dev` — or NODE_ENV=production, which npm
+   * treats identically — installs 70 packages instead of 230 and none of them.
+   * postcss.config.mjs names tailwindcss and autoprefixer, app/layout.tsx imports
+   * app/globals.css on every route, and every route is TypeScript: such a tree
+   * cannot compile a single page.
+   *
+   * That was the root cause of the reported "member portal completely
+   * unreachable": no build could be produced at install time, `next dev` could
+   * not compile anything, the readiness gate waited on routes that would never
+   * answer, and every caller saw a timeout with nothing naming an install
+   * problem. `.npmrc` (include=dev) prevents that install; this preflight makes
+   * sure a tree that got one anyway says so in seconds instead of hanging.
+   */
+  it("lists the packages without which no route can compile", () => {
+    for (const pkg of ["tailwindcss", "autoprefixer", "typescript"]) {
+      expect(RENDER_DEPS).toContain(pkg);
+    }
+  });
+
+  it("reports nothing missing in this (fully installed) checkout", () => {
+    // If this ever fails, `npm start` would correctly refuse to start — the
+    // checkout genuinely cannot render.
+    expect(missingRenderDeps()).toEqual([]);
+  });
+
+  it("names exactly the packages a pruned tree cannot resolve", () => {
+    const pruned = (pkg: string) => {
+      if (pkg === "tailwindcss" || pkg === "typescript") {
+        throw new Error(`Cannot find module '${pkg}'`);
+      }
+      return pkg;
+    };
+    expect(missingRenderDeps(pruned)).toEqual(["tailwindcss", "typescript"]);
+  });
 });

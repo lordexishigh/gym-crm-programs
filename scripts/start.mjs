@@ -84,6 +84,7 @@ import process from "node:process";
 import {
   describePortHolder,
   disabled,
+  missingRenderDeps,
   portInUse,
   resolveHost,
   resolvePort,
@@ -189,6 +190,39 @@ async function ensureServable() {
     if (hasProductionBuild()) {
       mode = "start";
       return mode;
+    }
+
+    // Nothing can be served if the tree cannot compile a page — and that is the
+    // one failure here that is completely silent, so it is checked before any
+    // fallback is chosen. A tree installed without dev dependencies has no
+    // tailwindcss/autoprefixer for postcss.config.mjs and no typescript, so
+    // `next build` cannot run AND `next dev` cannot compile a single route. The
+    // readiness gate then waits on entry routes that will never answer and the
+    // port stays shut for its whole budget, which every caller reports as "the
+    // product times out" — with nothing in the output pointing at an install.
+    // Reproduced end to end: `GET /` timed out at 45.0s against a tree installed
+    // with NODE_ENV=production. `.npmrc` (include=dev) is what prevents that
+    // install; this is what stops a tree that got one anyway from failing mutely.
+    const missing = missingRenderDeps();
+    if (missing.length) {
+      console.error(
+        `[start] This checkout cannot render any page: ${missing.join(", ")} ` +
+          `${missing.length === 1 ? "is" : "are"} not installed.\n` +
+          "[start] These are devDependencies, and this node_modules was installed " +
+          "without them (`--omit=dev`, or NODE_ENV=production, which npm treats " +
+          "the same way). Without them PostCSS cannot process app/globals.css — " +
+          "which every route imports — so `next build` cannot produce a build and " +
+          "`next dev` cannot compile a single route. Every URL, including static " +
+          "ones like / and /login, would hang until the caller timed out.\n" +
+          "[start] Fix: reinstall with dev dependencies — `npm install --include=dev`. " +
+          "The committed .npmrc already does this by default; an explicit " +
+          "`--omit=dev` on the command line or a hand-pruned node_modules " +
+          "overrides it.\n" +
+          "[start] Refusing to start: holding a port that could never answer is " +
+          "what made this look like an unreachable product instead of an install " +
+          "problem.",
+      );
+      return null;
     }
 
     // Explicit opt-out: preserve the fail-fast for callers that manage their own

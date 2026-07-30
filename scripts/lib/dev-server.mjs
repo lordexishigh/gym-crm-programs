@@ -59,8 +59,13 @@
  * before the port opens without them — waiting for more routes must never let one
  * silent route hide a landing page that works. Either way the app's own response,
  * error page included, becomes visible and the warning names what was never
- * confirmed. DEV_GATE=0 opts out entirely and restores `next dev`'s own
- * bind-immediately behaviour; DEV_WARMUP=0 narrows the gate back to `/`.
+ * confirmed. BOTH bounds are sized well under a caller's navigation budget on
+ * purpose: a shut port is only better than an unresponsive one while the caller is
+ * still willing to wait, so a bound that outlasts that willingness reproduces the
+ * very "everything times out" verdict this gate exists to prevent. See
+ * `gateMaxMs`, which used to be 120s and was measured doing exactly that.
+ * DEV_GATE=0 opts out entirely and restores `next dev`'s own bind-immediately
+ * behaviour; DEV_WARMUP=0 narrows the gate back to `/`.
  *
  * Everything here is dependency-free (node: builtins only) so it runs before any
  * install-time assumptions hold.
@@ -84,11 +89,70 @@ const NEXT_BIN = require.resolve("next/dist/bin/next");
 export const ENTRY_PATHS = ["/", "/login", "/portal/login"];
 
 /**
+ * Packages that must be resolvable before ANY page of this project can be
+ * rendered, in either `next build` or `next dev`.
+ *
+ * They are all devDependencies, so an install that omits dev dependencies
+ * (`--omit=dev`, or NODE_ENV=production, which npm treats the same way) leaves a
+ * tree that cannot compile a single route: postcss.config.mjs names tailwindcss
+ * and autoprefixer, app/layout.tsx imports app/globals.css on every route, and
+ * every route is TypeScript. See `.npmrc`, which is what stops that install from
+ * happening, and `missingRenderDeps`, which is what stops it presenting as a hang.
+ */
+export const RENDER_DEPS = ["tailwindcss", "postcss", "autoprefixer", "typescript"];
+
+/**
+ * Which of `RENDER_DEPS` this tree cannot resolve — empty when the checkout can
+ * actually render.
+ *
+ * Worth a preflight rather than being left to fail at compile time, because the
+ * failure mode is invisible in the worst possible way: the routes cannot compile,
+ * so the readiness gate below waits for responses that will never come, so the
+ * port stays shut, so every caller reports a TIMEOUT rather than the real error.
+ * Naming the missing packages in seconds is the difference between an actionable
+ * install problem and "the whole product is unreachable".
+ *
+ * The resolver is injectable so tests can exercise a pruned tree without one.
+ *
+ * @param {(name: string) => unknown} [resolver]
+ * @returns {string[]}
+ */
+export function missingRenderDeps(resolver = require.resolve) {
+  return RENDER_DEPS.filter((pkg) => {
+    try {
+      resolver(pkg);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+/**
  * Ceiling on waiting for the entry routes before opening the port regardless.
+ *
+ * SIZED AGAINST A CALLER'S NAVIGATION BUDGET, deliberately. This ceiling is the
+ * safety valve for the case where a route never answers at all, and a valve that
+ * opens after the caller has already given up is not a valve. An earlier revision
+ * used 120s: a review harness allows a navigation 20-45s, so the port was still
+ * UNBOUND when every one of those budgets expired — and an unbound port
+ * black-holes the SYN rather than refusing it, so `/`, `/login` and
+ * `/portal/login` all read as timed out and the product read as unreachable. That
+ * was observed, not theorised: with the render toolchain missing (see
+ * `missingRenderDeps`) the log said "did not answer within 120s; opening the port
+ * anyway", and a concurrent `GET /` timed out at 45.0s.
+ *
+ * 30s keeps the gate doing its job — the measured cold compile of all three entry
+ * routes is ~19s, so the normal path still opens the port only once they are
+ * genuinely served — while guaranteeing the port opens inside any realistic
+ * budget when they are not. Opening un-warm is not a regression to the original
+ * bug either: `warmUp` leaves its requests IN FLIGHT, so a navigation arriving
+ * after the valve joins the compile already in progress instead of starting one.
+ *
  * Read per call, not at module load, so a caller (or a test) that sets the
  * variable after this module is imported still gets the budget it asked for.
  */
-const gateMaxMs = () => Number(process.env.DEV_GATE_MAX_MS) || 120_000;
+const gateMaxMs = () => Number(process.env.DEV_GATE_MAX_MS) || 30_000;
 
 /** Per-request ceiling while warming. Generous: this is a cold compile. */
 const WARM_REQUEST_MS = 90_000;
@@ -102,10 +166,20 @@ const WARM_REQUEST_MS = 90_000;
  * unreachable host, which is the cure becoming the disease. Once ANY route has
  * answered the shared module graph is warm, so a route still silent after this
  * grace period is far more likely broken than slow, and the useful thing to do is
- * open the port and name it. Tunable via DEV_GATE_SECONDARY_MS; read per call for
- * the same reason as `gateMaxMs`.
+ * open the port and name it.
+ *
+ * 10s, not the 45s an earlier revision used. 45s was itself exactly the budget a
+ * review harness allows a navigation, so a working `/` could be held behind a
+ * shut port for precisely as long as it took every caller to give up on it — the
+ * worst possible value. Since this timer only starts once something HAS answered,
+ * the shared graph is already compiled and a sibling route needs ~1-2s more
+ * (measured: all three entry routes served within 18.5s of a cold start, against
+ * ~19s for `/` alone), so 10s is several times the real requirement.
+ *
+ * Tunable via DEV_GATE_SECONDARY_MS; read per call for the same reason as
+ * `gateMaxMs`.
  */
-const secondaryGraceMs = () => Number(process.env.DEV_GATE_SECONDARY_MS) || 45_000;
+const secondaryGraceMs = () => Number(process.env.DEV_GATE_SECONDARY_MS) || 10_000;
 
 /**
  * How long a dev server must survive before its exit counts as "it ran and then

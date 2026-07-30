@@ -102,14 +102,23 @@ describe("scripts/postinstall.mjs — decideBuild", () => {
   });
 
   it("skips when devDependencies are absent, since `next build` needs them", () => {
-    // Tailwind/PostCSS are devDependencies: `npm ci --omit=dev` cannot build, and
-    // trying would fail noisily on every production install for no benefit.
+    // Tailwind/PostCSS/typescript are devDependencies: `npm ci --omit=dev` cannot
+    // build, and trying would fail noisily on every production install for no
+    // benefit.
     const { build, reason } = decide({ toolchain: false });
 
     expect(build).toBe(false);
     expect(reason).toMatch(/devDependencies/);
-    // It must point at the remedy rather than leaving a bare refusal.
-    expect(reason).toMatch(/npm run build/);
+    // It must point at the remedy rather than leaving a bare refusal — and the
+    // remedy is REINSTALLING, not `npm run build`. Such a tree cannot compile a
+    // single route, so building it fails for the same reason serving it does; the
+    // message used to suggest a build that could not possibly succeed. This is the
+    // one place a production install is told what actually went wrong, so it has
+    // to name the install flag.
+    expect(reason).toMatch(/--include=dev/);
+    // And it must not undersell the consequence: an unbuilt tree is normally fine
+    // (`npm start` falls back to `next dev`), but this one cannot be served either.
+    expect(reason).toMatch(/cannot render/);
   });
 
   it("yields when another process owns .next instead of writing underneath it", () => {
