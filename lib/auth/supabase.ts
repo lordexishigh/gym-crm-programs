@@ -21,9 +21,27 @@ export type AuthTokens = {
   expiresIn: number;
 };
 
+/**
+ * Why a failure is classified, not just described.
+ *
+ * `error` is written for a visitor to read, which makes it useless for deciding
+ * whether anyone should be told. "Invalid email or password" is a normal Tuesday
+ * — reporting it would bury the monitoring sink in typos. Every other failure
+ * here means the deployment cannot authenticate ANYBODY: the auth service is
+ * unreachable, timing out, misconfigured, or answering with something that is
+ * not a token. That is a total outage of both sign-in surfaces, and it used to be
+ * invisible, because the actions turned it into the same friendly string as a bad
+ * password and returned it. Callers switch on this to report the second kind.
+ */
+export type AuthFailureKind =
+  /** The credentials were rejected. Expected; user-fixable; not an incident. */
+  | "credentials"
+  /** The auth service could not be used at all. Nobody can sign in right now. */
+  | "unavailable";
+
 export type AuthResult =
   | { ok: true; tokens: AuthTokens }
-  | { ok: false; error: string };
+  | { ok: false; error: string; kind: AuthFailureKind };
 
 /**
  * User-facing message for "this deployment has no auth service configured".
@@ -141,9 +159,13 @@ function toTokens(body: GoTrueTokenResponse): AuthResult {
       },
     };
   }
+  // Reached when the service answered but there is no usable token pair — a 5xx,
+  // or a 200 whose body is not a session. Either way the service is not working,
+  // not the credentials: a rejected password is a 400 and is handled before this.
   return {
     ok: false,
     error: body.error_description || body.msg || body.error || "Authentication failed.",
+    kind: "unavailable",
   };
 }
 
@@ -152,7 +174,7 @@ async function postToken(
   payload: Record<string, string>,
 ): Promise<AuthResult> {
   const config = supabaseConfig();
-  if (!config) return { ok: false, error: NOT_CONFIGURED };
+  if (!config) return { ok: false, error: NOT_CONFIGURED, kind: "unavailable" };
   const { url, publishableKey } = config;
   let res: Response;
   try {
@@ -176,6 +198,7 @@ async function postToken(
       error: isTimeout(err)
         ? "The authentication service timed out. Please try again."
         : "Could not reach the authentication service.",
+      kind: "unavailable",
     };
   }
 
@@ -189,7 +212,7 @@ async function postToken(
   if (!res.ok) {
     // Avoid leaking which factor was wrong on a 400 (invalid credentials).
     if (res.status === 400) {
-      return { ok: false, error: "Invalid email or password." };
+      return { ok: false, error: "Invalid email or password.", kind: "credentials" };
     }
     return toTokens(body);
   }

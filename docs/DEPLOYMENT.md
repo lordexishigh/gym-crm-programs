@@ -17,6 +17,7 @@ source. See [`.env.example`](../.env.example) for the full list.
 | `RESEND_API_KEY` / `INVITE_FROM_EMAIL` | Vercel (server-only) | Invite email send. `INVITE_FROM_EMAIL` must use the verified sending domain (below). |
 | `RESEND_WEBHOOK_SECRET` | Vercel (server-only) | Verifies inbound Resend bounce/complaint webhooks (`whsec_...`). |
 | `MONITORING_WEBHOOK_URL` / `ALERT_WEBHOOK_URL` | Vercel (server-only) | Optional. Error-monitoring sink + critical-alert sink (see Observability). |
+| `LOGIN_THROTTLE_WINDOW_MS` / `LOGIN_THROTTLE_IP_ATTEMPTS` / `LOGIN_THROTTLE_ACCOUNT_ATTEMPTS` | Vercel (server-only) | Optional. Sign-in brute-force limits (see Sign-in throttle). |
 
 In CI/CD these live in GitHub repository **secrets**. The Deploy workflow needs
 `DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the daily
@@ -147,8 +148,32 @@ In each inbox, open **Show original / View source** and confirm `SPF=pass`,
   `ALERT_WEBHOOK_URL` (e.g. a Slack/PagerDuty webhook), falling back to the
   monitoring URL flagged `alert: true`. Invite send failures and email
   bounces/complaints are raised at this level.
+- **Sign-in failures are reported too** — the two login Server Actions used to
+  turn *every* failure into the same friendly string and tell nobody, so a
+  deployment where authentication was completely broken looked exactly like one
+  where someone mistyped a password. They now classify the failure
+  (`AuthFailureKind` in `lib/auth/supabase.ts`) and report the ones that mean
+  nobody can sign in: an unusable auth service (unreachable / timing out /
+  unconfigured / not returning a session), and — as `critical` — an access token
+  this deployment cannot verify, which is a 100% login failure even with the
+  correct password. A rejected password is deliberately *not* reported.
 - Users only ever see a friendly message plus a correlation id; stack traces stay
   server-side.
+
+## Sign-in throttle (beta-hardening-002)
+
+`/login` and `/portal/login` rate-limit password submissions before any call to
+the auth service (`lib/auth/login-throttle.ts` over `lib/rate-limit.ts`). Two
+buckets must both pass, because they stop different attacks: **per IP** (one host
+walking a password list) and **per account** (credential stuffing for one address
+from many hosts, which a per-IP counter cannot see). Defaults are 10 attempts per
+IP and 6 per account per 5-minute rolling window; a successful sign-in clears both.
+Refusals are logged as `sign-in attempt throttled` with the scope and rate — but
+never the address or IP, both of which are personal data.
+
+Tuning and the single-instance caveat (counters are per server instance, so the
+effective global limit is instances × the value) are documented on the
+`LOGIN_THROTTLE_*` variables in [`.env.example`](../.env.example).
 
 Health check: `GET /api/health` returns
 `{ ok, status, db, db_latency_ms, email, time }` — plus `db_error` when the
