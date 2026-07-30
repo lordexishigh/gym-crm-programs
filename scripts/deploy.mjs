@@ -107,31 +107,35 @@ function isSet(value) {
 }
 
 /**
- * Run a command, streaming its output, and resolve with `{ code, out }`.
+ * Spawn a child and resolve with `{ code, out }`. Never rejects.
  *
- * Output is echoed as it arrives (so a 40s deploy is not a silent wait) AND
- * captured, so a failure can be quoted back in this script's own error rather
- * than leaving the operator to scroll for it.
+ * `echo` controls whether output is streamed as it arrives. ON for the long
+ * commands an operator needs to watch (a 40s deploy must not look like a hang),
+ * OFF for the small `git` probes below, whose raw output is plumbing rather than
+ * something to print at someone. Output is captured either way, so a failure can
+ * be quoted back in this script's own error instead of leaving the operator to
+ * scroll for it.
+ *
+ * `line` passes a single pre-quoted command STRING through a shell, which is what
+ * the `npx` shim needs on Windows (Node cannot spawn a `.cmd` without one).
+ * Passing an args ARRAY with `shell: true` is what triggers Node's DEP0190
+ * warning — the arguments get concatenated unescaped — so the two modes are kept
+ * strictly separate: shell form takes a string, array form never uses a shell.
  */
-function run(cmd, args, { env = process.env, capture = true } = {}) {
+function run(cmd, args = [], { env = process.env, echo = false, line = false } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      cwd: process.cwd(),
-      env,
-      stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
-      // The Vercel CLI is a shell shim (npx/npm.cmd) on Windows.
-      shell: process.platform === "win32",
-    });
+    const opts = { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] };
+    const child = line
+      ? spawn(cmd, { ...opts, shell: true })
+      : spawn(cmd, args, opts);
     let out = "";
-    if (capture) {
-      const take = (chunk) => {
-        const text = chunk.toString();
-        out += text;
-        process.stderr.write(text);
-      };
-      child.stdout?.on("data", take);
-      child.stderr?.on("data", take);
-    }
+    const take = (chunk) => {
+      const text = chunk.toString();
+      out += text;
+      if (echo) process.stderr.write(text);
+    };
+    child.stdout?.on("data", take);
+    child.stderr?.on("data", take);
     child.on("error", (err) => resolve({ code: -1, out: `${out}\n${err.message}` }));
     child.on("close", (code) => resolve({ code: code ?? -1, out }));
   });
@@ -343,20 +347,43 @@ async function verifyLive(previousBuildId) {
   return true;
 }
 
-/** Current git state, as the blockers above expect it. Never throws. */
+/**
+ * Current git state, as the blockers above expect it. Never throws.
+ *
+ * "Is this commit pushed?" is answered by asking whether any REMOTE-TRACKING
+ * branch contains HEAD, not by an `@{upstream}` count. The two differ exactly
+ * where this project lives: a git worktree, a detached HEAD, or a branch pushed
+ * with an explicit refspec (`git push origin HEAD:master`) all have no upstream
+ * configured, so an upstream-only check reports "not pushed" for a commit that is
+ * demonstrably on the remote and would block every deploy made that way. The
+ * containment test is also the stricter question — it is about THIS commit rather
+ * than about a branch pointer.
+ *
+ * The upstream count is still consulted, but only to turn a blocked deploy's
+ * message from "not pushed" into "N commits ahead".
+ */
 async function gitState() {
   const status = await run("git", ["status", "--porcelain"]);
   const branch = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
-  const counts = await run("git", ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]);
-  // "behind<TAB>ahead"; an absent upstream exits non-zero, which we treat as
-  // "cannot prove it is pushed" and therefore as unpushed.
-  let unpushed = 0;
-  if (counts.code === 0) {
-    const ahead = Number(counts.out.trim().split(/\s+/)[1]);
-    unpushed = Number.isFinite(ahead) ? ahead : 0;
-  } else {
-    unpushed = 1;
+
+  const remotes = await run("git", ["branch", "-r", "--contains", "HEAD"]);
+  const onRemote = remotes.code === 0 && remotes.out.trim() !== "";
+
+  let unpushed = onRemote ? 0 : 1;
+  if (!onRemote) {
+    // "behind<TAB>ahead" when an upstream exists; used for the count only.
+    const counts = await run("git", [
+      "rev-list",
+      "--left-right",
+      "--count",
+      "@{upstream}...HEAD",
+    ]);
+    if (counts.code === 0) {
+      const ahead = Number(counts.out.trim().split(/\s+/)[1]);
+      if (Number.isFinite(ahead) && ahead > 0) unpushed = ahead;
+    }
   }
+
   return {
     dirty: status.code === 0 && status.out.trim() !== "",
     unpushed,
@@ -384,7 +411,7 @@ async function main() {
   const { migrate, reason } = decideMigrate();
   console.log(`[deploy] ${reason}`);
   if (migrate) {
-    const res = await run(process.execPath, ["scripts/migrate.mjs"]);
+    const res = await run(process.execPath, ["scripts/migrate.mjs"], { echo: true });
     if (res.code !== 0) {
       console.error(
         `[deploy] Migrations failed (exit ${res.code}). NOT deploying: a build that goes ` +
@@ -399,8 +426,10 @@ async function main() {
   const previousBuildId = await liveBuildId();
 
   // 4. Deploy. `--yes` so it never waits on a prompt in a non-interactive run.
-  const args = ["--yes", VERCEL_PKG, "deploy", "--prod", "--yes"];
-  if (token) args.push("--token", token);
+  //    Built as a quoted command line because `npx` is a `.cmd` shim on Windows
+  //    and can only be spawned through a shell (see `run`).
+  let command = `npx --yes ${VERCEL_PKG} deploy --prod --yes`;
+  if (token) command += ` --token "${token}"`;
   else {
     console.log(
       "[deploy] VERCEL_TOKEN is not set — relying on an existing `vercel login`. " +
@@ -408,7 +437,7 @@ async function main() {
     );
   }
   console.log(`[deploy] Running: npx ${VERCEL_PKG} deploy --prod`);
-  const deployed = await run("npx", args);
+  const deployed = await run(command, [], { echo: true, line: true });
   if (deployed.code !== 0) {
     console.error(`[deploy] \`vercel deploy\` failed (exit ${deployed.code}). Production unchanged.`);
     process.exit(1);
