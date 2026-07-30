@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-72%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-76%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 72/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 76/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 70 | `██████████████░░░░░░` |
-| Code quality | 80 | `████████████████░░░░` |
-| Robustness & error handling | 63 | `█████████████░░░░░░░` |
-| Builds & tests | 82 | `████████████████░░░░` |
-| UX & design | 62 | `████████████░░░░░░░░` |
+| Spec coverage | 72 | `██████████████░░░░░░` |
+| Code quality | 83 | `█████████████████░░░` |
+| Robustness & error handling | 65 | `█████████████░░░░░░░` |
+| Builds & tests | 88 | `██████████████████░░` |
+| UX & design | 76 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -43,22 +43,21 @@
 
 ## Strengths
 
-- Comprehensive RLS enforcement: withTenantContext wraps every DB query in lib/ and all Server Actions call requireStaff() before touching data, so no query path can bypass tenant isolation at the application layer.
-- Disciplined schema evolution: 18 sequential migrations cover every feature area (RLS policies, exercise library, GDPR rights, assignment lifecycle, class scheduling, check-in, payment events) with no schema drift or missing coverage for implemented features.
-- Substantive operational test suite: 239 tests include regression guards for infrastructure failure modes — postinstall build policy, TCP readiness gate timing, and PIN collision avoidance — that directly address real incidents documented in the test file headers.
-- GDPR implementation is genuinely complete: lib/gdpr/export.ts implements both staff DSAR fulfilment and member self-service export in one tenant-scoped transaction, with tombstone anonymisation, audit logging, and role-scoped query access — not a stub.
+- RLS enforcement is real and deep: withTenantContext wraps every DB call in app/dashboard/members/actions.ts, lib/gdpr/export.ts, and lib/programs.ts, and the automated RLS check passes — tenant isolation is not a claim, it is wired into every write path.
+- The test suite is high-signal: dev-server.test.ts and start-wrapper.test.ts are 20-24 KB regression guards that pin specific measured failure modes (port-binds-before-ready race, missing build black-hole), not assertion-free smoke tests.
+- GDPR compliance is fully implemented: lib/gdpr/export.ts and lib/gdpr/audit.ts deliver portable JSON export, tombstone anonymisation with named constants, and a per-tenant audit trail — all in one transaction so an export is recorded iff it succeeds.
+- Demo credentials are now visible on the login forms without requiring authentication, resolving the long-standing first-time-user blocker that appeared in every prior round.
 
 ## To improve
 
-- Surface demo credentials inline on the landing page (app/page.tsx): the DEMO section already exists but shows no email/password and no one-click login button; add the seed account's email and password as visible text or a 'Sign in as demo trainer' button so any evaluator can reach the dashboard without out-of-band setup — this single change would unblock runtime verification of all eight spec features.
-- Add rate limiting to the staff and portal login Server Actions (app/login/actions.ts and app/portal/login/actions.ts): the automated readiness check flags these endpoints as unprotected against credential brute-force; implement a simple in-process sliding-window counter keyed on IP or email, or add an upstash/redis-backed limiter, since these are the only unauthenticated write paths in the product.
-- Patch the two high-severity dependency vulnerabilities in next and sharp (package.json): the readiness check flags these as unresolved; run npm audit fix --force for these two packages and verify the build still passes, as shipping known high-severity CVEs in a multi-tenant SaaS is a direct tenant-data risk.
-- Add a waitlist_entries table and auto-promotion handler to lib/classes.ts: migrations/0015 and lib/classes.ts already implement class scheduling with capacity limits, but the market fit analysis confirms no waitlist table, migration, or named promotion handler exists; when a capped class receives a cancellation the slot stays empty — this is the highest-impact missing table-stakes feature given the scheduling infrastructure is already in place.
-- Fix the missing alt text on the img flagged by the accessibility readiness check (WARN): locate the unattributed <img> element (likely in app/page.tsx or a portal component given the screenshot evidence) and add a descriptive alt attribute; this is a one-line fix that closes the only open accessibility warning.
+- Add rate limiting to app/login/actions.ts and app/portal/login/actions.ts (or in middleware.ts on the /login and /portal/login routes) — the automated check explicitly flags these as brute-force-unprotected, and no per-IP throttle exists anywhere in the current source.
+- Run 'npm audit fix' and update the 2 high-severity vulnerable packages — their names are available from 'npm audit'; leaving known high-severity CVEs in place is a concrete risk, not a theoretical one.
+- The product walkthrough has failed to reach any authenticated page for 8+ consecutive rounds — the Supabase credentials in the deployment environment must be valid and the demo seed must run against the connected DB; add a smoke step in .github/workflows/ci.yml that authenticates as trainer@demo.local via the API and asserts a 200 from /dashboard, so this regression is caught in CI rather than discovered by the walkthrough.
+- Fix the one img missing an alt attribute flagged by the accessibility WARN — grep app/ for '<img' without an alt prop and add descriptive alt text; this is a single targeted change that clears the WARN and prevents screen-reader failures.
 
 ## Summary
 
-The codebase is a genuine, well-structured implementation of all eight spec features with no stubs, strong RLS enforcement, and a substantive 239-test suite — but the product has failed runtime verification through authentication across eight consecutive evaluation rounds because demo credentials are never surfaced to the evaluator, making every core feature unverifiable in the running app and suppressing confidence in spec coverage and UX scores alike.
+The build is architecturally complete — all 8 spec features are implemented without stubs, the test suite is substantial and passes, and code quality is genuinely high — but authenticated runtime verification has failed in every evaluation round and three security WARNs (no auth rate limiting, high-severity dependency CVEs, invisible production errors) hold the overall score back from the high-80s it could otherwise reach.
 
 ---
-_Scored 2026-07-30 17:58 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-30 19:24 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
