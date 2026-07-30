@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { memberLoginAction, type LoginState } from "./actions";
+import { DemoSignInHint } from "../../DemoSignInHint";
 
 const initialState: LoginState = {};
 
@@ -81,6 +82,11 @@ export default function MemberLoginPage() {
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      {/* A member usually arrives here from a link in an invite email rather
+          than from the landing page, so the demo credentials have to be on this
+          screen too — not one screen behind it. */}
+      <DemoSignInHint href="/portal/login" />
 
       <p className="text-center text-sm text-slate-500">
         Gym staff?{" "}

@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { loginAction, type LoginState } from "./actions";
+import { DemoSignInHint } from "../DemoSignInHint";
 
 const initialState: LoginState = {};
 
@@ -80,6 +81,11 @@ export default function LoginPage() {
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      {/* Reached directly (deep link, bookmark, or the redirect a guarded route
+          performs without a session), this page is a dead end without
+          credentials — the landing page's notice is one screen behind. */}
+      <DemoSignInHint href="/login" />
     </main>
   );
 }
