@@ -135,6 +135,44 @@ product is unreachable".
 - `START_PROD_READY_MS` — how long to wait for the first response (default 30s)
 - `START_AUTOBUILD=0` — make a *missing* build a hard failure
 
+## `npm start` keeps the server alive, not just started
+
+Everything above guards **startup**. Nothing used to guard the rest of the server's
+life: a single death at any later point ended the wrapper and left the port unbound
+for the remainder of the run. Reproduced against a good production build — `/`
+answered `200` in 15ms, the server process was killed the way a crash or an OOM
+kill kills it, and 20s later the wrapper had exited (code 1) with nothing
+listening.
+
+That is what an automated review reported as "the app itself intermittently times
+out even on `/`". The first part of a crawl gets clean 200s; after one death every
+URL fails, the static landing page included. Locally that failure is a prompt
+connection refusal, but a caller reaching the host through a forwarded port,
+container or proxy gets no refusal at all — an unbound port black-holes the SYN —
+so each request instead hangs to its full budget. One recoverable crash therefore
+reads as root-level instability blocking all QA.
+
+So the serving process is now watched for its whole lifetime and relaunched
+(`scripts/lib/supervise.mjs`), on both the `next start` and the `next dev` fallback
+path. A production server is answering again about a second after it dies; the dev
+fallback takes ~10s, since it recompiles the entry routes behind the gate. The
+policy is deliberately narrow: a server that **never answered** is not restarted
+(the fallback above is the better answer for that), a deliberate Ctrl-C or CI
+teardown is not a crash, and restarts are bounded so a genuine crash loop is
+reported rather than hidden under a thousand relaunches. The budget resets after a
+run that stayed up, so a server that crashes rarely is always recovered.
+
+- `START_SUPERVISE=0` — exit with the server, as before (for callers running their
+  own process supervisor, e.g. systemd or a container restart policy)
+- `START_MAX_RESTARTS` — consecutive quick deaths tolerated (default 5)
+- `START_PORT_RELEASE_MS` — how long to wait for the dying server to release the
+  port before relaunching (default 10s)
+
+**When stopping a supervised server, signal the wrapper — not its child.** Killing
+the child is indistinguishable from the crash supervision exists to recover from,
+so the wrapper will start a replacement and re-take the port. `ci.yml` does this in
+the right order; copy it rather than the other way round.
+
 ## Project layout
 
 - `docs/` — project brief, architecture, and the build plan

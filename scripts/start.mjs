@@ -84,11 +84,28 @@
  *      what covers the cases a preflight cannot predict — a corrupt manifest, a
  *      build left by a different Next.js version.
  *
- * This wrapper turns all three into something deterministic: it never leaves the
+ *   4. A SERVER THAT DIES AFTER IT WAS SERVING. Every guard above covers STARTUP;
+ *      for a long time nothing covered the rest of the process's life. A single
+ *      death at any later point ended this wrapper and left the port unbound for
+ *      the remainder of the run — reproduced here: `/` answered 200 in 15ms, the
+ *      server process was then killed as a crash or OOM kill would kill it, and
+ *      20s later the wrapper had exited (code 1) with nothing listening.
+ *
+ *      That is the shape of the "the app intermittently times out even on '/'"
+ *      report: the first half of a crawl gets clean 200s, then one death makes
+ *      every subsequent URL fail — the static landing page included — and through
+ *      a forwarded port or proxy those failures are TIMEOUTS rather than
+ *      refusals, because an unbound port black-holes the SYN. One recoverable
+ *      crash therefore reads as root-level instability blocking all QA.
+ *      `superviseServer` (scripts/lib/supervise.mjs) closes it: the serving
+ *      process is watched for its whole lifetime and relaunched, bounded, so a
+ *      death costs one failed request rather than the rest of the run.
+ *
+ * This wrapper turns all four into something deterministic: it never leaves the
  * port unbound while claiming success, it refuses to hand the port to
  * `next start` when another process already holds it, naming that process instead
- * of failing anonymously, and whatever it does serve, it serves only after
- * confirming that it answers.
+ * of failing anonymously, whatever it does serve it serves only after confirming
+ * that it answers, and it keeps that server alive rather than exiting with it.
  *
  * Everything here is dependency-free (node: builtins only) so it runs before any
  * install-time assumptions hold.
@@ -105,11 +122,15 @@ import {
   disabled,
   missingRenderDeps,
   portInUse,
+  resetDev,
   resolveHost,
   resolvePort,
   serveDev,
   stopDev,
 } from "./lib/dev-server.mjs";
+// Keeping the server alive for its whole life, not just through startup. See
+// scripts/lib/supervise.mjs for the failure this closes (case 4 above).
+import { superviseServer } from "./lib/supervise.mjs";
 // The `.next` ownership lock, shared with scripts/postinstall.mjs — which builds
 // a missing build at install time, and so contends for the same directory.
 import {
@@ -141,9 +162,61 @@ const BUILD_WAIT_MS = Number(process.env.START_BUILD_WAIT_MS) || 600_000;
  */
 const PROD_READY_MS = Number(process.env.START_PROD_READY_MS) || 30_000;
 
+/**
+ * How many times a server that WAS serving may be relaunched after dying before
+ * consecutive deaths are called a crash loop. 0 (or START_SUPERVISE=0) restores
+ * the old behaviour of exiting with the server, for a caller that runs its own
+ * process supervisor.
+ *
+ * An empty or non-numeric value is treated as UNSET, matching how every other flag
+ * in this project reads the environment — a CI step that exports the variable
+ * without a value must not silently switch supervision off.
+ */
+const MAX_RESTARTS = (() => {
+  if (disabled(process.env.START_SUPERVISE)) return 0;
+  const raw = process.env.START_MAX_RESTARTS;
+  if (!raw || !/^\d+$/.test(raw.trim())) return 5;
+  return Number(raw.trim());
+})();
+
+/**
+ * Ceiling on waiting for a dying server to release the port before relaunching.
+ *
+ * A relaunch that races the old process's listening socket dies instantly on
+ * EADDRINUSE, which would spend the entire restart budget on a timing artefact
+ * rather than on the actual fault. Short, because this is a socket closing, not a
+ * server starting.
+ */
+const PORT_RELEASE_MS = Number(process.env.START_PORT_RELEASE_MS) || 10_000;
+
 /** Resolve after `ms`, without pulling in a timers/promises import. */
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wait until nothing holds `port` any more, so a restart can bind it.
+ *
+ * Reports false — rather than relaunching into a certain EADDRINUSE — when the
+ * port is still held at the deadline. That means something OTHER than the server
+ * we just lost has taken it, and quietly launching a server that cannot bind
+ * would turn a diagnosable conflict back into "everything times out".
+ */
+async function waitForPortRelease(port, host) {
+  const deadline = Date.now() + PORT_RELEASE_MS;
+  for (;;) {
+    if (!(await portInUse(port, host))) return true;
+    if (Date.now() >= deadline) {
+      const holder = await describePortHolder(port);
+      console.error(
+        `[start] Port ${port} is still in use${holder} ${Math.round(PORT_RELEASE_MS / 1000)}s ` +
+          "after the server stopped, so it cannot be restarted onto it. Something " +
+          "else has taken the port; stop that process and start again.",
+      );
+      return false;
+    }
+    await delay(250);
+  }
 }
 
 /**
@@ -407,9 +480,12 @@ function spawnNext(args, extraEnv = {}) {
  * than leaving the port dark.
  *
  * Resolves `{ served, code, signal }`; `served` is false only when the child
- * ended without ever answering.
+ * ended without ever answering. `superviseServer` reads exactly that flag to
+ * decide whether a death is worth restarting (a server that never answered is
+ * not), so this promise must stay pending for the child's WHOLE life — its
+ * resolution is the death being reacted to.
  */
-async function runProduction({ port, host, forwarded }) {
+async function runProduction({ port, host, forwarded, attempt = 1 }) {
   const args = ["start", ...forwarded];
   if (!forwarded.some((a) => a === "-p" || a === "--port" || a.startsWith("--port="))) {
     args.push("-p", String(port));
@@ -450,7 +526,8 @@ async function runProduction({ port, host, forwarded }) {
     console.log(
       `[start] Serving the production build on http://${
         !host || host === "0.0.0.0" || host === "::" ? "localhost" : host
-      }:${port} — confirmed answering after ${Date.now() - startedAt}ms.`,
+      }:${port} — confirmed answering after ${Date.now() - startedAt}ms` +
+        (attempt > 1 ? ` (restart ${attempt - 1}).` : "."),
     );
   } else {
     // Bound but silent for the whole budget. Deliberately NOT killed: the port is
@@ -522,7 +599,19 @@ async function main() {
   //    the same fallback a missing build uses, so the port always ends up bound to
   //    something that serves.
   if (mode === "start") {
-    const outcome = await runProduction({ port, host, forwarded });
+    // Supervised for the process's whole LIFETIME, not merely through startup.
+    // Startup was already covered; a server that died LATER used to end this
+    // wrapper with it and leave the port unbound for the rest of the run, which
+    // every caller reads as "every route, including `/`, times out". See case 4 in
+    // the header, and scripts/lib/supervise.mjs for the policy and the reproduction.
+    const { outcome } = await superviseServer({
+      launch: (attempt) => runProduction({ port, host, forwarded, attempt }),
+      // Never relaunch into the dying process's own socket: that fails instantly
+      // on EADDRINUSE and would spend the restart budget on a timing artefact.
+      prepareRestart: () => waitForPortRelease(port, host),
+      shouldStop: () => interrupted,
+      maxRestarts: MAX_RESTARTS,
+    });
     // A server that was interrupted — or killed by a signal — before it answered
     // is not a broken build, and must never be "recovered" by starting a dev
     // server the operator just stopped. See `interrupted`.
@@ -566,17 +655,29 @@ async function main() {
     // START_DEV_FALLBACK tells next.config.mjs to drop the dev-tools indicator:
     // this server is standing in for the real one, and a debug badge floating
     // over every page is not part of the product.
-    const { code, signal } = await serveDev({
-      port,
-      host,
-      env: { START_DEV_FALLBACK: "1" },
+    //
+    // Supervised on the same terms as the production path: this is the server a
+    // build-less checkout is actually being QA'd against, so its death must not
+    // be any more permanent than `next start`'s.
+    const { outcome } = await superviseServer({
+      launch: () => serveDev({ port, host, env: { START_DEV_FALLBACK: "1" } }),
+      prepareRestart: async () => {
+        // dev-server.mjs latches a module-level shutdown flag when a server ends
+        // (so a stopped server is never resurrected as a startup retry); clearing
+        // it is what allows a fresh child and forwarder to be created here.
+        resetDev();
+        return waitForPortRelease(port, host);
+      },
+      shouldStop: () => interrupted,
+      maxRestarts: MAX_RESTARTS,
     });
-    // The lock is held for the dev server's lifetime, so it must be dropped when
-    // that ends — otherwise the next start waits out its whole budget on a PID
-    // that is already gone.
+    // The lock is held for the dev server's lifetime — across restarts, since we
+    // remain the owner of `.next` throughout — so it is dropped only once the
+    // supervisor has finished. Otherwise the next start waits out its whole
+    // budget on a PID that is already gone.
     releaseBuildLock();
-    if (signal) process.kill(process.pid, signal);
-    else process.exit(code ?? 0);
+    if (outcome.signal) process.kill(process.pid, outcome.signal);
+    else process.exit(outcome.code ?? 0);
   }
 }
 

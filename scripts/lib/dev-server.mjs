@@ -401,6 +401,28 @@ export function stopDev(signal = "SIGTERM") {
 }
 
 /**
+ * Clear the per-run state so `serveDev` may be called AGAIN in this process.
+ *
+ * Needed because the two flags above are latched deliberately: `shuttingDown`
+ * stops a stopped server from being resurrected as a startup retry, and
+ * `devEverAnswered` records that this run got off the ground. Both are correct
+ * within one run and both make a second `serveDev` return immediately — its
+ * warm-up would see `shuttingDown` and give up before requesting anything.
+ *
+ * So the only caller is a SUPERVISOR relaunching a server that DIED, as opposed
+ * to one that was shut down (scripts/start.mjs, via `superviseServer`). It tears
+ * down anything still standing first, so no orphaned child or forwarder survives
+ * into the next run.
+ */
+export function resetDev() {
+  stopDev();
+  shuttingDown = false;
+  devEverAnswered = false;
+  activeChild = null;
+  activeGate = null;
+}
+
+/**
  * Launch `next dev` bound to `host:port`; resolves with how it ended, never
  * rejects. When gated, `host` is loopback — an ungated dev server must not be
  * reachable from outside this machine, since reaching it would bypass the gate.
@@ -621,7 +643,11 @@ export async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) 
  * passed straight through: retrying then would resurrect a server the operator
  * deliberately stopped.
  *
- * Resolves with how the dev server ended: `{ code, signal }`.
+ * Resolves with how the dev server ended: `{ code, signal, served }`. `served`
+ * reports whether ANY request was answered, which an exit code cannot — `next dev`
+ * exits 0 on a fatal startup error. A supervisor needs exactly that distinction to
+ * tell a server that crashed while working (relaunch it) from one that could never
+ * work (relaunching is a hot loop); see scripts/lib/supervise.mjs.
  */
 export async function serveDev({ port, host, env = {} }) {
   // DEV_GATE=0 restores a plain direct bind (port open immediately, first
@@ -665,7 +691,7 @@ export async function serveDev({ port, host, env = {} }) {
       !shuttingDown && !first.signal && !devEverAnswered && aliveMs <= DEV_PROBATION_MS;
     if (!neverServed) {
       stopDev();
-      return first;
+      return { ...first, served: devEverAnswered };
     }
     console.error(
       `[dev] \`next dev --turbopack\` exited (code ${first.code}) after ` +
@@ -676,5 +702,5 @@ export async function serveDev({ port, host, env = {} }) {
   }
   const result = await attempt(false);
   stopDev();
-  return result;
+  return { ...result, served: devEverAnswered };
 }

@@ -1,7 +1,18 @@
-#!/usr/bin/env node
 /**
  * Produce a production build at INSTALL time when the checkout has none
  * (`postinstall`).
+ *
+ * DELIBERATELY NO `#!/usr/bin/env node` LINE, unlike the other entry scripts here.
+ * It is decorative — package.json invokes this as `node scripts/postinstall.mjs`,
+ * never as an executable — and it silently disabled this file's own test suite.
+ * Vitest's loader mishandles a shebang followed by a CRLF newline and throws
+ * `SyntaxError: Invalid or unexpected token` at import, so `test/postinstall.test.ts`
+ * failed to load ALL of its cases. Reproduced in isolation: an .mjs module with
+ * `#!...\n` imports fine, the same module with `#!...\r\n` does not. The repo has no
+ * `.gitattributes` and `core.autocrlf` is on, so every Windows checkout gets CRLF
+ * while Linux CI gets LF — which is why the guard passed in CI and had never run on
+ * a developer machine. Keep this file shebang-free rather than relying on line
+ * endings a checkout controls.
  *
  * WHY THIS EXISTS
  *
