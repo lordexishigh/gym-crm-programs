@@ -76,11 +76,12 @@ describe("scripts/postinstall.mjs — decideBuild", () => {
     // The sticky failure this closes. `built` used to mean "BUILD_ID exists", so
     // an interrupted build — or one a dev server overwrote — satisfied it, every
     // install skipped the rebuild, and every `npm start` handed the same broken
-    // directory to `next start`, which dies on it (with status 0). Nothing bound
-    // the port, and an unbound port black-holes connections rather than refusing
-    // them, so every route read as TIMED OUT: four consecutive rounds of an
-    // automated review reporting "'/' unreachable". `built` is now the whole
-    // artifact set, so this state rebuilds itself at install time.
+    // directory to `next start`, which dies on it after printing a startup banner
+    // that says the server is up. Nothing bound the port, and an unbound port
+    // black-holes connections rather than refusing them, so every route read as
+    // TIMED OUT: four consecutive rounds of an automated review reporting "'/'
+    // unreachable". `built` is now the whole artifact set, so this state rebuilds
+    // itself at install time.
     const { build, reason } = decide({
       built: false,
       defects: [

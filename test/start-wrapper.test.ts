@@ -292,12 +292,17 @@ describe("scripts/start.mjs — a build that is present but not usable", () => {
    *
    * `next start` validates BUILD_ID and reports its absence properly, then opens
    * several manifests with NO such check. A `.next` holding BUILD_ID but missing
-   * one of those throws a bare ENOENT out of startup and exits — reproduced on
-   * this project WITH STATUS 0. Trusting BUILD_ID therefore let the wrapper
-   * report a successful start for a server that had already died, leaving the
-   * port unbound; and an unbound port black-holes the SYN rather than refusing
-   * it, so every route (static ones included) reads as TIMED OUT instead of as a
-   * broken build.
+   * one of those throws a bare ENOENT out of startup and dies — reproduced on
+   * this project against Next 15.5.21, for a missing prerender-manifest.json, a
+   * missing server/pages-manifest.json, and a routes-manifest.json written by
+   * `next dev` (TypeError: routesManifest.dataRoutes is not iterable).
+   *
+   * It dies AFTER printing its full startup banner ("- Local:
+   * http://localhost:3000"), so trusting BUILD_ID let the wrapper hand the port
+   * to a process that announced itself as up and was already dead. Nothing bound
+   * the port, and an unbound port black-holes the SYN rather than refusing it, so
+   * every route (static ones included) reads as TIMED OUT instead of as a broken
+   * build.
    */
   it("treats BUILD_ID with a missing manifest as no build, naming the file", async () => {
     const dir = makeProjectDir(true);
@@ -349,7 +354,7 @@ describe("scripts/start.mjs — a build that is present but not usable", () => {
     // serve. This is the class a preflight can never predict (a corrupt manifest,
     // a build from another Next version), and the guarantee therefore has to be
     // enforced on the OUTCOME: if it never answers a request, fall back rather
-    // than exit 0 with nothing listening.
+    // than leave the port with nothing listening on it.
     const dir = makeProjectDir(true);
     const port = await freePort();
 

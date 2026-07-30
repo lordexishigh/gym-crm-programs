@@ -58,14 +58,27 @@ export function pidAlive(pid) {
  * BUILD_ID alone is not that, and trusting it is a defect with a very bad
  * presentation. `next start` reads BUILD_ID first and reports its absence
  * clearly (error E427, "Could not find a production build"), but immediately
- * afterwards it opens these manifests with NO such guard: one of them missing is
- * a raw ENOENT thrown out of startup, and — reproduced on this project — the
- * process then exits with STATUS 0. So a `.next` holding BUILD_ID and not much
- * else is indistinguishable from a good build up front, kills the server a
- * moment later, and reports success while doing it. Nothing binds the port, and
- * an unbound port black-holes the SYN instead of refusing it, so every caller
- * waits out its whole budget and every route — `/` included — reads as TIMED
- * OUT rather than as a missing build.
+ * afterwards it opens these manifests with NO such guard. Measured on this
+ * project against Next 15.5.21, each of these leaves the server dead:
+ *
+ *     .next/prerender-manifest.json missing   ENOENT thrown out of boot
+ *     .next/server/pages-manifest.json missing   ENOENT thrown out of boot
+ *     routes-manifest.json written by `next dev`  TypeError:
+ *                                 routesManifest.dataRoutes is not iterable
+ *
+ * What makes this read as an unreachable product rather than a broken build is
+ * WHERE it dies. `next start` prints its full startup banner first — "▲ Next.js
+ * 15.5.21", "- Local: http://localhost:3000" — and only then throws. So the log
+ * looks like a server that came up, while NOTHING EVER BOUND THE PORT. An
+ * unbound port black-holes the SYN instead of refusing it, so every caller waits
+ * out its whole budget and every route — `/` included, static or not — reads as
+ * TIMED OUT.
+ *
+ * The exit status is no help either. These exit NON-ZERO (1), which sounds
+ * detectable, but a harness or supervisor that launches `npm start` in the
+ * background and then navigates never looks at it: it sees the healthy-looking
+ * banner and a port that answers nothing. An exit code only helps a caller who is
+ * watching the process, which is exactly the caller that was not there.
  *
  * That state is not exotic; it is what a half-finished or partly-removed `.next`
  * looks like. `next build` writes BUILD_ID before these manifests, so an

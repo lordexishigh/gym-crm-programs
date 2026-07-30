@@ -70,9 +70,12 @@
  *      because it LOOKS like case 1 being handled. `next start` checks BUILD_ID
  *      and reports its absence properly, then opens several manifests with no
  *      such check; a `.next` holding BUILD_ID but missing one of those throws a
- *      bare ENOENT out of startup and — reproduced here — EXITS WITH STATUS 0.
- *      The old wrapper forwarded that code, so a dead server reported a
- *      successful start, the port was never bound, and every route timed out.
+ *      bare ENOENT out of startup and dies. Reproduced here on Next 15.5.21 —
+ *      and critically, it dies AFTER printing its whole startup banner
+ *      ("- Local: http://localhost:3000"), so the log reads like a server that
+ *      came up while nothing ever bound the port. Every route then times out,
+ *      static ones included, because an unbound port black-holes the SYN rather
+ *      than refusing it.
  *      Two independent guards now close it: `hasProductionBuild` validates the
  *      whole artifact set rather than BUILD_ID alone (so a partial `.next` is
  *      rebuilt at install time and never handed to `next start`), and
@@ -383,12 +386,17 @@ function spawnNext(args, extraEnv = {}) {
  * Supervision, rather than a plain spawn-and-forward, because of how `next start`
  * fails. It validates BUILD_ID and then opens several manifests with no such
  * check, so an incomplete `.next` makes it throw a bare ENOENT out of startup and
- * exit — reproduced on this project — WITH STATUS 0. Forwarding that exit code is
- * how a dead server came to be reported as a successful start: the wrapper exited
- * 0, nothing was ever bound to the port, and because an unbound port black-holes
- * the SYN rather than refusing it, every caller sat there until its own budget
- * expired. `/` "timed out", so did both login pages, and the verdict was an
- * unreachable product rather than a broken build.
+ * die — reproduced on this project against Next 15.5.21.
+ *
+ * The reason forwarding its exit code was not enough is that the exit code is not
+ * what anyone reads. `next start` prints its complete startup banner BEFORE it
+ * throws, so the log announces "- Local: http://localhost:3000" for a server that
+ * is already dead; and a harness that launches `npm start` in the background and
+ * then navigates never inspects the status at all. What it sees is a port that
+ * accepts nothing — and because an unbound port black-holes the SYN rather than
+ * refusing it, every caller sat there until its own budget expired. `/` "timed
+ * out", so did both login pages, and the verdict was an unreachable product
+ * rather than a broken build.
  *
  * `PRODUCTION_BUILD_FILES` now catches that `.next` before we get here, but a
  * preflight can only check what it knows to check — a corrupt (as opposed to
@@ -508,10 +516,11 @@ async function main() {
 
   // 3. Serve the production build, SUPERVISED. A `next start` that dies during
   //    startup (a corrupt manifest, a build from another Next version) used to end
-  //    this wrapper with its own exit code — status 0 in the case actually
-  //    observed — leaving the port unbound and every route reading as timed out.
-  //    Now a start that never answers falls through to the same fallback a missing
-  //    build uses, so the port always ends up bound to something that serves.
+  //    this wrapper with its own exit code, leaving the port unbound and every
+  //    route reading as timed out — while its own startup banner had already
+  //    announced the server as up. Now a start that never answers falls through to
+  //    the same fallback a missing build uses, so the port always ends up bound to
+  //    something that serves.
   if (mode === "start") {
     const outcome = await runProduction({ port, host, forwarded });
     // A server that was interrupted — or killed by a signal — before it answered
@@ -528,8 +537,9 @@ async function main() {
         "request, so nothing is bound to this port.\n" +
         "[start] The `.next` directory has the artifacts a production build needs, " +
         "so this is a build that is present but not USABLE — most often corrupt or " +
-        "left by a different Next.js version. `next start` can exit 0 on this, " +
-        "which is why it has to be caught by observation rather than by exit code.\n" +
+        "left by a different Next.js version. `next start` prints its normal " +
+        "startup banner before failing on this, which is why it has to be caught " +
+        "by observing whether it ANSWERS rather than by trusting its output.\n" +
         "[start] Refusing to leave the port dark: an unbound port black-holes " +
         "connections instead of refusing them, so every route — including static " +
         "ones like / and /login — would read as timed out rather than as a broken " +
