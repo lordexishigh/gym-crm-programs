@@ -15,6 +15,7 @@ import { sendEmail } from "@/lib/email/resend";
 import { captureException, reportHandledError } from "@/lib/observability/monitoring";
 import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
 import { generateUniquePinCode } from "@/lib/checkin";
+import { isUuid, sniffImageType, validatePhotoUpload } from "@/lib/member-photo";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -452,6 +453,113 @@ export async function regeneratePinAction(formData: FormData): Promise<void> {
   );
 
   revalidatePath(`/dashboard/members/${memberId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Member profile photo (market gap: "staff cannot attach a face to a record").
+//
+// Both actions are invoked DIRECTLY from the client panel rather than as a
+// `<form action>` — the uploader downscales the chosen image in the browser
+// first, so it builds its own FormData. They therefore take a plain FormData and
+// return a result object instead of following the `useActionState` shape.
+//
+// The bytes are stored in `member_photo` (migration 0019), an RLS-scoped table:
+// the INSERT runs as `app_user`, so a cross-tenant member id is rejected by the
+// policy's WITH CHECK rather than by a predicate this code has to remember.
+
+export type PhotoActionState = { error?: string; success?: string };
+
+/** Store (or replace) a member's profile photo. */
+export async function uploadMemberPhotoAction(
+  formData: FormData,
+): Promise<PhotoActionState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
+
+  const file = formData.get("photo");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose an image to upload." };
+  }
+
+  const check = validatePhotoUpload({ type: file.type, size: file.size });
+  if (!check.ok) return { error: check.error };
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+
+  // Derive the content type from the BYTES, never from the browser's claim: the
+  // photo route echoes the stored type back on the response, so this is what
+  // stops mislabelled content being served under an image content type.
+  const contentType = sniffImageType(bytes);
+  if (!contentType) {
+    return { error: "That file is not a JPEG, PNG or WebP image." };
+  }
+
+  let saved: boolean;
+  try {
+    saved = await withTenantContext(session.identity, async (c) => {
+      // RLS makes a member outside this gym invisible, so this doubles as the
+      // authorisation check — and turns the composite-FK violation that would
+      // otherwise follow into a clean "not found".
+      const found = await c.query("select 1 from member where id = $1", [memberId]);
+      if ((found.rowCount ?? 0) === 0) return false;
+
+      await c.query(
+        `insert into member_photo
+           (member_id, tenant_id, content_type, bytes, byte_size)
+         values ($1, $2, $3, $4, $5)
+         on conflict (member_id) do update
+           set content_type = excluded.content_type,
+               bytes        = excluded.bytes,
+               byte_size    = excluded.byte_size,
+               updated_at   = now()`,
+        [memberId, session.identity.tenantId, contentType, bytes, bytes.length],
+      );
+      return true;
+    });
+  } catch (err) {
+    await reportHandledError(err, "upload-member-photo", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not save the photo. Please try again." };
+  }
+
+  if (!saved) return { error: "Member not found." };
+
+  revalidatePath("/dashboard/members");
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return { success: "Photo updated." };
+}
+
+/**
+ * Remove a member's uploaded photo. Idempotent — removing a photo that is
+ * already gone reports success, since the end state the caller asked for holds.
+ */
+export async function removeMemberPhotoAction(
+  formData: FormData,
+): Promise<PhotoActionState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
+
+  try {
+    await withTenantContext(session.identity, async (c) => {
+      await c.query("delete from member_photo where member_id = $1", [memberId]);
+    });
+  } catch (err) {
+    await reportHandledError(err, "remove-member-photo", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not remove the photo. Please try again." };
+  }
+
+  revalidatePath("/dashboard/members");
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return { success: "Photo removed." };
 }
 
 // ---------------------------------------------------------------------------
