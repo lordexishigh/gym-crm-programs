@@ -23,9 +23,22 @@ export type EmailMessage = {
   text?: string;
 };
 
+/**
+ * Why a send failed, in the terms a CALLER has to act on.
+ *
+ * The distinction that matters is `not_configured` versus everything else. A
+ * deployment with no mail provider is a permanent, operator-level gap: retrying
+ * cannot help, and the caller's only useful move is to fall back to a delivery
+ * channel that does not need email (see `sendInviteAction`, which surfaces the
+ * onboarding link for staff to pass on by hand). A `unreachable`/`rejected`
+ * failure is transient or address-specific — worth alerting on and worth
+ * retrying, which is a different response entirely.
+ */
+export type SendFailureReason = "not_configured" | "unreachable" | "rejected";
+
 export type SendResult =
   | { ok: true; id: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason: SendFailureReason };
 
 type ResendResponse = {
   id?: string;
@@ -33,15 +46,24 @@ type ResendResponse = {
   name?: string;
 };
 
-function emailConfig(): { apiKey: string; from: string } {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.INVITE_FROM_EMAIL;
-  if (!apiKey || !from) {
-    throw new Error(
-      "RESEND_API_KEY and INVITE_FROM_EMAIL must be set (see .env.example).",
-    );
-  }
+function emailConfig(): { apiKey: string; from: string } | null {
+  // Trimmed so a whitespace-only variable — a half-filled `.env`, a CI secret
+  // that resolved to "" — counts as unset rather than producing a request that
+  // the provider rejects with an opaque 401.
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = process.env.INVITE_FROM_EMAIL?.trim();
+  if (!apiKey || !from) return null;
   return { apiKey, from };
+}
+
+/**
+ * Whether this deployment can send email at all.
+ *
+ * Exported so a caller can tell staff what will happen BEFORE they press a
+ * button, rather than only after a send has already failed.
+ */
+export function isEmailConfigured(): boolean {
+  return emailConfig() !== null;
 }
 
 /**
@@ -49,16 +71,17 @@ function emailConfig(): { apiKey: string; from: string } {
  * network, or non-2xx provider error instead of throwing.
  */
 export async function sendEmail(message: EmailMessage): Promise<SendResult> {
-  let apiKey: string;
-  let from: string;
-  try {
-    ({ apiKey, from } = emailConfig());
-  } catch (err) {
+  const config = emailConfig();
+  if (!config) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Email is not configured.",
+      reason: "not_configured",
+      error:
+        "Email delivery is not configured on this deployment " +
+        "(RESEND_API_KEY and INVITE_FROM_EMAIL — see .env.example).",
     };
   }
+  const { apiKey, from } = config;
 
   let res: Response;
   try {
@@ -79,7 +102,11 @@ export async function sendEmail(message: EmailMessage): Promise<SendResult> {
       cache: "no-store",
     });
   } catch {
-    return { ok: false, error: "Could not reach the email service." };
+    return {
+      ok: false,
+      reason: "unreachable",
+      error: "Could not reach the email service.",
+    };
   }
 
   let body: ResendResponse;
@@ -92,6 +119,7 @@ export async function sendEmail(message: EmailMessage): Promise<SendResult> {
   if (!res.ok || !body.id) {
     return {
       ok: false,
+      reason: "rejected",
       error: body.message || `Email send failed (HTTP ${res.status}).`,
     };
   }

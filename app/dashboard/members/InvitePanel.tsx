@@ -6,6 +6,7 @@ import {
   revokeInviteAction,
   type InviteState,
 } from "./actions";
+import { InviteLinkNotice } from "../InviteLinkNotice";
 
 /**
  * Invite control on the member detail page (mvp-member-management-003,
@@ -98,14 +99,10 @@ export function InvitePanel({
         </p>
       ) : null}
 
-      {sendState.error ? (
-        <p role="alert" className="text-sm text-red-600">
-          {sendState.error}
-        </p>
-      ) : null}
-      {sendState.success ? (
-        <p className="text-sm text-emerald-700">{sendState.success}</p>
-      ) : null}
+      {/* Send result: error, or the invite link (with a warning when its email
+          could not be delivered). */}
+      <InviteLinkNotice state={sendState} />
+
       {revokeState.error ? (
         <p role="alert" className="text-sm text-red-600">
           {revokeState.error}
