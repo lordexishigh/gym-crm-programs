@@ -15,6 +15,8 @@ import {
   memberEngagementLevel,
   type EngagementLevel,
 } from "@/lib/workout-logs";
+import { memberAvatarSrc } from "@/lib/member-photo";
+import { Avatar } from "@/app/components/Avatar";
 
 export const dynamic = "force-dynamic";
 
@@ -175,21 +177,11 @@ export default async function MembersPage({
                   className="flex items-center justify-between gap-4 px-4 py-3 transition hover:bg-slate-50"
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    {m.photo_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={m.photo_url}
-                        alt={`${m.full_name} profile photo`}
-                        className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-slate-200"
-                      />
-                    ) : (
-                      <span
-                        aria-hidden
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-500 ring-1 ring-slate-200"
-                      >
-                        {m.full_name.charAt(0).toUpperCase()}
-                      </span>
-                    )}
+                    <Avatar
+                      name={m.full_name}
+                      src={memberAvatarSrc(m)}
+                      size="sm"
+                    />
                     <div className="flex min-w-0 flex-col">
                       <span className="truncate font-medium text-slate-900">
                         {m.full_name}
