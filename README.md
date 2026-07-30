@@ -1,6 +1,6 @@
 # Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-68%2F100-yellow)](docs/REPORT.md) <!-- nous-score-badge -->
+[![nous score](https://img.shields.io/badge/nous%20score-72%2F100-yellow)](docs/REPORT.md) <!-- nous-score-badge -->
 
 > A multi-tenant web CRM for Cyprus gyms whose wedge is member-facing training programs: trainers build programs and assign them to members, who view them on a mobile-first web portal.
 
