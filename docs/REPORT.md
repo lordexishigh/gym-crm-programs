@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-68%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 68/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 62 | `████████████░░░░░░░░` |
-| Code quality | 83 | `█████████████████░░░` |
-| Robustness & error handling | 63 | `█████████████░░░░░░░` |
-| Builds & tests | 65 | `█████████████░░░░░░░` |
-| UX & design | 70 | `██████████████░░░░░░` |
+| Spec coverage | 84 | `█████████████████░░░` |
+| Code quality | 86 | `█████████████████░░░` |
+| Robustness & error handling | 71 | `██████████████░░░░░░` |
+| Builds & tests | 80 | `████████████████░░░░` |
+| UX & design | 69 | `██████████████░░░░░░` |
 
 ## Readiness checks
 
@@ -43,21 +43,22 @@
 
 ## Strengths
 
-- Comprehensive RLS enforcement: withTenantContext/withAdminContext is used uniformly across every mutation surface, and the isolation-comprehensive test seeds two conflicting tenants and adversarially probes every tenanted table — this is production-grade multi-tenancy, not a paper claim.
-- Resilient failure modelling: the invite acceptance path returns typed statuses ('invalid', 'expired', 'used', 'unavailable') rather than throwing, so a DB outage or dead email link lands on a readable page instead of the error boundary — a non-obvious correctness property that is regression-guarded by test/invite-lookup.test.ts.
-- Broad feature surface beyond the spec: classes, check-in, billing plans, Stripe webhooks, GDPR export/anonymisation, workout logs, and a class schedule on the member portal are all present and wired up with migrations, meaning the product is already closer to table stakes than the eight spec items imply.
-- Test depth: 239 passing tests include adversarial cross-tenant isolation, auth timeout contracts, and start-wrapper regression guards — the suite catches non-obvious failure modes that a simple happy-path suite would miss.
+- Genuine multi-tenant security posture: withTenantContext enforces RLS on every query, identity is derived from the signed JWT server-side, and the import Server Action re-parses the CSV authoritatively rather than trusting the browser preview — no obvious trust boundary violations in the sampled code.
+- Rich beyond-spec feature set implemented as real code: CSV bulk import with three-step wizard (lib/member-import.ts, ImportWizard.tsx), GDPR export/anonymisation (lib/gdpr/export.ts at 18 KB), Stripe billing, exercise library, class scheduling, and check-in are all fully wired up with migrations, not stubbed.
+- Sophisticated test suite: 239 passing tests across 26 files including non-trivial regression guards (dev-server readiness gate covering the 14-second compile window, CSV parsing covering European semicolon delimiters and quoted embedded commas) — these tests pin real behaviour, not just presence.
+- Clean module architecture: lib/ holds all domain logic (members.ts, programs.ts, assignments.ts, invites.ts, checkin.ts) cleanly separated from app/ routing, making the tenant isolation pattern easy to audit and extend.
 
 ## To improve
 
-- Fix the Next.js server startup race: the product walkthrough has timed out on '/' in every round since Round 5, including the current one — add an explicit readiness probe in scripts/dev.mjs (poll /api/health until it responds before yielding control) and mirror this in the CI smoke step in .github/workflows/ci.yml so the assembled server is verified to answer requests, not just to build.
-- Add rate limiting to auth entry points: the readiness check explicitly flags /login and /portal/login as unprotected against credential brute-force; implement middleware-level rate limiting (e.g. via an Upstash Redis counter in middleware.ts, keyed by IP) before these routes are reachable in production.
-- Patch the two high-severity dependency vulnerabilities: the readiness check flags next and sharp as having high-severity fixes available — run `npm audit fix` (or pin to the patched versions in package.json) and verify the build still passes; these are blocking for any security-conscious gym operator.
-- Surface demo credentials on the landing page: a first-time evaluator or QA tester cannot reach any feature without out-of-band setup; add a visible 'Try the demo: owner@demo.local / DemoOwner!2024' notice to app/page.tsx (conditionally rendered when NEXT_PUBLIC_DEMO_MODE=true) so the full flow can be walked without manual database seeding.
+- Add rate limiting to app/login/actions.ts and app/portal/login/actions.ts — the automated check confirms both auth endpoints have no brute-force protection; a simple upstash/ratelimit call keyed on the client IP (available from the Next.js request headers) before the credential check would close this gap.
+- Surface demo credentials directly in the UI: app/page.tsx has a demo CTA and lib/demo-accounts.ts exists, but the walkthrough confirmed no credentials appear on the page — add a visible hint block (e.g. 'Try trainer@demo.alphagym.cy / DemoOwner!202') to both /login/page.tsx and /portal/login/page.tsx so QA and first-time visitors can enter the product without out-of-band setup.
+- Implement waitlist auto-promotion in lib/classes.ts: class capacity enforcement is built (app/dashboard/classes/, migrations/0015_class_scheduling.sql) but no code path promotes the first waitlist entry when a spot opens on cancellation — add a transactional promote-from-waitlist function and call it from the cancellation Server Action in app/dashboard/classes/actions.ts.
+- Patch the two high-severity dependency vulnerabilities flagged by the automated check — upgrade next and sharp to their latest patched versions in package.json and regenerate package-lock.json; these are confirmed high-severity CVEs, not advisory warnings.
+- Fix the missing alt text on the img element flagged by the accessibility check (likely in app/page.tsx or a portal component) — locate every bare <img> tag and add a descriptive alt attribute to meet WCAG 2.1 AA minimum.
 
 ## Summary
 
-The codebase is architecturally complete — all eight spec features are implemented, RLS is enforced at the DB layer, and 239 tests pass — but the assembled product has been consistently unreachable at runtime across eight evaluation rounds, making every promised feature impossible to verify or use. Until the server startup race is resolved and auth routes reliably respond, the score is dragged down by a deployment gap rather than a code gap.
+A production-quality build with all eight spec features genuinely implemented, consistent multi-tenant RLS enforcement, and a rich beyond-spec feature set — the code is clean, well-tested, and architecturally sound. The main drags on the score are absent rate limiting on auth endpoints, two unpatched high-severity dependencies, and a demo-credentials gap that left the runtime walkthrough unable to verify any post-login behaviour.
 
 ---
-_Scored 2026-07-30 11:47 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-30 13:41 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
