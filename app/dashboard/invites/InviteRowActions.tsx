@@ -6,6 +6,7 @@ import {
   revokeInviteAction,
   type InviteState,
 } from "../members/actions";
+import { InviteLinkNotice } from "../InviteLinkNotice";
 
 /**
  * Resend / revoke controls for a single invite row (alpha-invite-lifecycle-002).
@@ -40,12 +41,14 @@ export function InviteRowActions({
 
   if (!showResend && !canRevoke) return null;
 
-  const msg = resend.error ?? revoke.error ?? resend.success ?? revoke.success;
-  const isError = Boolean(resend.error ?? revoke.error);
+  // Revoke has only ever had a one-line result; resend now also carries the
+  // onboarding link (and a warning when its email did not go out), so it is
+  // rendered by the shared notice instead.
+  const revokeMsg = revoke.error ?? revoke.success;
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
+    <div className="flex w-full flex-col items-stretch gap-1 sm:w-auto sm:max-w-md sm:items-end">
+      <div className="flex items-center gap-2 sm:justify-end">
         {showResend ? (
           <form action={resendAction}>
             <input type="hidden" name="memberId" value={memberId ?? ""} />
@@ -74,14 +77,16 @@ export function InviteRowActions({
         ) : null}
       </div>
 
-      {msg ? (
+      {revokeMsg ? (
         <p
-          role={isError ? "alert" : undefined}
-          className={`text-xs ${isError ? "text-red-600" : "text-emerald-700"}`}
+          role={revoke.error ? "alert" : undefined}
+          className={`text-xs ${revoke.error ? "text-red-600" : "text-emerald-700"}`}
         >
-          {msg}
+          {revokeMsg}
         </p>
       ) : null}
+
+      <InviteLinkNotice state={resend} />
     </div>
   );
 }

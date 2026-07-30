@@ -85,6 +85,16 @@ export default async function MembersPage({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* The roster is where a trainer thinks about who does and does not
+              have portal access (the "Portal active" pills below say so), so it
+              needs a way through to issuing an invite — the action itself lives
+              on /dashboard/invites. */}
+          <Link
+            href="/dashboard/invites"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            Invite member
+          </Link>
           <Link
             href="/dashboard/members/import"
             className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"

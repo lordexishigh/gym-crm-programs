@@ -220,7 +220,22 @@ export async function updateMemberAction(
   redirect(`/dashboard/members/${id}`);
 }
 
-export type InviteState = { error?: string; success?: string };
+export type InviteState = {
+  error?: string;
+  success?: string;
+  /**
+   * Set when the invite IS valid but its email could not be delivered. Distinct
+   * from `error`, which means no usable invite exists.
+   */
+  warning?: string;
+  /**
+   * The onboarding link for the invite just issued. Returned so staff can pass
+   * it on themselves — the only way to onboard a member on a deployment with no
+   * mail provider configured, and a useful escape hatch when a member simply
+   * never receives the email.
+   */
+  acceptUrl?: string;
+};
 
 /**
  * Issue an invite for a member: store a single-use, token-bound invite row and
@@ -274,9 +289,8 @@ export async function sendInviteAction(
           )
         ).rows[0]?.id ?? null;
 
-      // NOTE: prior pending invites are NOT revoked here — only after the email
-      // for this new invite actually sends (below). If the send fails we delete
-      // this row, and the member keeps whatever valid invite they already had.
+      // Prior pending invites are superseded below, once this row is known to
+      // be the one staff will actually use.
       const { rows } = await c.query<{ id: string }>(
         `insert into invite
            (tenant_id, member_id, email, token_hash, status, expires_at, created_by)
@@ -309,55 +323,73 @@ export async function sendInviteAction(
     text: inviteEmailText(member.full_name, acceptUrl),
   });
 
-  if (!sent.ok) {
-    // A synchronous send failure (bad config, provider rejection, network) is a
-    // critical reliability signal: invites are how members onboard, so a failing
-    // send path should page someone, not just surface to one staff member.
-    await captureException(new Error(`Invite send failed: ${sent.error}`), {
-      source: "send-invite",
-      severity: "critical",
-      memberId,
-      tenantId: session.identity.tenantId,
-    });
-    // Roll the invite back so we don't leave a token-bound row that was never
-    // delivered; staff can simply try again.
-    try {
-      await withTenantContext(session.identity, async (c) => {
-        await c.query("delete from invite where id = $1", [inviteId]);
-      });
-    } catch {
-      // best-effort cleanup
-    }
-    return { error: `Invite created but the email failed to send: ${sent.error}` };
-  }
-
-  // The new link is delivered — record the Resend message id (so the inbound
-  // webhook can correlate later bounce/complaint events back to this invite) and
-  // supersede any OTHER still-pending invite so only the newest link works. Done
-  // post-send so a failed send never leaves the member with no valid invite.
-  // Best-effort: the new invite is already usable.
+  // A failed SEND is not a failed INVITE.
+  //
+  // This used to delete the row and report an error, which made onboarding
+  // impossible on any deployment without a mail provider: the invite that had
+  // just been granted was destroyed because the notification about it did not
+  // go out, so there was no link left for anyone to use and no trace in the
+  // invite list. Since the row IS the grant of access — and the token is
+  // already in hand — the invite is kept and the link is handed to the staff
+  // member instead. Email is one delivery channel for it, not the invite
+  // itself.
+  //
+  // The outcome is recorded either way: 'sent' carries the Resend message id so
+  // the inbound webhook can correlate later bounce/complaint events back to
+  // this row, and 'failed' carries the reason, which `InviteList` already
+  // surfaces as a "Delivery failed" flag against the invite.
   try {
     await withTenantContext(session.identity, async (c) => {
       await c.query(
         `update invite
-            set resend_message_id = $2,
-                delivery_status   = 'sent',
+            set resend_message_id   = $2,
+                delivery_status     = $3,
+                delivery_detail     = $4,
                 delivery_updated_at = now()
           where id = $1`,
-        [inviteId, sent.id],
+        [
+          inviteId,
+          sent.ok ? sent.id : null,
+          sent.ok ? "sent" : "failed",
+          sent.ok ? null : sent.error,
+        ],
       );
+      // Supersede any OTHER still-pending invite so only the newest link works.
       await c.query(
         "update invite set status = 'revoked' where member_id = $1 and status = 'pending' and id <> $2",
         [memberId, inviteId],
       );
     });
   } catch {
-    // best-effort supersede; the delivered invite remains valid regardless
+    // Best-effort bookkeeping; the invite itself is already usable.
   }
 
   revalidatePath(`/dashboard/members/${memberId}`);
   revalidatePath("/dashboard/invites");
-  return { success: `Invite sent to ${member.email}.` };
+
+  if (!sent.ok) {
+    // An unconfigured mail provider is an operator-level gap, not an incident:
+    // it would otherwise page on every single invite, on a deployment where
+    // nothing is broken and the manual-link path works. A provider REJECTION or
+    // an unreachable service is the reliability signal worth escalating —
+    // invites are how members onboard.
+    await captureException(new Error(`Invite email failed: ${sent.error}`), {
+      source: "send-invite",
+      severity: sent.reason === "not_configured" ? "warning" : "critical",
+      reason: sent.reason,
+      memberId,
+      tenantId: session.identity.tenantId,
+    });
+    return {
+      warning:
+        sent.reason === "not_configured"
+          ? `The invite for ${member.email} is ready, but this deployment cannot send email. Share the link below with them directly.`
+          : `The invite for ${member.email} is ready, but the email could not be sent (${sent.error}). Share the link below with them directly.`,
+      acceptUrl,
+    };
+  }
+
+  return { success: `Invite sent to ${member.email}.`, acceptUrl };
 }
 
 /**
