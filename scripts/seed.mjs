@@ -407,6 +407,80 @@ export const DEMO_PLANS = [
 ];
 
 /**
+ * The gym's upcoming class timetable.
+ *
+ * Without at least one FUTURE class the member portal's class section has
+ * nothing to list — `listUpcomingClassesForMember` filters on
+ * `starts_at >= now()` — so the booking feature cannot be seen or exercised by
+ * anyone evaluating the app, which is precisely how a review concluded it was
+ * not live. `inDays`/`atHour` are relative so a re-run rolls the timetable
+ * FORWARD instead of leaving a schedule that has silently fallen into the past.
+ *
+ * `atHour` is a CYPRUS local hour (see `seedDemoClasses`), which is the whole
+ * point of a gym timetable — a class is at 07:00 for the people attending it,
+ * not at whatever 07:00 UTC happens to render as. Names deliberately claim no
+ * weekday, since the schedule slides with the seed date and a "Saturday" class
+ * landing on a Wednesday reads as a bug.
+ *
+ * Capacities are deliberately small so the waitlist path (booking a full class)
+ * is reachable in a demo rather than theoretical.
+ */
+export const DEMO_CLASSES = [
+  { name: "Morning Strength", inDays: 1, atHour: 7, durationMinutes: 60, capacity: 12 },
+  { name: "HIIT Conditioning", inDays: 2, atHour: 18, durationMinutes: 45, capacity: 16 },
+  { name: "Olympic Lifting Technique", inDays: 4, atHour: 19, durationMinutes: 90, capacity: 8 },
+  { name: "Open Gym", inDays: 6, atHour: 10, durationMinutes: 120, capacity: 20 },
+];
+
+/**
+ * Idempotently upsert the demo timetable for one gym, taught by `instructorId`.
+ *
+ * Keyed on (tenant_id, name): `classes` has no unique constraint on the name (a
+ * real gym runs the same class weekly), so this is an explicit find-or-insert
+ * that UPDATES the existing row's start time rather than stacking a duplicate
+ * timetable on every re-run. Exported so the schema-coupled SQL can be exercised
+ * against a throwaway Postgres — see test/seed-demo.test.ts.
+ */
+export async function seedDemoClasses(client, tenantId, instructorId, instructorName) {
+  for (const cl of DEMO_CLASSES) {
+    // Computed in SQL (not JS) so the times are relative to the DATABASE clock,
+    // which is what `starts_at >= now()` is compared against.
+    //
+    // Anchored to Europe/Nicosia rather than the server's UTC: `date_trunc('day',
+    // now())` would give midnight UTC, so an `atHour` of 7 lands at 10:00 in the
+    // Cyprus market this product serves. Truncating the LOCAL day and converting
+    // back with `AT TIME ZONE` makes `atHour` mean the wall-clock hour a member
+    // actually turns up, and stays correct across the EEST/EET DST change.
+    const startsAt =
+      `(date_trunc('day', now() at time zone 'Europe/Nicosia') ` +
+      `+ interval '${cl.inDays} days' + interval '${cl.atHour} hours') ` +
+      `at time zone 'Europe/Nicosia'`;
+    const existing = await client.query(
+      `select id from classes where tenant_id = $1 and name = $2 limit 1`,
+      [tenantId, cl.name],
+    );
+    if (existing.rows[0]) {
+      await client.query(
+        `update classes
+            set starts_at = ${startsAt}, duration_minutes = $1, capacity = $2,
+                instructor_id = $3, instructor_name = $4, updated_at = now()
+          where id = $5 and tenant_id = $6`,
+        [cl.durationMinutes, cl.capacity, instructorId, instructorName, existing.rows[0].id, tenantId],
+      );
+    } else {
+      await client.query(
+        `insert into classes (tenant_id, name, instructor_id, instructor_name,
+                              starts_at, duration_minutes, capacity)
+           values ($1, $2, $3, $4, ${startsAt}, $5, $6)`,
+        [tenantId, cl.name, instructorId, instructorName, cl.durationMinutes, cl.capacity],
+      );
+    }
+  }
+  console.log(`+ ${DEMO_CLASSES.length} upcoming class(es) on the timetable`);
+  return DEMO_CLASSES.length;
+}
+
+/**
  * Seed the demo trainer, member and an assigned program (idempotent).
  *
  * Ordering matters: the member ROW must exist before its auth user, because the
@@ -618,6 +692,10 @@ export async function seedDemoWalkthrough(
     );
   }
   console.log(`+ active monthly subscription for ${MEMBER_EMAIL}`);
+
+  // 7. An upcoming class timetable, so the portal's class-booking section has
+  //    something to list and book. See `seedDemoClasses`.
+  await seedDemoClasses(client, tenantId, trainerId, TRAINER_NAME);
 
   return {
     trainerId,

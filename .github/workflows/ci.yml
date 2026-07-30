@@ -54,6 +54,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: A production install still gets the render toolchain (.npmrc)
+        # THE DEFECT THIS GUARDS. tailwindcss, autoprefixer and typescript are
+        # devDependencies, but postcss.config.mjs names the first two and every
+        # route is TypeScript — so `npm ci --omit=dev` (or NODE_ENV=production,
+        # which npm treats identically) produces a tree that cannot compile a
+        # single page. Measured before the fix: 70 packages instead of 230, no
+        # install-time build, `next dev` unable to compile anything, the readiness
+        # gate waiting on routes that never answer, and `GET /` timing out at
+        # 45.0s with nothing in the output naming an install problem. That was the
+        # root cause behind the repeated "member portal completely unreachable"
+        # report.
+        #
+        # `.npmrc` sets include=dev, which beats --omit=dev wherever either is
+        # set. This asserts that contract in ~5s (resolution only, no install) so
+        # deleting the file, or moving a package to devDependencies that the build
+        # needs, fails here instead of in a reviewer's browser.
+        run: |
+          plan=$(npm ci --omit=dev --dry-run --ignore-scripts --no-audit --no-fund 2>&1)
+          fail=0
+          for pkg in tailwindcss autoprefixer typescript; do
+            if ! echo "$plan" | grep -qE "^add $pkg "; then
+              echo "::error::A production install would omit $pkg — without it no route can compile and every URL times out. Check that .npmrc still sets include=dev."
+              fail=1
+            else
+              echo "ok: --omit=dev still installs $pkg"
+            fi
+          done
+          exit $fail
+
       - name: Type check
         run: npm run typecheck
 

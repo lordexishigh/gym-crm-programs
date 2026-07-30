@@ -46,10 +46,15 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   acquireBuildLock,
+  buildDefects,
   buildInFlight,
   hasProductionBuild,
   releaseBuildLock,
 } from "./lib/build-lock.mjs";
+// The single list of packages without which nothing renders, shared with
+// scripts/start.mjs so an install-time skip and a start-time refusal can never
+// disagree about what "cannot build" means.
+import { missingRenderDeps } from "./lib/dev-server.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = process.cwd();
@@ -62,20 +67,20 @@ function isSet(value) {
 /**
  * Whether the toolchain needed for `next build` is actually installed.
  *
- * Tailwind, PostCSS and autoprefixer are devDependencies, so an install run with
- * `--omit=dev` (or NODE_ENV=production, which npm treats the same way) cannot
- * build. Attempting it there would fail noisily on every production install for
- * no benefit.
+ * Tailwind, PostCSS, autoprefixer and typescript are devDependencies, so an
+ * install run with `--omit=dev` (or NODE_ENV=production, which npm treats the
+ * same way) cannot build. Attempting it there would fail noisily on every
+ * production install for no benefit.
+ *
+ * Note what skipping does NOT buy: such a tree cannot be served by the `next dev`
+ * fallback either, so the app is not merely unbuilt, it is unrenderable. The
+ * committed `.npmrc` (include=dev) exists to stop that install from happening at
+ * all; `npm start` refuses to start if it happened anyway.
  */
-function buildToolchainPresent(resolver = require.resolve) {
-  try {
-    // Resolved from THIS file, so it reflects the tree just installed.
-    resolver("tailwindcss");
-    resolver("postcss");
-    return true;
-  } catch {
-    return false;
-  }
+function buildToolchainPresent() {
+  // Resolved from the shared list in scripts/lib/dev-server.mjs, so this and the
+  // start-time preflight cannot drift apart.
+  return missingRenderDeps().length === 0;
 }
 
 /**
@@ -83,12 +88,21 @@ function buildToolchainPresent(resolver = require.resolve) {
  *
  * Pure and injectable so the policy — not a real 67s build — is what the tests
  * exercise. Returns `{ build, reason }`; `reason` is logged verbatim.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   built?: boolean,
+ *   toolchain?: boolean,
+ *   locked?: boolean,
+ *   defects?: string[] | null,
+ * }} [opts]
  */
 export function decideBuild({
   env = process.env,
   built = hasProductionBuild(ROOT),
   toolchain = buildToolchainPresent(),
   locked = buildInFlight(),
+  defects = null,
 } = {}) {
   // Explicit opt-out, for pipelines that build in their own named step (CI does)
   // and would otherwise pay for two identical builds.
@@ -113,8 +127,11 @@ export function decideBuild({
       build: false,
       reason:
         "devDependencies are absent (--omit=dev / NODE_ENV=production), so " +
-        "`next build` cannot run — skipping. Run `npm run build` with dev " +
-        "dependencies installed to produce a production build.",
+        "`next build` cannot run — skipping. WARNING: this tree cannot render a " +
+        "page at all — tailwindcss/autoprefixer/typescript are required to compile " +
+        "every route, so `npm start`'s `next dev` fallback cannot serve it either " +
+        "and it will refuse to start. Reinstall with `npm install --include=dev` " +
+        "(the committed .npmrc does this unless overridden).",
     };
   }
 
@@ -137,7 +154,17 @@ export function decideBuild({
     };
   }
 
-  return { build: true, reason: "No production build found (.next/BUILD_ID is missing)." };
+  // Name what is actually wrong. This used to say "BUILD_ID is missing"
+  // unconditionally, which was wrong for the case that matters most here: a
+  // `.next` that is PRESENT but unusable (an interrupted build, or one a dev
+  // server overwrote). That state used to satisfy `built` and skip the rebuild
+  // forever — the sticky failure behind four consecutive rounds of "'/'
+  // unreachable" — so an install that now repairs it should say so precisely.
+  const detail = (defects ?? buildDefects(ROOT)).slice(0, 2).join("; ");
+  return {
+    build: true,
+    reason: `No usable production build found (${detail || ".next/BUILD_ID is missing"}).`,
+  };
 }
 
 /** Run `next build`, inheriting stdio so its output is part of the install log. */
