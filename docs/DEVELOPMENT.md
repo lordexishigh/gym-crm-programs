@@ -10,13 +10,40 @@ The exact commands depend on the tech stack (see `docs/ARCHITECTURE.md`). Genera
 
 1. **Install dependencies**
    - Python: `python -m pip install -r requirements.txt`
-   - Node:   `npm install`
+   - Node:   `npm install` — takes about a minute longer than you may expect,
+     because it also produces the production build (see below)
 2. **Run tests**
    - Python: `python -m pytest`
    - Node:   `npm test`
 3. **Build / start**
-   - Frontend: `npm run build` then `npm run dev` / `npm start`
+   - Frontend: `npm start` (the install already built it) or `npm run dev`
    - Backend:  start the app entrypoint documented in the architecture
+
+### `npm install` builds the app, on purpose
+
+`.next/` is gitignored, so a fresh clone has no production build.
+`scripts/postinstall.mjs` creates one during install, because that is the only
+point in the lifecycle where waiting for a build costs nothing — nothing is
+listening on a port, so no client can be kept waiting by it. Measured here, time
+from launching `npm start` to a served `/`:
+
+| checkout state | time to a served `/` |
+| --- | --- |
+| production build present (`next start`) | **0.2s** |
+| no build (`next dev` fallback) | **20s** |
+
+A QA harness gives a navigation 20s, so the unbuilt path sat exactly on the
+budget and intermittently reported the entire app as unreachable — the same
+"`goto('/')`: Timeout 20000ms exceeded" finding, four review rounds running. The
+20s is the first webpack/Turbopack compile and cannot be gated or warmed away;
+the only real fix is for the build to already exist.
+
+It skips itself whenever building would be wasted or wrong: `ALPHA_SKIP_BUILD=1`
+(CI sets this — it builds in its own step), on Vercel (which builds after
+installing, with the deployment's env), when `.next/BUILD_ID` is already present,
+when devDependencies are absent (`--omit=dev` cannot build), and when another
+process already owns `.next`. It never fails an install: if the build fails,
+`npm start` still serves via its `next dev` fallback.
 
 ### `npm run dev` takes ~20s to open its port, on purpose
 

@@ -13,6 +13,17 @@
  *      budget expires. That is indistinguishable from a hung server: every route
  *      "times out", including fully static ones like `/` and `/login`.
  *
+ *      THE PRIMARY REPAIR IS NOT HERE. A missing build is produced at INSTALL
+ *      time by scripts/postinstall.mjs, because install is the one moment when
+ *      waiting for a build costs nothing — no port is open and no client is
+ *      waiting on one. `npm start` then finds `.next/BUILD_ID` and takes the fast
+ *      path below: measured on this project, `next start` serves `/` 720ms after
+ *      launch, against 20s for the dev fallback. That 20s is the whole defect —
+ *      a review harness allows a navigation 20s, so the unbuilt path is a coin
+ *      flip that this project kept losing. Everything below is what happens when
+ *      that install-time build did NOT run (`--ignore-scripts`, a pre-populated
+ *      node_modules cache, an install that predates this script).
+ *
  *      So this is REPAIRED, not merely reported. But the repair has to be fast,
  *      and building first is not: `next build` on this project takes ~85s
  *      (measured, cold). An earlier revision built the missing build, which fixed
@@ -64,11 +75,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import process from "node:process";
 // The dev-mode fallback below is the same server `npm run dev` runs, gate and
 // all: shared rather than duplicated so a checkout with no build is served
@@ -82,26 +89,21 @@ import {
   serveDev,
   stopDev,
 } from "./lib/dev-server.mjs";
+// The `.next` ownership lock, shared with scripts/postinstall.mjs — which builds
+// a missing build at install time, and so contends for the same directory.
+import {
+  acquireBuildLock,
+  buildInFlight,
+  buildLockExists,
+  hasProductionBuild,
+  readBuildLock,
+  releaseBuildLock,
+  removeBuildLock,
+} from "./lib/build-lock.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = process.cwd();
 const NEXT_BIN = require.resolve("next/dist/bin/next");
-
-/**
- * Lock electing a single owner of `.next` among concurrent `npm start`
- * invocations — a builder, or a dev-mode fallback server, which also writes
- * there.
- *
- * Deliberately NOT inside `.next`: `next build` deletes that directory before
- * writing, which would delete the very lock guarding the build. Waiters would
- * then see the lock vanish, conclude the builder was done, and start a competing
- * build into the directory being written. Keyed by a hash of the checkout path
- * so parallel checkouts (git worktrees, CI matrix jobs) never share a lock.
- */
-const BUILD_LOCK = path.join(
-  tmpdir(),
-  `alpha-crm-autobuild-${createHash("sha256").update(ROOT).digest("hex").slice(0, 16)}.lock`,
-);
 
 /**
  * Ceiling on how long to wait for ANOTHER process's build to land before giving
@@ -110,106 +112,9 @@ const BUILD_LOCK = path.join(
  */
 const BUILD_WAIT_MS = Number(process.env.START_BUILD_WAIT_MS) || 600_000;
 
-/** Whether `pid` is still running, used to tell a held lock from an abandoned one. */
-function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    // Signal 0 performs the permission/existence check without delivering it.
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM means the process exists but belongs to another user — still alive.
-    return err && err.code === "EPERM";
-  }
-}
-
-/**
- * A usable production build is `.next/BUILD_ID`. Checking the directory alone is
- * not enough: a build that was interrupted, or a `.next` left behind by
- * `next dev`, has the directory but no BUILD_ID, and `next start` rejects it.
- */
-function hasProductionBuild() {
-  const buildId = path.join(ROOT, ".next", "BUILD_ID");
-  try {
-    return existsSync(buildId) && readFileSync(buildId, "utf8").trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Whether THIS process created the lock. Tracked because a waiter must never
- * delete the builder's lock: without this, a waiter killed by CI teardown would
- * drop a live builder's lock on its way out, and the next start would happily
- * begin a competing build into the directory being written.
- */
-let ownsBuildLock = false;
-
-/**
- * Try to become the process that runs the autobuild. `wx` makes create-or-fail
- * atomic at the filesystem level, so two starts racing here cannot both win.
- * Returns true if this process now owns the lock.
- */
-function acquireBuildLock() {
-  try {
-    // Normally tmpdir, which exists; recursive keeps this safe on an exotic TMPDIR.
-    mkdirSync(path.dirname(BUILD_LOCK), { recursive: true });
-    writeFileSync(BUILD_LOCK, JSON.stringify({ pid: process.pid }), { flag: "wx" });
-    ownsBuildLock = true;
-    return true;
-  } catch (err) {
-    if (err && err.code === "EEXIST") return false;
-    // Any other failure (read-only mount, permissions) must not block serving:
-    // fall through to building unlocked rather than refusing to start.
-    console.error(`[start] could not create build lock (${err?.code || err}); building unlocked.`);
-    return true;
-  }
-}
-
-/** Delete the lock file whoever owns it — only for reclaiming a stale one. */
-function removeBuildLock() {
-  try {
-    rmSync(BUILD_LOCK, { force: true });
-  } catch {
-    /* best effort — a leftover lock is reclaimed as stale by the next start */
-  }
-}
-
-/**
- * Release the lock, but ONLY if this process holds it. Safe to call
- * unconditionally (signal handlers do), and never throws.
- */
-function releaseBuildLock() {
-  if (!ownsBuildLock) return;
-  ownsBuildLock = false;
-  removeBuildLock();
-}
-
-/**
- * Whoever currently holds the lock, or null if it is gone/unreadable. A lock
- * whose owner is dead is STALE: a build killed partway through (CI teardown,
- * Ctrl-C, OOM) leaves both the lock and a `.next` with no BUILD_ID, and without
- * reclaiming it every later start would wait out its budget for a build that is
- * never coming.
- */
-function readBuildLock() {
-  try {
-    const { pid } = JSON.parse(readFileSync(BUILD_LOCK, "utf8"));
-    return { pid, alive: pidAlive(pid) };
-  } catch {
-    return null;
-  }
-}
-
 /** Resolve after `ms`, without pulling in a timers/promises import. */
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Whether some other process is running a build right now. */
-function buildInFlight() {
-  const holder = readBuildLock();
-  return Boolean(holder && holder.alive && holder.pid !== process.pid);
 }
 
 /**
@@ -243,7 +148,7 @@ async function ensureServable() {
       // writer killed between create and write. An unreadable lock that still
       // EXISTS must be removed, or `readBuildLock` keeps returning null while
       // `acquireBuildLock` keeps failing on EEXIST: a hot spin forever.
-      if (existsSync(BUILD_LOCK)) {
+      if (buildLockExists()) {
         console.error("[start] Removing unreadable build lock.");
         removeBuildLock();
       }

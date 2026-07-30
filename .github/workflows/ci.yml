@@ -35,6 +35,13 @@ jobs:
       # stubs that endpoint itself.
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_e2e_stub
+      # `npm ci` would otherwise build via `postinstall` (scripts/postinstall.mjs
+      # gives a fresh clone a production build so `npm start` never has to fall
+      # back to `next dev`). This job builds in its own named step below, so
+      # letting install build too would pay for the same ~67s twice and attribute
+      # a build failure to "Install dependencies". The two dedicated steps at the
+      # end of this job are what verify the install-time build still works.
+      ALPHA_SKIP_BUILD: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -229,6 +236,86 @@ jobs:
           done
           stop_server
           if [ "$fail" != "0" ]; then cat /tmp/fresh-start.log; fi
+          exit $fail
+
+      - name: A fresh clone gets a production build at INSTALL time (`postinstall`)
+        # The primary defence against the reported failure, and the reason the
+        # step above is only a fallback.
+        #
+        # A review harness clones, installs, starts, then navigates with a fixed
+        # budget — 20s in the report that drove this. Measured on this project:
+        # `next start` serves `/` 720ms after launch, while the `next dev`
+        # fallback needs ~20s (the first webpack/Turbopack compile, which cannot
+        # be gated away). Landing ON the budget made the verdict a coin flip, and
+        # "goto '/' timed out" kept recurring while the app itself was fine.
+        #
+        # So scripts/postinstall.mjs builds during `npm install`, where waiting
+        # costs nothing because no port is open yet. This step proves that
+        # mechanism end to end: no build present -> install-time build produced ->
+        # `npm start` serves the real production build far inside a navigation
+        # budget. ALPHA_SKIP_BUILD is cleared for this step alone (the job sets it
+        # so `npm ci` does not build twice).
+        env:
+          APP_BASE_URL: http://localhost:3000
+          AUTO_MIGRATE: "0"
+          AUTO_SEED: "0"
+          ALPHA_SKIP_BUILD: ""
+        run: |
+          rm -rf .next
+          node scripts/postinstall.mjs
+
+          if [ ! -s .next/BUILD_ID ]; then
+            echo "::error::postinstall did not produce a production build; a fresh clone would fall back to \`next dev\` and risk the 20s navigation timeout this guards against"
+            exit 1
+          fi
+          echo "Install-time build produced: $(cat .next/BUILD_ID)"
+
+          npm run start > /tmp/postinstall-start.log 2>&1 &
+          SERVER_PID=$!
+          stop_server() {
+            pkill -P "$SERVER_PID" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
+            pkill -f "next-server" 2>/dev/null || true
+          }
+
+          # Deliberately tight: `next start` on a built tree answers in well under
+          # a second locally. A regression to the dev fallback needs ~20s and fails
+          # here instead of silently restoring the original timeout.
+          BUDGET=15
+          started=$(date +%s)
+          up=0
+          for _ in $(seq 1 "$BUDGET"); do
+            if curl -sf -o /dev/null --max-time 5 http://localhost:3000/; then up=1; break; fi
+            sleep 1
+          done
+          elapsed=$(( $(date +%s) - started ))
+          if [ "$up" != "1" ]; then
+            echo "::error::A built tree did not serve / within ${BUDGET}s — 'next start' should answer in well under a second"
+            cat /tmp/postinstall-start.log
+            stop_server
+            exit 1
+          fi
+          # A dev server must NOT be what answered: that would mean the build was
+          # ignored and the slow path is back.
+          if grep -q "serving with .next dev." /tmp/postinstall-start.log; then
+            echo "::error::npm start fell back to \`next dev\` despite a production build being present"
+            cat /tmp/postinstall-start.log
+            stop_server
+            exit 1
+          fi
+          echo "Built tree answered / after ${elapsed}s via \`next start\`."
+
+          fail=0
+          for path in / /login /portal/login; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000$path")
+            echo "GET $path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::Built-tree check failed: GET $path returned $code (expected 200)"
+              fail=1
+            fi
+          done
+          stop_server
+          if [ "$fail" != "0" ]; then cat /tmp/postinstall-start.log; fi
           exit $fail
 
       - name: Verify committed tree (nothing untracked or modified)

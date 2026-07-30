@@ -33,8 +33,27 @@ run, and verify the project. Architecture is documented in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the build plan is in
 [`docs/PLAN.md`](docs/PLAN.md).
 
-`.next/` is not committed, so **build before serving** — `npm run build && npm start`.
-`npm start` stays usable if you forget. Plain `next start` would exit and leave the
+`.next/` is not committed, so **`npm install` builds it for you** — see
+[`scripts/postinstall.mjs`](scripts/postinstall.mjs). Install is the only moment when
+waiting for a build is free: no port is open yet, so the ~1 minute is invisible. Do the
+same work during `npm start` and that minute is a port that black-holes every
+connection. Measured here, from a fresh clone:
+
+| checkout state | time to a served `/` |
+| --- | --- |
+| production build present (`next start`) | **0.2s** |
+| no build (`next dev` fallback) | **20s** |
+
+That 20s is the first webpack/Turbopack compile, which `next dev` pays on the first
+request to a route and which no amount of readiness-gating can remove. It lands
+exactly on the 20s budget a QA harness gives a navigation, so the unbuilt path was a
+coin flip that reported the whole app as unreachable whenever it lost. The build now
+exists before anything is served. Skip it with `ALPHA_SKIP_BUILD=1` (CI does — it
+builds in its own step); it also skips itself on Vercel, which builds after installing,
+and whenever `.next/BUILD_ID` is already there.
+
+`npm start` stays usable if that build never happened (`--ignore-scripts`, a warm
+node_modules cache). Plain `next start` would exit and leave the
 port unbound, and a client reaching it through a forwarded port, container or proxy
 does not get a connection error for an unbound port — the SYN is black-holed, so
 every route simply hangs and the whole product reads as unreachable. Building first

@@ -29,6 +29,13 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+# Neither job here needs a local production build: the `test` job type-checks,
+# migrates and runs the suite, and `migrate-and-deploy` migrates and hands the
+# build to Vercel. Without this, `npm ci` would spend ~67s in `postinstall`
+# (scripts/postinstall.mjs) producing a build that nothing in this workflow uses.
+env:
+  ALPHA_SKIP_BUILD: "1"
+
 jobs:
   # Gate: the full type-check + migration + test suite (including the
   # comprehensive RLS / cross-tenant / cross-member isolation audit) must pass

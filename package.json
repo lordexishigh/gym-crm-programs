@@ -8,6 +8,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:next": "next dev",
     "build": "next build",
+    "postinstall": "node scripts/postinstall.mjs",
     "start": "node scripts/start.mjs",
     "start:next": "next start",
     "typecheck": "tsc --noEmit",
