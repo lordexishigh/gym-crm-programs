@@ -45,95 +45,25 @@ when devDependencies are absent (`--omit=dev` cannot build), and when another
 process already owns `.next`. It never fails an install: if the build fails,
 `npm start` still serves via its `next dev` fallback.
 
-### Never install without devDependencies
-
-That last sentence has one exception, and it used to be this project's worst bug.
-The `next dev` fallback is **not** a safety net for a tree installed with
-`--omit=dev` (or `NODE_ENV=production`, which npm treats identically), because
-the packages that turn source into HTML are themselves devDependencies:
-`tailwindcss` and `autoprefixer` are the PostCSS plugins named by
-`postcss.config.mjs`, `app/globals.css` is imported by `app/layout.tsx` on every
-route, and every route is TypeScript. Without them nothing compiles — not a
-build, not a dev server, not one page.
-
-The result was total unreachability that named nothing: install quietly skipped
-the build, `next dev` shelled out to npm mid-boot to install TypeScript for
-itself, no route ever compiled, the readiness gate waited on entry routes that
-could never answer, and every caller reported a timeout. Reproduced end to end:
-`NODE_ENV=production npm ci` installed **70** packages instead of 230, and
-`GET /` returned nothing for 222s and then timed out at exactly 45.005s. That is
-the "member portal is completely unreachable — `/login` and `/portal/login` time
-out at 45s" finding, and it recurred for several review rounds because every
-verification used a normal `npm ci`, which is the one install that works.
-
-Two things now prevent it:
-
-- **`.npmrc` sets `include=dev`.** `include` is the inverse of `omit` and wins
-  over it wherever either is set, so devDependencies survive both an inherited
-  `NODE_ENV=production` and an explicit `--omit=dev` on the command line.
-  Verified: `npm ci --omit=dev` installs all 230 packages.
-- **`npm start` preflights them** (`missingRenderDeps` in
-  `scripts/lib/dev-server.mjs`) and refuses to start in under a second, naming
-  the missing packages and the fix, rather than holding a port that could never
-  answer. A hand-pruned `node_modules` therefore fails loudly instead of mutely.
-
-CI asserts the first of these on every run (`npm ci --omit=dev --dry-run` must
-still plan to install tailwindcss, autoprefixer and typescript).
-
 ### `npm run dev` takes ~20s to open its port, on purpose
 
-`npm run dev` runs `scripts/dev.mjs`, which does not open the port until every
-entry route — `/`, `/login` and `/portal/login` — has actually been served on it.
-`next dev` on its own binds at ~3s but cannot render `/` for another ~14s (dev
-compiles each route on its first request), so an open port used to mean
-"connections accepted, none answered" — and the first navigation, from a browser
-or a QA harness, waited out that whole compile and looked like a hang.
-Withholding the port turns that into "not open yet", which readiness loops
-already handle correctly; total time is unchanged, but the first page load drops
-from ~16s to under 1s.
+`npm run dev` runs `scripts/dev.mjs`, which does not open the port until `/` has
+actually been served on it. `next dev` on its own binds at ~3s but cannot render
+`/` for another ~14s (dev compiles each route on its first request), so an open
+port used to mean "connections accepted, none answered" — and the first
+navigation, from a browser or a QA harness, waited out that whole compile and
+looked like a hang. Withholding the port turns that into "not open yet", which
+readiness loops already handle correctly; total time is unchanged, but the first
+page load drops from ~16s to under 1s.
 
-The gate covers all three routes rather than just `/`, because gating on `/`
-alone only moves the problem: the login routes then compile *behind* an open
-port, and a caller that reads "port open" as "ready for QA" spends its first
-navigation to `/login` paying that route's cold compile. The distinctive symptom
-is the landing page loading fine while both login pages time out — which reads as
-a broken auth wall rather than as a server announced ready too early. Warming is
-concurrent, so the shared module graph compiles once and covering all three costs
-nothing (measured cold: port at 18.5s, then `/login` 0.9s, `/portal/login` 1.0s;
-8.2s to the port with a warm cache).
-
-Once it is up, all three are compiled and a `Ready for QA` line says so.
-Everything else behaves like plain `next dev`, HMR included — the port is fronted
-by a byte-for-byte TCP forwarder, not a proxy that rewrites anything.
+Once it is up, `/`, `/login` and `/portal/login` are already compiled and a
+`Ready for QA` line says so. Everything else behaves like plain `next dev`,
+HMR included — the port is fronted by a byte-for-byte TCP forwarder, not a proxy
+that rewrites anything.
 
 - `DEV_GATE=0` — bind immediately, exactly as `next dev` does
-- `DEV_WARMUP=0` — narrow the gate back to `/` only
 - `START_DEV_TURBOPACK=0` — skip Turbopack
 - `npm run dev:next` — plain `next dev`, no wrapper at all
-
-## `npm start` and unusable builds
-
-`npm start` treats "there is a build" as the whole artifact set `next start` opens,
-not just `.next/BUILD_ID`. This matters because `next start` checks BUILD_ID and
-then opens several manifests *without* checking them, so a partial `.next` dies on
-a bare `ENOENT` **and exits 0** — a dead server reporting success, with nothing
-bound to the port, which every caller sees as "`/` times out". Two states produce
-it routinely: an interrupted build (BUILD_ID is written before the manifests), and
-a dev server killed mid-write (a full set of files plus a dev-shaped
-`routes-manifest.json` with no `dataRoutes`, which crashes `next start` on
-`routesManifest.dataRoutes is not iterable`). Both are detected, named in the log,
-and rebuilt by the install-time build.
-
-Because a file check cannot catch a *corrupt* manifest or a build from another
-Next.js version, the wrapper also supervises the server it starts: if `next start`
-exits without ever answering a request, it falls back to `next dev` instead of
-exiting onto a dark port. An unbound port black-holes connections rather than
-refusing them, so leaving one dark is what turns a broken build into "the whole
-product is unreachable".
-
-- `START_PROD_FALLBACK=0` — make an unusable production build a hard failure
-- `START_PROD_READY_MS` — how long to wait for the first response (default 30s)
-- `START_AUTOBUILD=0` — make a *missing* build a hard failure
 
 ## Project layout
 

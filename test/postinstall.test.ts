@@ -43,7 +43,6 @@ function decide(
     built?: boolean;
     toolchain?: boolean;
     locked?: boolean;
-    defects?: string[];
   } = {},
 ): { build: boolean; reason: string } {
   return decideBuild({
@@ -70,29 +69,6 @@ describe("scripts/postinstall.mjs — decideBuild", () => {
 
     expect(build).toBe(false);
     expect(reason).toMatch(/already exists/);
-  });
-
-  it("REPAIRS a .next that is present but unusable, naming the actual defect", () => {
-    // The sticky failure this closes. `built` used to mean "BUILD_ID exists", so
-    // an interrupted build — or one a dev server overwrote — satisfied it, every
-    // install skipped the rebuild, and every `npm start` handed the same broken
-    // directory to `next start`, which dies on it after printing a startup banner
-    // that says the server is up. Nothing bound the port, and an unbound port
-    // black-holes connections rather than refusing them, so every route read as
-    // TIMED OUT: four consecutive rounds of an automated review reporting "'/'
-    // unreachable". `built` is now the whole artifact set, so this state rebuilds
-    // itself at install time.
-    const { build, reason } = decide({
-      built: false,
-      defects: [
-        ".next/routes-manifest.json has no dataRoutes[] — it was written by `next dev`",
-      ],
-    });
-
-    expect(build).toBe(true);
-    // It must not claim BUILD_ID is missing when BUILD_ID is sitting right there.
-    expect(reason).toMatch(/dataRoutes/);
-    expect(reason).not.toMatch(/BUILD_ID is missing/);
   });
 
   it("honours ALPHA_SKIP_BUILD for pipelines that build in their own step", () => {
@@ -126,23 +102,14 @@ describe("scripts/postinstall.mjs — decideBuild", () => {
   });
 
   it("skips when devDependencies are absent, since `next build` needs them", () => {
-    // Tailwind/PostCSS/typescript are devDependencies: `npm ci --omit=dev` cannot
-    // build, and trying would fail noisily on every production install for no
-    // benefit.
+    // Tailwind/PostCSS are devDependencies: `npm ci --omit=dev` cannot build, and
+    // trying would fail noisily on every production install for no benefit.
     const { build, reason } = decide({ toolchain: false });
 
     expect(build).toBe(false);
     expect(reason).toMatch(/devDependencies/);
-    // It must point at the remedy rather than leaving a bare refusal — and the
-    // remedy is REINSTALLING, not `npm run build`. Such a tree cannot compile a
-    // single route, so building it fails for the same reason serving it does; the
-    // message used to suggest a build that could not possibly succeed. This is the
-    // one place a production install is told what actually went wrong, so it has
-    // to name the install flag.
-    expect(reason).toMatch(/--include=dev/);
-    // And it must not undersell the consequence: an unbuilt tree is normally fine
-    // (`npm start` falls back to `next dev`), but this one cannot be served either.
-    expect(reason).toMatch(/cannot render/);
+    // It must point at the remedy rather than leaving a bare refusal.
+    expect(reason).toMatch(/npm run build/);
   });
 
   it("yields when another process owns .next instead of writing underneath it", () => {

@@ -65,34 +65,6 @@ function lockPathFor(cwd: string): string {
   return path.join(tmpdir(), `alpha-crm-autobuild-${digest}.lock`);
 }
 
-/**
- * Write a `.next` that satisfies the wrapper's "this is a production build"
- * check — every artifact in `PRODUCTION_BUILD_FILES`, with a routes manifest of
- * the PRODUCTION shape (a `dataRoutes` array; `next dev` writes one without).
- *
- * A lone BUILD_ID is deliberately not enough any more, which is the point of the
- * partial-build cases below.
- */
-function writeFakeBuild(dir: string): void {
-  mkdirSync(path.join(dir, ".next", "server"), { recursive: true });
-  writeFileSync(path.join(dir, ".next", "BUILD_ID"), "test-build-id\n");
-  writeFileSync(
-    path.join(dir, ".next", "routes-manifest.json"),
-    JSON.stringify({ version: 3, dataRoutes: [], staticRoutes: [], dynamicRoutes: [] }),
-  );
-  for (const rel of [
-    "prerender-manifest.json",
-    "build-manifest.json",
-    "app-path-routes-manifest.json",
-    "required-server-files.json",
-    path.join("server", "pages-manifest.json"),
-    path.join("server", "app-paths-manifest.json"),
-    path.join("server", "middleware-manifest.json"),
-  ]) {
-    writeFileSync(path.join(dir, ".next", rel), "{}");
-  }
-}
-
 /** A throwaway project dir; `next` still resolves from the wrapper's own path. */
 function makeProjectDir(withBuild: boolean): string {
   const dir = mkdtempSync(path.join(tmpdir(), "alpha-start-"));
@@ -104,7 +76,10 @@ function makeProjectDir(withBuild: boolean): string {
   // The wrapper resolves `next/dist/bin/next` from its own location, so only a
   // package.json is strictly needed here; the build marker is what varies.
   writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "t" }));
-  if (withBuild) writeFakeBuild(dir);
+  if (withBuild) {
+    mkdirSync(path.join(dir, ".next"), { recursive: true });
+    writeFileSync(path.join(dir, ".next", "BUILD_ID"), "test-build-id\n");
+  }
   return dir;
 }
 
@@ -283,121 +258,6 @@ describe("scripts/start.mjs — missing production build", () => {
     expect(code).toBe(1);
     expect(out).toMatch(/No production build found/);
   }, 30_000);
-});
-
-describe("scripts/start.mjs — a build that is present but not usable", () => {
-  /**
-   * The regression these pin is the one an automated review reported as "'/'
-   * unreachable" for four consecutive rounds.
-   *
-   * `next start` validates BUILD_ID and reports its absence properly, then opens
-   * several manifests with NO such check. A `.next` holding BUILD_ID but missing
-   * one of those throws a bare ENOENT out of startup and dies — reproduced on
-   * this project against Next 15.5.21, for a missing prerender-manifest.json, a
-   * missing server/pages-manifest.json, and a routes-manifest.json written by
-   * `next dev` (TypeError: routesManifest.dataRoutes is not iterable).
-   *
-   * It dies AFTER printing its full startup banner ("- Local:
-   * http://localhost:3000"), so trusting BUILD_ID let the wrapper hand the port
-   * to a process that announced itself as up and was already dead. Nothing bound
-   * the port, and an unbound port black-holes the SYN rather than refusing it, so
-   * every route (static ones included) reads as TIMED OUT instead of as a broken
-   * build.
-   */
-  it("treats BUILD_ID with a missing manifest as no build, naming the file", async () => {
-    const dir = makeProjectDir(true);
-    // Exactly what an interrupted `next build` leaves: BUILD_ID is written before
-    // the manifests, so the marker outlives the work.
-    rmSync(path.join(dir, ".next", "prerender-manifest.json"), { force: true });
-    const port = await freePort();
-
-    const { code, out } = await runStart(dir, ["-p", String(port)], {
-      START_AUTOBUILD: "0",
-    });
-
-    expect(code).toBe(1);
-    expect(out).toMatch(/No production build found/);
-    // Naming the artifact is the difference between diagnosable and mysterious.
-    expect(out).toMatch(/prerender-manifest\.json is missing/);
-    // And it must not be mistaken for an absent build — BUILD_ID is right there.
-    expect(out).toMatch(/INCOMPLETE or OVERWRITTEN/);
-  }, 30_000);
-
-  it("treats a dev-written routes manifest as no build, not a production one", async () => {
-    // `next dev` writes its own `.next` in the same directory, and its
-    // routes-manifest.json has no `dataRoutes`. When a dev run and a build
-    // interleave — a dev server killed mid-write, a start racing the tail of one
-    // — the directory ends up with a full set of files and a DEV-shaped manifest,
-    // and `next start` dies on `routesManifest.dataRoutes is not iterable`
-    // (observed). File existence alone cannot tell these apart; the shape can.
-    const dir = makeProjectDir(true);
-    writeFileSync(
-      path.join(dir, ".next", "routes-manifest.json"),
-      // The real dev-mode shape: no dataRoutes/staticRoutes/dynamicRoutes.
-      JSON.stringify({ version: 3, caseSensitive: false, basePath: "", redirects: [] }),
-    );
-    const port = await freePort();
-
-    const { code, out } = await runStart(dir, ["-p", String(port)], {
-      START_AUTOBUILD: "0",
-    });
-
-    expect(code).toBe(1);
-    expect(out).toMatch(/No production build found/);
-    expect(out).toMatch(/no dataRoutes\[\]/);
-    expect(out).toMatch(/written by `next dev`/);
-  }, 30_000);
-
-  it("never exits leaving the port unbound when `next start` dies at startup", async () => {
-    // The artifact set is complete, so the preflight passes it through — but the
-    // manifests are `{}` in a dir with no `app`, so the real `next start` cannot
-    // serve. This is the class a preflight can never predict (a corrupt manifest,
-    // a build from another Next version), and the guarantee therefore has to be
-    // enforced on the OUTCOME: if it never answers a request, fall back rather
-    // than leave the port with nothing listening on it.
-    const dir = makeProjectDir(true);
-    const port = await freePort();
-
-    const { code, out } = await runStart(dir, ["-p", String(port)], {
-      // Keep the case fast and assert the decision itself rather than sitting
-      // through a dev-server fallback that also cannot compile this temp dir.
-      START_PROD_FALLBACK: "0",
-    });
-
-    expect(out).toMatch(/without serving a single request/);
-    expect(out).toMatch(/present but not USABLE/);
-    // The whole point: never a silent success with a dark port.
-    expect(code).toBe(1);
-  }, 40_000);
-
-  it("falls back to `next dev` rather than leaving the port dark", async () => {
-    const dir = makeProjectDir(true);
-    const port = await freePort();
-
-    const { out } = await runStart(dir, ["-p", String(port)]);
-
-    expect(out).toMatch(/without serving a single request/);
-    // Default behaviour is to serve the checkout some other way.
-    expect(out).toMatch(/Falling back to `next dev`/);
-    expect(out).toMatch(/Refusing to leave the port dark/);
-  }, 60_000);
-});
-
-describe("scripts/lib/build-lock.mjs — the artifact list matches a real build", () => {
-  it("does not over-require: this repo's own production build satisfies it", async () => {
-    // A list that demanded a file `next build` does not emit would send every
-    // GOOD build down the slow dev path — a silent, permanent regression. Pinned
-    // against the real thing rather than against another list.
-    const { buildDefects } = await import("../scripts/lib/build-lock.mjs");
-
-    if (!existsSync(path.join(ROOT, ".next", "BUILD_ID"))) {
-      // Nothing to check against in a checkout that has not been built; the CI
-      // job builds before running tests, so this is exercised there.
-      return;
-    }
-
-    expect(buildDefects(ROOT)).toEqual([]);
-  });
 });
 
 describe("scripts/start.mjs — concurrent-build lock", () => {

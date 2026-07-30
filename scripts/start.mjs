@@ -40,10 +40,9 @@
  *      a page that has none of the product on it.
  *
  *      The dev server is run through scripts/lib/dev-server.mjs, which withholds
- *      the port until every entry route (`/`, `/login`, `/portal/login`) has
- *      actually been served on it — `next dev` otherwise binds at ~3s and cannot
- *      render `/` for another ~14s, which is the same "open but unresponsive"
- *      trap in a smaller form.
+ *      the port until a request has actually been served on it — `next dev`
+ *      otherwise binds at ~3s and cannot render `/` for another ~14s, which is
+ *      the same "open but unresponsive" trap in a smaller form.
  *
  *      Dev mode is announced loudly, never silent: responses are slower and this
  *      is not how production should run. Production doesn't take this path —
@@ -66,29 +65,10 @@
  *      answering, so the run silently probes the wrong process and any result it
  *      produces is about stale code.
  *
- *   3. AN INCOMPLETE OR UNUSABLE BUILD, which is the nastiest of the three
- *      because it LOOKS like case 1 being handled. `next start` checks BUILD_ID
- *      and reports its absence properly, then opens several manifests with no
- *      such check; a `.next` holding BUILD_ID but missing one of those throws a
- *      bare ENOENT out of startup and dies. Reproduced here on Next 15.5.21 —
- *      and critically, it dies AFTER printing its whole startup banner
- *      ("- Local: http://localhost:3000"), so the log reads like a server that
- *      came up while nothing ever bound the port. Every route then times out,
- *      static ones included, because an unbound port black-holes the SYN rather
- *      than refusing it.
- *      Two independent guards now close it: `hasProductionBuild` validates the
- *      whole artifact set rather than BUILD_ID alone (so a partial `.next` is
- *      rebuilt at install time and never handed to `next start`), and
- *      `runProduction` supervises the server until it has actually answered a
- *      request, falling back rather than exiting if it never does. The second is
- *      what covers the cases a preflight cannot predict — a corrupt manifest, a
- *      build left by a different Next.js version.
- *
- * This wrapper turns all three into something deterministic: it never leaves the
- * port unbound while claiming success, it refuses to hand the port to
- * `next start` when another process already holds it, naming that process instead
- * of failing anonymously, and whatever it does serve, it serves only after
- * confirming that it answers.
+ * This wrapper turns both into something deterministic: it refuses to start
+ * without a usable production build, naming the remedy, and it refuses to hand
+ * the port to `next start` when another process already holds it, naming that
+ * process instead of failing anonymously.
  *
  * Everything here is dependency-free (node: builtins only) so it runs before any
  * install-time assumptions hold.
@@ -103,7 +83,6 @@ import process from "node:process";
 import {
   describePortHolder,
   disabled,
-  missingRenderDeps,
   portInUse,
   resolveHost,
   resolvePort,
@@ -114,7 +93,6 @@ import {
 // a missing build at install time, and so contends for the same directory.
 import {
   acquireBuildLock,
-  buildDefects,
   buildInFlight,
   buildLockExists,
   hasProductionBuild,
@@ -134,62 +112,9 @@ const NEXT_BIN = require.resolve("next/dist/bin/next");
  */
 const BUILD_WAIT_MS = Number(process.env.START_BUILD_WAIT_MS) || 600_000;
 
-/**
- * Ceiling on waiting for `next start` to answer its first request before giving
- * up on confirming it. Generous against a measured ~720ms: this bound exists to
- * catch a server that never serves, not to police a slow one.
- */
-const PROD_READY_MS = Number(process.env.START_PROD_READY_MS) || 30_000;
-
 /** Resolve after `ms`, without pulling in a timers/promises import. */
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Why `.next` does not hold a servable build, in a form worth logging.
- *
- * "BUILD_ID is missing" was the whole story while that was the only thing
- * checked. Now that an incomplete or dev-overwritten `.next` is caught too (see
- * `PRODUCTION_BUILD_FILES` and `buildDefects`), the interesting cases all have
- * BUILD_ID sitting right there — an interrupted build, a half-copied checkout, a
- * routes manifest a dev server rewrote — and every one of them reads as a good
- * build to anything looking only at that marker. Naming the specific defect is
- * the difference between diagnosable and a mystery.
- */
-function describeMissingBuild() {
-  const defects = buildDefects();
-  if (defects.length === 0) return "no defects detected";
-  const shown = defects.slice(0, 3);
-  const rest = defects.length - shown.length;
-  const buildIdGone = defects.some((d) => d.startsWith(".next/BUILD_ID"));
-  return (
-    shown.join("; ") +
-    (rest > 0 ? `; and ${rest} more` : "") +
-    (buildIdGone
-      ? ""
-      : " — BUILD_ID is present, so this is an INCOMPLETE or OVERWRITTEN build, not an absent one")
-  );
-}
-
-/**
- * Whether a server on `host:port` will answer an HTTP request.
- *
- * Any response at all counts, error statuses included: the question is whether
- * something is serving, not whether it likes the request. A wildcard bind is
- * probed over loopback, which it accepts by definition.
- */
-async function answersHttp(port, host) {
-  const target = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
-  try {
-    await fetch(`http://${target}:${port}/`, {
-      signal: AbortSignal.timeout(5_000),
-      headers: { "user-agent": "alpha-crm-start-probe" },
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -207,17 +132,14 @@ async function answersHttp(port, host) {
  * "the build is finished" signal is the builder RELEASING THE LOCK, so every
  * wait here ends on lock acquisition and never on BUILD_ID appearing.
  */
-/**
- * Become the owner of `.next`, waiting out whoever holds it and reclaiming a lock
- * whose owner died. Resolves true once this process owns it, false after
- * reporting that the wait was hopeless.
- *
- * Shared by the startup decision below and by the recovery path in
- * `main` — a `next start` that died has to re-own `.next` before the dev
- * fallback may write there, and the waiting/reclaim protocol must be identical
- * in both places.
- */
-async function claimNextDir() {
+async function ensureServable() {
+  // Fast path, and the overwhelmingly common one: a finished build with no
+  // builder running. The in-flight test is what keeps this off the race above.
+  if (hasProductionBuild() && !buildInFlight()) return "start";
+
+  // Wait out any in-flight build, reclaiming a lock whose owner died. Opting out
+  // of the fallback does not opt out of waiting: serving a half-written `.next`
+  // is exactly what we are avoiding.
   let waited = 0;
   while (!acquireBuildLock()) {
     const holder = readBuildLock();
@@ -254,23 +176,11 @@ async function claimNextDir() {
           "[start] Stop that process and run `npm run build`, or raise " +
           "START_BUILD_WAIT_MS.",
       );
-      return false;
+      return null;
     }
     await delay(1_000);
     waited += 1_000;
   }
-  return true;
-}
-
-async function ensureServable() {
-  // Fast path, and the overwhelmingly common one: a finished build with no
-  // builder running. The in-flight test is what keeps this off the race above.
-  if (hasProductionBuild() && !buildInFlight()) return "start";
-
-  // Wait out any in-flight build, reclaiming a lock whose owner died. Opting out
-  // of the fallback does not opt out of waiting: serving a half-written `.next`
-  // is exactly what we are avoiding.
-  if (!(await claimNextDir())) return null;
 
   // Lock held, so no build can be in flight. Anything on disk now is complete.
   let mode = null;
@@ -280,44 +190,11 @@ async function ensureServable() {
       return mode;
     }
 
-    // Nothing can be served if the tree cannot compile a page — and that is the
-    // one failure here that is completely silent, so it is checked before any
-    // fallback is chosen. A tree installed without dev dependencies has no
-    // tailwindcss/autoprefixer for postcss.config.mjs and no typescript, so
-    // `next build` cannot run AND `next dev` cannot compile a single route. The
-    // readiness gate then waits on entry routes that will never answer and the
-    // port stays shut for its whole budget, which every caller reports as "the
-    // product times out" — with nothing in the output pointing at an install.
-    // Reproduced end to end: `GET /` timed out at 45.0s against a tree installed
-    // with NODE_ENV=production. `.npmrc` (include=dev) is what prevents that
-    // install; this is what stops a tree that got one anyway from failing mutely.
-    const missing = missingRenderDeps();
-    if (missing.length) {
-      console.error(
-        `[start] This checkout cannot render any page: ${missing.join(", ")} ` +
-          `${missing.length === 1 ? "is" : "are"} not installed.\n` +
-          "[start] These are devDependencies, and this node_modules was installed " +
-          "without them (`--omit=dev`, or NODE_ENV=production, which npm treats " +
-          "the same way). Without them PostCSS cannot process app/globals.css — " +
-          "which every route imports — so `next build` cannot produce a build and " +
-          "`next dev` cannot compile a single route. Every URL, including static " +
-          "ones like / and /login, would hang until the caller timed out.\n" +
-          "[start] Fix: reinstall with dev dependencies — `npm install --include=dev`. " +
-          "The committed .npmrc already does this by default; an explicit " +
-          "`--omit=dev` on the command line or a hand-pruned node_modules " +
-          "overrides it.\n" +
-          "[start] Refusing to start: holding a port that could never answer is " +
-          "what made this look like an unreachable product instead of an install " +
-          "problem.",
-      );
-      return null;
-    }
-
     // Explicit opt-out: preserve the fail-fast for callers that manage their own
     // builds and would rather hear about a missing one than have one improvised.
     if (disabled(process.env.START_AUTOBUILD)) {
       console.error(
-        `[start] No production build found (${describeMissingBuild()}) and ` +
+        "[start] No production build found (.next/BUILD_ID is missing) and " +
           "START_AUTOBUILD=0; `next start` would exit and nothing would ever bind " +
           "this port.\n[start] Run `npm run build` first, then `npm start`.",
       );
@@ -325,17 +202,17 @@ async function ensureServable() {
     }
 
     console.warn(
-      `[start] No production build found (${describeMissingBuild()}) — serving ` +
+      "[start] No production build found (.next/BUILD_ID is missing) — serving " +
         "with `next dev` instead, and opening this port only once it can answer.\n" +
         "[start] Why not build first: `next build` takes ~85s on this project, " +
         "and for every one of those seconds the port stays UNBOUND. An unbound " +
         "port black-holes the connection instead of refusing it, so callers wait " +
         "out their whole budget and every route — even static ones like / and " +
         "/login — reads as timed out.\n" +
-        "[start] Expect roughly 15-20s before the port opens: that is `/`, `/login` " +
-        "and `/portal/login` being compiled. The port stays shut until all three " +
-        "have actually been served, so \"open\" means usable and a readiness loop " +
-        "cannot be waved through into a navigation that then times out.\n" +
+        "[start] Expect roughly 15-20s before the port opens: that is `/` being " +
+        "compiled. The port stays shut until it has actually been served, so " +
+        "\"open\" means usable and a readiness loop cannot be waved through into a " +
+        "navigation that then times out.\n" +
         "[start] This is a DEVELOPMENT server: the pages are real and complete, " +
         "the responses are slower. For a production server run `npm run build` " +
         "first; `npm start` then serves that build directly. START_AUTOBUILD=0 " +
@@ -358,18 +235,6 @@ async function ensureServable() {
  */
 let activeChild = null;
 
-/**
- * Set once a shutdown signal has been seen.
- *
- * Load-bearing for the supervision below: a server interrupted BEFORE it answered
- * its first request is indistinguishable, by exit status alone, from one that
- * could not start — and on Windows a child killed by our own handler often reports
- * neither a code nor a signal. Without this flag, Ctrl-C during startup would be
- * read as an unusable build and answered by launching a dev server the operator
- * just asked to stop.
- */
-let interrupted = false;
-
 /** Spawn a `next` subcommand, recording it as the child to reap on a signal. */
 function spawnNext(args, extraEnv = {}) {
   activeChild = spawn(process.execPath, [NEXT_BIN, ...args], {
@@ -378,94 +243,6 @@ function spawnNext(args, extraEnv = {}) {
     stdio: "inherit",
   });
   return activeChild;
-}
-
-/**
- * Run `next start` and WATCH IT until it has actually served something.
- *
- * Supervision, rather than a plain spawn-and-forward, because of how `next start`
- * fails. It validates BUILD_ID and then opens several manifests with no such
- * check, so an incomplete `.next` makes it throw a bare ENOENT out of startup and
- * die — reproduced on this project against Next 15.5.21.
- *
- * The reason forwarding its exit code was not enough is that the exit code is not
- * what anyone reads. `next start` prints its complete startup banner BEFORE it
- * throws, so the log announces "- Local: http://localhost:3000" for a server that
- * is already dead; and a harness that launches `npm start` in the background and
- * then navigates never inspects the status at all. What it sees is a port that
- * accepts nothing — and because an unbound port black-holes the SYN rather than
- * refusing it, every caller sat there until its own budget expired. `/` "timed
- * out", so did both login pages, and the verdict was an unreachable product
- * rather than a broken build.
- *
- * `PRODUCTION_BUILD_FILES` now catches that `.next` before we get here, but a
- * preflight can only check what it knows to check — a corrupt (as opposed to
- * absent) manifest, an unreadable chunk, an incompatible build from another Next
- * version all still die exactly the same way. So the guarantee is enforced on the
- * OUTCOME instead of predicted from the inputs: if this process never answers a
- * request, its caller is told, and `main` serves the checkout another way rather
- * than leaving the port dark.
- *
- * Resolves `{ served, code, signal }`; `served` is false only when the child
- * ended without ever answering.
- */
-async function runProduction({ port, host, forwarded }) {
-  const args = ["start", ...forwarded];
-  if (!forwarded.some((a) => a === "-p" || a === "--port" || a.startsWith("--port="))) {
-    args.push("-p", String(port));
-  }
-
-  const startedAt = Date.now();
-  const child = spawnNext(args);
-
-  const ended = new Promise((resolve) => {
-    child.on("error", (err) => {
-      console.error("[start] failed to launch `next start`:", err);
-      resolve({ code: -1, signal: null });
-    });
-    child.on("close", (code, signal) => resolve({ code: code ?? -1, signal }));
-  });
-
-  // Poll until it answers. Bounded so a server that binds but never responds
-  // cannot hold this wrapper open forever.
-  const ready = (async () => {
-    const deadline = Date.now() + PROD_READY_MS;
-    while (Date.now() < deadline) {
-      if (await answersHttp(port, host)) return true;
-      await delay(250);
-    }
-    return false;
-  })();
-
-  const first = await Promise.race([
-    ended.then((e) => ({ kind: "ended", ...e })),
-    ready.then((ok) => ({ kind: "ready", ok })),
-  ]);
-
-  if (first.kind === "ended") {
-    return { served: false, code: first.code, signal: first.signal };
-  }
-
-  if (first.ok) {
-    console.log(
-      `[start] Serving the production build on http://${
-        !host || host === "0.0.0.0" || host === "::" ? "localhost" : host
-      }:${port} — confirmed answering after ${Date.now() - startedAt}ms.`,
-    );
-  } else {
-    // Bound but silent for the whole budget. Deliberately NOT killed: the port is
-    // held and connections are being accepted, so a caller gets a real (if slow)
-    // conversation, and replacing a live server with a dev one would be a
-    // downgrade made on a guess.
-    console.warn(
-      `[start] \`next start\` has not answered a request within ` +
-        `${Math.round(PROD_READY_MS / 1000)}s, but it is still running and holding ` +
-        `port ${port}. Leaving it in place; if requests keep hanging, rebuild with ` +
-        "`npm run build`.",
-    );
-  }
-
-  return { served: true, ...(await ended) };
 }
 
 async function main() {
@@ -479,7 +256,6 @@ async function main() {
   // the port (the next run then probes a stale process) and it keeps mutating
   // `.next`, which breaks whatever command runs next.
   const forward = (signal) => () => {
-    interrupted = true;
     // Reaps a dev-mode server and its readiness forwarder; a no-op otherwise.
     stopDev(signal);
     if (activeChild && !activeChild.killed) activeChild.kill(signal);
@@ -511,51 +287,10 @@ async function main() {
   //    so `/`, `/login` and `/portal/login` all "time out" and the product reads
   //    as unreachable for the entire build. Concurrent use of `.next` by another
   //    build/e2e/smoke run is handled by a lock. See `ensureServable`.
-  let mode = await ensureServable();
+  const mode = await ensureServable();
   if (!mode) process.exit(1);
 
-  // 3. Serve the production build, SUPERVISED. A `next start` that dies during
-  //    startup (a corrupt manifest, a build from another Next version) used to end
-  //    this wrapper with its own exit code, leaving the port unbound and every
-  //    route reading as timed out — while its own startup banner had already
-  //    announced the server as up. Now a start that never answers falls through to
-  //    the same fallback a missing build uses, so the port always ends up bound to
-  //    something that serves.
-  if (mode === "start") {
-    const outcome = await runProduction({ port, host, forwarded });
-    // A server that was interrupted — or killed by a signal — before it answered
-    // is not a broken build, and must never be "recovered" by starting a dev
-    // server the operator just stopped. See `interrupted`.
-    if (outcome.served || interrupted || outcome.signal) {
-      if (outcome.signal) process.kill(process.pid, outcome.signal);
-      else process.exit(outcome.code ?? 0);
-      return;
-    }
-
-    console.error(
-      `[start] \`next start\` exited (code ${outcome.code}) without serving a single ` +
-        "request, so nothing is bound to this port.\n" +
-        "[start] The `.next` directory has the artifacts a production build needs, " +
-        "so this is a build that is present but not USABLE — most often corrupt or " +
-        "left by a different Next.js version. `next start` prints its normal " +
-        "startup banner before failing on this, which is why it has to be caught " +
-        "by observing whether it ANSWERS rather than by trusting its output.\n" +
-        "[start] Refusing to leave the port dark: an unbound port black-holes " +
-        "connections instead of refusing them, so every route — including static " +
-        "ones like / and /login — would read as timed out rather than as a broken " +
-        "build. Falling back to `next dev` so this checkout is still served; run " +
-        "`npm run build` to restore the production path. START_PROD_FALLBACK=0 " +
-        "makes this a hard failure instead.",
-    );
-
-    if (disabled(process.env.START_PROD_FALLBACK)) process.exit(1);
-    // The dev server writes `.next`, so it must own it first — `ensureServable`
-    // released the lock when it chose the production path.
-    if (!(await claimNextDir())) process.exit(1);
-    mode = "dev";
-  }
-
-  // 4. Hand off to `next dev`. The signal handlers installed above now target the
+  // 3. Hand off to `next`. The signal handlers installed above now target the
   //    server, so it is reaped on Ctrl-C / CI teardown instead of being orphaned
   //    onto the port.
   if (mode === "dev") {
@@ -577,7 +312,24 @@ async function main() {
     releaseBuildLock();
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
+    return;
   }
+
+  const args = ["start", ...forwarded];
+  if (!forwarded.some((a) => a === "-p" || a === "--port" || a.startsWith("--port="))) {
+    args.push("-p", String(port));
+  }
+
+  const server = spawnNext(args);
+
+  server.on("error", (err) => {
+    console.error("[start] failed to launch `next start`:", err);
+    process.exit(1);
+  });
+  server.on("close", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 0);
+  });
 }
 
 // Last-resort release: covers exits that bypass the handlers above (an uncaught

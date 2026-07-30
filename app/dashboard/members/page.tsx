@@ -84,20 +84,12 @@ export default async function MembersPage({
             People at your gym who can be assigned training programs.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Link
-            href="/dashboard/members/import"
-            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
-          >
-            Import CSV
-          </Link>
-          <Link
-            href="/dashboard/members/new"
-            className="inline-flex items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
-          >
-            Add member
-          </Link>
-        </div>
+        <Link
+          href="/dashboard/members/new"
+          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
+        >
+          Add member
+        </Link>
       </div>
 
       {/* Search + filter. A plain GET form keeps state in the URL (shareable,
@@ -147,23 +139,10 @@ export default async function MembersPage({
       </form>
 
       {members.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          {filtering ? (
-            "No members match your search."
-          ) : (
-            <>
-              <p>
-                No members yet. Add your first member, or bring your whole roster
-                over from another system.
-              </p>
-              <Link
-                href="/dashboard/members/import"
-                className="font-medium text-brand hover:underline"
-              >
-                Import members from a CSV file
-              </Link>
-            </>
-          )}
+        <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+          {filtering
+            ? "No members match your search."
+            : "No members yet. Add your first member to get started."}
         </div>
       ) : (
         <>

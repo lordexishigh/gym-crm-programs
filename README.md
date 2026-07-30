@@ -1,6 +1,6 @@
 # Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-72%2F100-yellow)](docs/REPORT.md) <!-- nous-score-badge -->
+[![nous score](https://img.shields.io/badge/nous%20score-68%2F100-yellow)](docs/REPORT.md) <!-- nous-score-badge -->
 
 > A multi-tenant web CRM for Cyprus gyms whose wedge is member-facing training programs: trainers build programs and assign them to members, who view them on a mobile-first web portal.
 
@@ -50,22 +50,7 @@ exactly on the 20s budget a QA harness gives a navigation, so the unbuilt path w
 coin flip that reported the whole app as unreachable whenever it lost. The build now
 exists before anything is served. Skip it with `ALPHA_SKIP_BUILD=1` (CI does — it
 builds in its own step); it also skips itself on Vercel, which builds after installing,
-and whenever a complete build is already there.
-
-"Complete" is checked properly, and that distinction was itself a bug worth a
-round of its own. `next start` validates `.next/BUILD_ID` and reports its absence
-clearly, then opens several manifests with **no** such check — so a `.next` holding
-BUILD_ID and missing one of them throws a bare `ENOENT` out of startup and exits
-**with status 0**. Trusting BUILD_ID alone therefore produced the worst possible
-combination: install skipped the rebuild, `npm start` reported a successful start,
-the server was already dead, and nothing was ever bound to the port — which reads
-to every caller as "`/` times out", not as "the build is broken". Worse, it was
-sticky: BUILD_ID kept satisfying the check, so the state survived every later
-install and start. That shape is ordinary — an interrupted build writes BUILD_ID
-before the manifests, and a dev server killed mid-write leaves a full set of files
-with a dev-shaped `routes-manifest.json` (no `dataRoutes`), which crashes
-`next start` a different way. Both are now detected, named in the log, and
-**rebuilt at install time**.
+and whenever `.next/BUILD_ID` is already there.
 
 `npm start` stays usable if that build never happened (`--ignore-scripts`, a warm
 node_modules cache). Plain `next start` would exit and leave the
@@ -80,40 +65,18 @@ also refuses to start onto a port another process already holds, naming that
 process, so a run can never quietly probe an orphaned server that is still
 serving an older build.
 
-**A `next start` that dies is never reported as a success.** No preflight can
-predict every unusable build — a corrupt manifest, or one from a different
-Next.js version, passes any file check and still kills the server on boot — so the
-guarantee is enforced on the outcome instead: `npm start` watches `next start`
-until it has actually answered a request, and a server that exits without ever
-answering falls back to `next dev` rather than exiting and leaving the port dark.
-The confirmation is logged (`Serving the production build … confirmed answering
-after 1478ms`), so "started" always means "answered at least once".
-`START_PROD_FALLBACK=0` makes an unusable build a hard failure instead;
-`START_PROD_READY_MS` tunes how long the confirmation waits (default 30s, against
-a measured ~1.5s).
-
 **An open port always means a usable app.** Both `npm run dev` and that fallback
 run through `scripts/lib/dev-server.mjs`, which withholds the port until a request
 has actually been served on it. Left alone, `next dev` binds at ~3s and cannot
 render `/` for another ~14s, because dev compiles each route on its first request
 — so anything that treats an open port (or `✓ Ready`) as ready starts navigating
 into a 15s wait that looks exactly like a hang. Instead `next dev` is bound to an
-internal loopback port, **all three entry routes** (`/`, `/login`,
-`/portal/login`) are compiled there unobserved, and only then does a
+internal loopback port, `/` is compiled there unobserved, and only then does a
 byte-for-byte TCP forwarder open the public port: measured, the port opens at
-~19s instead of ~3s and the first `GET /` takes **0.9s instead of 15.9s**.
-
-The gate deliberately covers every entry route, not just `/`. Opening on `/`
-alone left the login routes compiling behind an open port, so a caller that
-(correctly) read "port open" as "ready" spent its first navigation to `/login`
-paying that route's cold compile — which surfaces as the landing page loading
-fine while both logins time out. The routes are warmed concurrently, so the
-shared module graph is compiled once and gating on all three is no slower than
-gating on `/` (measured cold: 18.5s, and 8.2s with a warm filesystem cache, with
-`/login` and `/portal/login` answering in under a second either way). A
-`Ready for QA` line marks the same moment the port opens.
-`DEV_GATE=0` restores `next dev`'s bind-immediately behaviour; `DEV_WARMUP=0`
-narrows the gate back to `/`.
+~19s instead of ~3s and the first `GET /` takes **0.9s instead of 15.9s**. The
+remaining entry routes (`/login`, `/portal/login`) warm behind the open port, and
+a `Ready for QA` line marks when all three are done. `DEV_GATE=0` restores
+`next dev`'s bind-immediately behaviour.
 
 ### Demo accounts
 

@@ -7,14 +7,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  ENTRY_PATHS,
-  RENDER_DEPS,
-  activeForwarder,
-  missingRenderDeps,
   openGate,
   resolveHost,
   resolvePort,
-  warmUp,
 } from "../scripts/lib/dev-server.mjs";
 
 /**
@@ -39,16 +34,10 @@ import {
  * Timeout 20000ms exceeded") and read it as a hung server.
  *
  * THE FIX. `next dev` is bound to an internal loopback port and its entry routes
- * are compiled there, unobserved; only once EVERY one of them has genuinely
- * answered does a byte-for-byte TCP forwarder open the PUBLIC port. Verified
- * end-to-end: the port opens at 18.5s instead of 3.3s, and `/`, `/login` and
- * `/portal/login` then load in ~0.9s each instead of 15.9s. "Open" now means
- * "usable", for every route a caller actually starts from.
- *
- * Gating on all three rather than on `/` alone is itself a fix, not a detail —
- * see "what the gate waits for" below. The counterweight is "a broken route
- * cannot hide a working app": waiting for more routes must not let one silent
- * route make the whole app unreachable.
+ * are compiled there, unobserved; only once `/` has genuinely answered does a
+ * byte-for-byte TCP forwarder open the PUBLIC port. Verified end-to-end after
+ * the change: the port opens at 19.9s instead of 3.3s, and the first `GET /`
+ * through it takes 0.9s instead of 15.9s. "Open" now means "usable".
  *
  * The forwarder is the load-bearing new piece, so it is tested directly against
  * stub upstreams (fast, and no dependence on a real compile): it must be a pure
@@ -76,14 +65,7 @@ function freePort(): Promise<number> {
 }
 
 function closeServer(server: Server | HttpServer): Promise<void> {
-  return new Promise((resolve) => {
-    server.close(() => resolve());
-    // `close()` only stops NEW connections; it waits for open ones to end. Some
-    // tests here deliberately leave a request hanging (a route that never
-    // answers), so without this the cleanup hook waits out the warm request's
-    // own 90s abort budget and times out.
-    (server as HttpServer).closeAllConnections?.();
-  });
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 /** An upstream that echoes back what it was told, so integrity is checkable. */
@@ -201,145 +183,6 @@ describe("dev readiness gate — the TCP forwarder", () => {
     // Still listening: the next request gets a connection, not a dead port.
     expect(gate.listening).toBe(true);
   });
-});
-
-describe("dev readiness gate — what the gate waits for", () => {
-  /**
-   * THE DEFECT THIS PINS. The gate used to open the public port as soon as `/`
-   * answered, leaving `/login` and `/portal/login` to compile BEHIND the open
-   * port. An open port is universally read as "ready for QA", so the caller's
-   * first navigation to `/login` was the request that paid that route's cold
-   * compile — and the failure it produced was actively misleading: `/` loaded
-   * fine (compiled before the port opened) while both login routes timed out.
-   * A review of this project read that as "the landing page is the only
-   * reachable page; every feature is behind a broken auth wall".
-   *
-   * So the contract is: the port does not open until EVERY entry route has been
-   * served. Driven against a stub upstream where `/` is instant and `/login`
-   * is slow, which is exactly the shape that regressed.
-   */
-  it("keeps the port shut until every entry route has answered, not just `/`", async () => {
-    const LOGIN_DELAY_MS = 1_500;
-    const hits: string[] = [];
-    const upstreamPort = await stubUpstream((req, res) => {
-      const url = req.url ?? "";
-      hits.push(url);
-      const respond = () => {
-        res.writeHead(200, { "content-type": "text/html" });
-        res.end(`<!doctype html><title>${url}</title>`);
-      };
-      // `/login` stands in for a route whose cold compile has not finished.
-      if (url === "/login") setTimeout(respond, LOGIN_DELAY_MS);
-      else respond();
-    });
-    const port = await freePort();
-
-    const canConnect = () =>
-      new Promise<boolean>((resolve) => {
-        const probe = connect({ port, host: "127.0.0.1" });
-        const done = (v: boolean) => (probe.destroy(), resolve(v));
-        probe.once("connect", () => done(true));
-        probe.once("error", () => done(false));
-        setTimeout(() => done(false), 200);
-      });
-
-    const warming = warmUp({
-      port,
-      host: "127.0.0.1",
-      upstreamHost: "127.0.0.1",
-      upstreamPort,
-      gated: true,
-    });
-    // Close the gate warmUp opens WITHOUT `stopDev`, which would latch the
-    // module's shuttingDown flag and short-circuit every later warmUp here.
-    cleanups.push(async () => {
-      const gate = activeForwarder();
-      if (gate) await closeServer(gate);
-    });
-
-    // Sample through the window where `/` has answered and `/login` has not.
-    // Before the fix the port was already open here.
-    for (let i = 0; i < 4; i += 1) {
-      await new Promise((r) => setTimeout(r, 250));
-      expect(await canConnect()).toBe(false);
-    }
-    expect(hits).toContain("/");
-
-    await warming;
-
-    // Now it is open, and every entry route really was served first.
-    expect(await canConnect()).toBe(true);
-    for (const route of ENTRY_PATHS) expect(hits).toContain(route);
-    // Concurrently, not one-after-another: all three were requested before the
-    // slowest finished, which is what keeps gating on three as fast as on one.
-    expect(hits.slice(0, ENTRY_PATHS.length).sort()).toEqual([...ENTRY_PATHS].sort());
-
-    // And the forwarder really is wired to the upstream.
-    const res = await fetch(`http://127.0.0.1:${port}/portal/login`);
-    expect(await res.text()).toContain("/portal/login");
-  }, 30_000);
-});
-
-describe("dev readiness gate — a broken route cannot hide a working app", () => {
-  /**
-   * The counterweight to gating on every entry route: one route that connects
-   * but never answers must NOT hold the port shut for the whole gate budget.
-   * Doing so would hide a landing page that works behind an unreachable host —
-   * the cure becoming the disease. Once something has answered, the remaining
-   * routes get only a bounded grace period, after which the port opens and the
-   * warning names what was never confirmed.
-   */
-  it("opens the port after the secondary grace period, naming the silent route", async () => {
-    const upstreamPort = await stubUpstream((req, res) => {
-      // `/login` accepts the connection and then never responds.
-      if (req.url === "/login") return;
-      res.writeHead(200, { "content-type": "text/html" });
-      res.end("<!doctype html><title>ok</title>");
-    });
-    const port = await freePort();
-
-    const warned: string[] = [];
-    const realWarn = console.warn;
-    const realLog = console.log;
-    console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
-    console.log = (...a: unknown[]) => void warned.push(a.join(" "));
-    cleanups.push(() => {
-      console.warn = realWarn;
-      console.log = realLog;
-    });
-
-    const savedGrace = process.env.DEV_GATE_SECONDARY_MS;
-    process.env.DEV_GATE_SECONDARY_MS = "1000";
-    cleanups.push(() => {
-      if (savedGrace === undefined) delete process.env.DEV_GATE_SECONDARY_MS;
-      else process.env.DEV_GATE_SECONDARY_MS = savedGrace;
-    });
-
-    const started = Date.now();
-    await warmUp({
-      port,
-      host: "127.0.0.1",
-      upstreamHost: "127.0.0.1",
-      upstreamPort,
-      gated: true,
-    });
-    cleanups.push(async () => {
-      const gate = activeForwarder();
-      if (gate) await closeServer(gate);
-    });
-    const elapsed = Date.now() - started;
-
-    const out = warned.join("\n");
-    // Bounded by the 1s grace period, not by the 120s gate budget.
-    expect(elapsed).toBeLessThan(15_000);
-    expect(out).toMatch(/`\/login` did not answer/);
-    expect(out).toMatch(/within 1s of the first route that did/);
-    expect(out).toMatch(/opening the port anyway/);
-    // The port is open, so the routes that DO work are reachable.
-    expect(out).toMatch(/WITHOUT a confirmed response on \/login/);
-    const res = await fetch(`http://127.0.0.1:${port}/`);
-    expect(res.status).toBe(200);
-  }, 30_000);
 });
 
 describe("dev readiness gate — port and host resolution", () => {
@@ -477,103 +320,4 @@ describe("scripts/dev.mjs", () => {
     expect(out).toMatch(/did not answer within 1s/);
     expect(out).toMatch(/opening the port anyway/);
   }, 45_000);
-
-  /**
-   * The gate's bounds must stay smaller than a caller's patience.
-   *
-   * THE DEFECT THIS PINS. The bounds above were 120s (max) and 45s (secondary
-   * grace). A review harness allows a navigation 20-45s, so when the entry routes
-   * could not answer — which happens for real: a tree installed without the
-   * render toolchain cannot compile a single route (see `missingRenderDeps`) — the
-   * port was still UNBOUND at the moment every one of those budgets expired. An
-   * unbound port black-holes the SYN instead of refusing it, so `/`, `/login` and
-   * `/portal/login` all reported TIMEOUT and the product was judged completely
-   * unreachable. Reproduced end to end before this was changed: the log read "did
-   * not answer within 120s; opening the port anyway" while a concurrent `GET /`
-   * timed out at 45.005s.
-   *
-   * The secondary grace was the worse of the two: at 45s it was EXACTLY a
-   * harness's navigation budget, so one silent route could hold a `/` that
-   * demonstrably worked behind a shut port for precisely as long as it took every
-   * caller to give up on it.
-   *
-   * So the defaults are part of the contract, not tuning. Asserted through a
-   * child process because they are module-level defaults read from the
-   * environment — this suite sets those variables elsewhere, and reading them
-   * in-process would test whatever a previous test left behind.
-   */
-  it("bounds the gate well inside a caller's navigation budget", async () => {
-    const url = new URL("../scripts/lib/dev-server.mjs", import.meta.url).href;
-    const script = [
-      `const m = await import(${JSON.stringify(url)});`,
-      // Drive the gate with no upstream at all and no route it can ever reach, so
-      // the only thing that can end `warmUp` is the ceiling itself.
-      "const started = Date.now();",
-      "await m.warmUp({ port: 0, host: '127.0.0.1', upstreamHost: '127.0.0.1',",
-      "  upstreamPort: 1, gated: false });",
-      "console.log('ELAPSED=' + (Date.now() - started));",
-    ].join("\n");
-
-    const { out } = await new Promise<{ out: string }>((resolve) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
-        // A clean environment for the two variables under test: an inherited
-        // value would be exactly what this asserts is not relied upon.
-        env: { ...process.env, DEV_GATE_MAX_MS: "", DEV_GATE_SECONDARY_MS: "" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let out = "";
-      child.stdout.on("data", (d) => (out += d.toString()));
-      child.stderr.on("data", (d) => (out += d.toString()));
-      child.on("close", () => resolve({ out }));
-    });
-
-    const elapsed = Number(/ELAPSED=(\d+)/.exec(out)?.[1]);
-    expect(Number.isFinite(elapsed)).toBe(true);
-    // The hard requirement: the ceiling fires inside the tightest budget a
-    // reviewer has used (45s), with room for the navigation that follows it. 120s
-    // failed this by a factor of four.
-    expect(elapsed).toBeLessThan(40_000);
-    // And it is a real wait, not an accidental instant return that would defeat
-    // the gate in the normal case.
-    expect(elapsed).toBeGreaterThan(5_000);
-  }, 60_000);
-});
-
-describe("render-toolchain preflight", () => {
-  /**
-   * THE DEFECT THIS PINS. `tailwindcss`, `autoprefixer` and `typescript` are
-   * devDependencies, so `npm ci --omit=dev` — or NODE_ENV=production, which npm
-   * treats identically — installs 70 packages instead of 230 and none of them.
-   * postcss.config.mjs names tailwindcss and autoprefixer, app/layout.tsx imports
-   * app/globals.css on every route, and every route is TypeScript: such a tree
-   * cannot compile a single page.
-   *
-   * That was the root cause of the reported "member portal completely
-   * unreachable": no build could be produced at install time, `next dev` could
-   * not compile anything, the readiness gate waited on routes that would never
-   * answer, and every caller saw a timeout with nothing naming an install
-   * problem. `.npmrc` (include=dev) prevents that install; this preflight makes
-   * sure a tree that got one anyway says so in seconds instead of hanging.
-   */
-  it("lists the packages without which no route can compile", () => {
-    for (const pkg of ["tailwindcss", "autoprefixer", "typescript"]) {
-      expect(RENDER_DEPS).toContain(pkg);
-    }
-  });
-
-  it("reports nothing missing in this (fully installed) checkout", () => {
-    // If this ever fails, `npm start` would correctly refuse to start — the
-    // checkout genuinely cannot render.
-    expect(missingRenderDeps()).toEqual([]);
-  });
-
-  it("names exactly the packages a pruned tree cannot resolve", () => {
-    const pruned = (pkg: string) => {
-      if (pkg === "tailwindcss" || pkg === "typescript") {
-        throw new Error(`Cannot find module '${pkg}'`);
-      }
-      return pkg;
-    };
-    expect(missingRenderDeps(pruned)).toEqual(["tailwindcss", "typescript"]);
-  });
 });
