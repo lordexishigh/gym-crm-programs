@@ -25,13 +25,54 @@ export type AuthResult =
   | { ok: true; tokens: AuthTokens }
   | { ok: false; error: string };
 
-function supabaseConfig(): { url: string; publishableKey: string } {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+/**
+ * User-facing message for "this deployment has no auth service configured".
+ *
+ * Deliberately not the operator's diagnostic: a visitor can do nothing about a
+ * missing environment variable, and naming internal config to an anonymous
+ * caller is a needless disclosure. The variable names go to the server log
+ * instead (see `supabaseConfig`).
+ */
+const NOT_CONFIGURED =
+  "Sign-in is temporarily unavailable. Please try again in a moment, or contact your gym if it persists.";
+
+/**
+ * Read the auth service configuration, or `null` when it is absent.
+ *
+ * RETURNS RATHER THAN THROWS, which is the whole point. Every caller below runs
+ * on a request path that has no business turning a configuration gap into a
+ * crash:
+ *
+ *   - `signInWithPassword` runs inside the /login and /portal/login Server
+ *     Actions. A throw there escapes the action, so `useActionState` never
+ *     receives a state — React surfaces the failed action to the nearest error
+ *     boundary and the visitor gets "Something went wrong" instead of the
+ *     visible message the form is built to show. Every submitted credential,
+ *     valid or not, reads as a crash.
+ *   - `refreshAccessToken` runs in EDGE MIDDLEWARE on every /dashboard and
+ *     /portal request, before any page or boundary can render. A throw there is
+ *     a bare 500 on the whole protected surface; returning a failure lets
+ *     middleware take its existing redirect-to-login path.
+ *
+ * So a missing config is reported as `{ ok: false }` with a readable reason,
+ * exactly like an unreachable or slow service — the three are indistinguishable
+ * to a user and all three deserve a message rather than a stack trace. This
+ * mirrors `lib/auth/admin.ts`, which already converts the same gap into a
+ * result. Values are trimmed so a whitespace-only variable (a half-filled
+ * `.env`, a CI secret that resolved to "") counts as unset rather than
+ * producing a request to `https:///auth/v1/token`.
+ */
+function supabaseConfig(): { url: string; publishableKey: string } | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!url || !publishableKey) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set (see .env.example).",
+    // The operator's half of the message: specific, actionable, in the log.
+    console.error(
+      "[auth] Sign-in is not configured: NEXT_PUBLIC_SUPABASE_URL and " +
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must both be set (see .env.example). " +
+        "Auth requests are being rejected with a user-facing notice.",
     );
+    return null;
   }
   return { url: url.replace(/\/$/, ""), publishableKey };
 }
@@ -110,7 +151,9 @@ async function postToken(
   grant: "password" | "refresh_token",
   payload: Record<string, string>,
 ): Promise<AuthResult> {
-  const { url, publishableKey } = supabaseConfig();
+  const config = supabaseConfig();
+  if (!config) return { ok: false, error: NOT_CONFIGURED };
+  const { url, publishableKey } = config;
   let res: Response;
   try {
     res = await fetch(`${url}/auth/v1/token?grant_type=${grant}`, {
@@ -172,7 +215,10 @@ export function refreshAccessToken(refreshToken: string): Promise<AuthResult> {
  */
 export async function signOut(accessToken: string): Promise<void> {
   try {
-    const { url, publishableKey } = supabaseConfig();
+    const config = supabaseConfig();
+    // Nothing to revoke against; the caller's cookie clear still ends the session.
+    if (!config) return;
+    const { url, publishableKey } = config;
     await fetch(`${url}/auth/v1/logout`, {
       method: "POST",
       headers: {
