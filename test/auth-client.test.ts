@@ -242,6 +242,87 @@ describe("lib/auth/supabase — bounded auth calls", () => {
 
     const result = await signInWithPassword("a@b.test", "wrong");
 
-    expect(result).toEqual({ ok: false, error: "Invalid email or password." });
+    expect(result).toEqual({
+      ok: false,
+      error: "Invalid email or password.",
+      kind: "credentials",
+    });
+  });
+
+  /**
+   * The failure CLASSIFICATION, which decides whether a human hears about it.
+   *
+   * The login actions report `unavailable` failures to monitoring and stay quiet
+   * about `credentials`. Get this boundary wrong in either direction and the
+   * error-visibility property breaks: mislabel an outage as `credentials` and a
+   * deployment where nobody can sign in reports nothing (the original bug);
+   * mislabel a typo as `unavailable` and the sink fills with noise until nobody
+   * reads it.
+   */
+  describe("failure classification (drives error reporting)", () => {
+    it("labels a rejected password as `credentials` — not an incident", async () => {
+      vi.stubGlobal("fetch", respondingFetch({ error: "invalid_grant" }, 400));
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "wrong")).resolves.toMatchObject({
+        kind: "credentials",
+      });
+    });
+
+    it("labels a timeout as `unavailable`", async () => {
+      vi.stubGlobal("fetch", hangingFetch());
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "pw")).resolves.toMatchObject({
+        kind: "unavailable",
+      });
+    });
+
+    it("labels an unreachable service as `unavailable`", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("fetch failed");
+        }),
+      );
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "pw")).resolves.toMatchObject({
+        kind: "unavailable",
+      });
+    });
+
+    it("labels a 5xx as `unavailable`, not as bad credentials", async () => {
+      vi.stubGlobal("fetch", respondingFetch({ msg: "internal error" }, 500));
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "pw")).resolves.toMatchObject({
+        ok: false,
+        kind: "unavailable",
+      });
+    });
+
+    it("labels a 200 with no token pair as `unavailable`", async () => {
+      // A broken/proxied auth service answering 200 with a non-session body.
+      vi.stubGlobal("fetch", respondingFetch({ hello: "world" }, 200));
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "pw")).resolves.toMatchObject({
+        ok: false,
+        kind: "unavailable",
+      });
+    });
+
+    it("labels a missing configuration as `unavailable`", async () => {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.stubGlobal("fetch", vi.fn());
+      const { signInWithPassword } = await import("@/lib/auth/supabase");
+
+      await expect(signInWithPassword("a@b.test", "pw")).resolves.toMatchObject({
+        kind: "unavailable",
+      });
+      vi.restoreAllMocks();
+    });
   });
 });
