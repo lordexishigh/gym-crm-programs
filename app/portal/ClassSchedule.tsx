@@ -66,6 +66,10 @@ function ClassScheduleRow({ cl }: { cl: MemberClassView }) {
   });
   const full = cl.booked_count >= cl.capacity;
   const isBooked = cl.booking_status === "booked" || cl.booking_status === "waitlisted";
+  // Auto-promoted off the waitlist. The member is emailed when it happens, but
+  // the portal must say so too — otherwise someone who checks here instead of
+  // their inbox still believes they are waiting and skips the class.
+  const wasPromoted = cl.booking_status === "booked" && Boolean(cl.booking_promoted_at);
 
   return (
     <li className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -98,6 +102,11 @@ function ClassScheduleRow({ cl }: { cl: MemberClassView }) {
           >
             {cl.booking_status === "waitlisted" ? "Waitlisted" : "You're booked"}
           </span>
+          {wasPromoted ? (
+            <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand-dark">
+              A spot opened up
+            </span>
+          ) : null}
           <button
             type="submit"
             disabled={cancelPending}
