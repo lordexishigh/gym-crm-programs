@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { authConfigured } from "@/lib/auth/supabase";
 
 // Always evaluated at request time so deploy smoke checks reflect live state.
 export const dynamic = "force-dynamic";
@@ -13,6 +14,10 @@ export const dynamic = "force-dynamic";
  *   - `db`    a real `select 1` against Postgres (the critical dependency).
  *   - `email` whether transactional email is configured (informational — the
  *             app boots without it, so it does NOT fail the probe).
+ *   - `auth`  whether sign-in is configured, i.e. whether anyone can get past
+ *             /login and /portal/login at all (informational, for the same
+ *             reason as `email`; see the field's comment in `GET` for why a
+ *             deploy needs this reported rather than inferred).
  *
  * When the database is unreachable the route still responds (never throws) but
  * with HTTP 503 so an uptime monitor treats it as DOWN and alerts, while a
@@ -96,6 +101,17 @@ export async function GET() {
       ? "configured"
       : "unconfigured";
 
+  // Whether anyone can sign in on this deployment (see `authConfigured`).
+  // Informational for the same reason `email` is: the app boots and serves its
+  // public pages without it, and a hard 503 here would take every readiness loop
+  // that gates on this probe — scripts/dev.mjs, the CI smoke step — down with it
+  // on any environment that legitimately has no auth service. It is reported so
+  // that "the login page renders but nobody can get in" is observable from
+  // outside the process, which is the state it exists to make visible.
+  const auth: "configured" | "unconfigured" = authConfigured()
+    ? "configured"
+    : "unconfigured";
+
   const ok = db.state === "up";
 
   return NextResponse.json(
@@ -108,6 +124,7 @@ export async function GET() {
       // Present only when down — a reason the operator can act on.
       ...(db.error ? { db_error: db.error } : {}),
       email,
+      auth,
       time: new Date().toISOString(),
       // Which process/build is actually answering — see BUILD_ID above.
       instance: {

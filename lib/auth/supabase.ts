@@ -62,10 +62,16 @@ const NOT_CONFIGURED =
  * `.env`, a CI secret that resolved to "") counts as unset rather than
  * producing a request to `https:///auth/v1/token`.
  */
-function supabaseConfig(): { url: string; publishableKey: string } | null {
+function readAuthEnv(): { url: string; publishableKey: string } | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-  if (!url || !publishableKey) {
+  if (!url || !publishableKey) return null;
+  return { url: url.replace(/\/$/, ""), publishableKey };
+}
+
+function supabaseConfig(): { url: string; publishableKey: string } | null {
+  const config = readAuthEnv();
+  if (!config) {
     // The operator's half of the message: specific, actionable, in the log.
     console.error(
       "[auth] Sign-in is not configured: NEXT_PUBLIC_SUPABASE_URL and " +
@@ -74,7 +80,31 @@ function supabaseConfig(): { url: string; publishableKey: string } | null {
     );
     return null;
   }
-  return { url: url.replace(/\/$/, ""), publishableKey };
+  return config;
+}
+
+/**
+ * Whether this deployment can authenticate anyone at all.
+ *
+ * Exists for the readiness probe (app/api/health/route.ts), and shares
+ * `readAuthEnv` with the sign-in path on purpose: a probe that answered from its
+ * own copy of the variable names could report "configured" for a deployment
+ * whose logins all fail, which is worse than not reporting at all.
+ *
+ * WHY A DEPLOY NEEDS TO BE TOLD THIS. A deployment missing these variables still
+ * renders /login and /portal/login perfectly — they are static pages — and then
+ * rejects every credential with `NOT_CONFIGURED`. So it passes an "are the entry
+ * routes serving?" check while no one can get past them, leaving the entire
+ * dashboard and portal unreachable. That is the exact state repeatedly reported
+ * against this project as "the staff authentication entry point is built but the
+ * running app doesn't serve it", and nothing observed from outside could tell it
+ * apart from a healthy deploy.
+ *
+ * Deliberately SILENT, unlike `supabaseConfig`: this runs on every health probe,
+ * and a monitor polling once a second must not fill the log.
+ */
+export function authConfigured(): boolean {
+  return readAuthEnv() !== null;
 }
 
 /**

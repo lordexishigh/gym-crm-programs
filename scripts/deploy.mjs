@@ -372,6 +372,35 @@ async function verifyLive(previousBuildId) {
     );
   }
 
+  // A /login that RENDERS is not a /login that WORKS, and the route check above
+  // can only see the first. /login and /portal/login are static pages, so a
+  // deployment with no auth service configured serves them flawlessly and then
+  // refuses every credential — passing every check in this script while the
+  // dashboard and portal are as unreachable as if the pages 500'd. The health
+  // probe reports the condition (see `authConfigured` in lib/auth/supabase.ts)
+  // so this is caught here rather than by the next person who tries to sign in.
+  //
+  // A warning, not a failure, unlike the route check: a missing project
+  // environment variable cannot be repaired BY a deploy, so failing on it would
+  // only block the deploy that carries the fix. The route check fails hard
+  // because what it catches is a defect in the code being shipped.
+  let health = null;
+  try {
+    health = JSON.parse(body);
+  } catch {
+    // Unparseable or absent — the HTTP warning above already covers it.
+  }
+  if (health?.auth === "unconfigured") {
+    console.warn(
+      "[deploy] WARNING: production reports `auth: \"unconfigured\"`. " +
+        "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY are " +
+        "not both set on the Vercel project, so /login and /portal/login render " +
+        "but NOBODY CAN SIGN IN — every dashboard and portal feature is " +
+        "unreachable behind them.\n" +
+        "[deploy]   Fix with `npx vercel env add <NAME> production`, then redeploy.",
+    );
+  }
+
   return true;
 }
 

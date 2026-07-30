@@ -105,7 +105,13 @@ What it does, in order:
    status alone is not evidence: Next.js serves error boundaries and `not-found`
    shells with cheerful statuses, so a bare 200 check would sign off on an
    unreachable product. A degraded `/api/health` warns but does not fail a deploy
-   whose pages all render.
+   whose pages all render — including `auth: "unconfigured"`, which is worth
+   reading carefully when it appears: the login pages are static, so a deployment
+   missing `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+   renders them perfectly and then rejects every credential, leaving the whole
+   dashboard and portal unreachable behind a page that looks fine. It warns
+   rather than fails because a missing project env var cannot be fixed *by* a
+   deploy, so blocking on it would only block the deploy carrying the fix.
 
 Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 `https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
@@ -211,7 +217,7 @@ In each inbox, open **Show original / View source** and confirm `SPF=pass`,
   server-side.
 
 Health check: `GET /api/health` returns
-`{ ok, status, db, db_latency_ms, email, time }` — plus `db_error` when the
+`{ ok, status, db, db_latency_ms, email, auth, time }` — plus `db_error` when the
 database is down — and **HTTP 503 when the database is unreachable** (200 when
 healthy) so uptime monitors alert on a real outage. Point an uptime monitor at it.
 
