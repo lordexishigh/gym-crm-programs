@@ -36,11 +36,16 @@
  *
  * `next dev` is given an internal port on the loopback interface. Its entry
  * routes are compiled by requesting them there, with no client watching. Only
- * once `/` has genuinely answered does a byte-for-byte TCP forwarder open the
- * PUBLIC port. Time to a servable port is unchanged (the compile is paid either
- * way); what changes is that the port stays SHUT for that window instead of open
- * and unresponsive, so a readiness loop keeps polling and then meets a server
- * that answers in ~100ms instead of being waved through into a 15s navigation.
+ * once EVERY one of them has genuinely answered does a byte-for-byte TCP
+ * forwarder open the PUBLIC port. Time to a servable port is unchanged (the
+ * compile is paid either way); what changes is that the port stays SHUT for that
+ * window instead of open and unresponsive, so a readiness loop keeps polling and
+ * then meets a server that answers in ~100ms instead of being waved through into
+ * a 15s navigation.
+ *
+ * "Every entry route" rather than "`/`" is load-bearing — see `warmUp`. Gating on
+ * `/` alone leaves `/login` and `/portal/login` compiling behind an open port,
+ * which recreates this same defect for exactly the pages a caller visits second.
  *
  * The forwarder never interprets HTTP — it pipes bytes — so streaming RSC
  * payloads, Server Actions and the HMR websocket upgrade pass through untouched.
@@ -48,10 +53,14 @@
  * that answers instantly is worse than a shut port, because callers stop waiting
  * and start judging a page with none of the product on it.
  *
- * Bounded, so this can never be worse than binding directly: if `/` has not
- * answered within DEV_GATE_MAX_MS the port opens anyway, and whatever the app
- * does — including rendering its own error page — becomes visible. DEV_GATE=0
- * opts out entirely and restores `next dev`'s own bind-immediately behaviour.
+ * Bounded twice over, so this can never be worse than binding directly. If
+ * nothing has answered within DEV_GATE_MAX_MS the port opens anyway; and once
+ * SOMETHING has answered, the remaining routes get only DEV_GATE_SECONDARY_MS
+ * before the port opens without them — waiting for more routes must never let one
+ * silent route hide a landing page that works. Either way the app's own response,
+ * error page included, becomes visible and the warning names what was never
+ * confirmed. DEV_GATE=0 opts out entirely and restores `next dev`'s own
+ * bind-immediately behaviour; DEV_WARMUP=0 narrows the gate back to `/`.
  *
  * Everything here is dependency-free (node: builtins only) so it runs before any
  * install-time assumptions hold.
@@ -66,16 +75,37 @@ const require = createRequire(import.meta.url);
 const NEXT_BIN = require.resolve("next/dist/bin/next");
 
 /**
- * Routes a first-time visitor (or a QA journey) lands on. `/` is first because
- * it is both the primary entry point and the route the gate waits for.
+ * Routes a first-time visitor (or a QA journey) lands on, and therefore the
+ * routes the readiness gate waits for — ALL of them, not just the first. `/`
+ * leads because it is the primary entry point; the two login pages are the only
+ * way into the product, so a port that opens before they can be served is not
+ * usable in any sense a caller cares about.
  */
 export const ENTRY_PATHS = ["/", "/login", "/portal/login"];
 
-/** Ceiling on waiting for `/` before opening the port regardless. */
-const GATE_MAX_MS = Number(process.env.DEV_GATE_MAX_MS) || 120_000;
+/**
+ * Ceiling on waiting for the entry routes before opening the port regardless.
+ * Read per call, not at module load, so a caller (or a test) that sets the
+ * variable after this module is imported still gets the budget it asked for.
+ */
+const gateMaxMs = () => Number(process.env.DEV_GATE_MAX_MS) || 120_000;
 
 /** Per-request ceiling while warming. Generous: this is a cold compile. */
 const WARM_REQUEST_MS = 90_000;
+
+/**
+ * Ceiling on how long the entry routes AFTER the first may hold the port shut.
+ *
+ * Because the gate waits for every entry route (see `warmUp`), a single route
+ * that connects but never answers could otherwise keep the port closed for the
+ * whole gate budget — hiding a landing page that demonstrably works behind an
+ * unreachable host, which is the cure becoming the disease. Once ANY route has
+ * answered the shared module graph is warm, so a route still silent after this
+ * grace period is far more likely broken than slow, and the useful thing to do is
+ * open the port and name it. Tunable via DEV_GATE_SECONDARY_MS; read per call for
+ * the same reason as `gateMaxMs`.
+ */
+const secondaryGraceMs = () => Number(process.env.DEV_GATE_SECONDARY_MS) || 45_000;
 
 /**
  * How long a dev server must survive before its exit counts as "it ran and then
@@ -276,6 +306,16 @@ let shuttingDown = false;
  */
 let devEverAnswered = false;
 
+/**
+ * The forwarder currently in front of the dev server, if the gate has opened one.
+ * Exported for tests, which drive `warmUp` directly and need to close the port it
+ * opened — `stopDev` would also latch `shuttingDown`, which is correct for a real
+ * shutdown but would make every later `warmUp` in the same process return at once.
+ */
+export function activeForwarder() {
+  return activeGate;
+}
+
 /** Tear down the dev server and its forwarder. Safe to call unconditionally. */
 export function stopDev(signal = "SIGTERM") {
   shuttingDown = true;
@@ -313,20 +353,47 @@ function runDevServer({ port, host, turbopack, env }) {
 
 /**
  * Compile the entry routes by requesting them on `upstreamPort`, and — when
- * gating — open the public port once `/` has genuinely been served.
+ * gating — open the public port once EVERY entry route has genuinely been
+ * served.
  *
  * Runs even when ungated, because the first request is also the only reliable
  * "this server actually served something" signal (see `devEverAnswered`), which
  * is what decides whether a dead Turbopack attempt gets retried on webpack.
  *
- * `/` opens the gate on its own rather than waiting for all three: it is the
- * route a caller navigates to first, and holding the port shut for the extra ~2s
- * the others need would delay readiness for no benefit. The rest keep warming
- * behind the now-open port, and the "ready for QA" line is printed only once
- * every entry route has answered — so a caller can key off the port (⇒ `/` is
- * servable) or off that line (⇒ every entry route is).
+ * WHY THE GATE COVERS EVERY ENTRY ROUTE AND NOT JUST `/`
+ *
+ * An earlier revision opened the port the moment `/` answered and left `/login`
+ * and `/portal/login` to compile BEHIND the now-open port, on the reasoning that
+ * `/` is what a caller navigates to first and the others only cost "an extra
+ * ~2s". That reproduces the exact trap this gate exists to close, one level
+ * down. An open port is universally read as "ready for QA", so the caller starts
+ * navigating immediately and its first request to `/login` is the one that pays
+ * that route's cold compile — under contention (parallel journeys, a loaded CI
+ * host, or the webpack fallback instead of Turbopack) far more than 2s.
+ *
+ * The resulting failure is worse than a plain slow start because of how it
+ * reads: `/` loads fine — it was compiled before the port opened — while both
+ * login routes time out. That is not diagnosed as "the dev server was announced
+ * ready too early"; it is diagnosed as "the landing page is the only reachable
+ * page and every feature is behind a broken auth wall", which is what an
+ * automated review of this project reported.
+ *
+ * Waiting for all three costs almost nothing, because they are warmed
+ * CONCURRENTLY and the expensive part — the shared framework/Tailwind module
+ * graph — is compiled once for whichever route reaches it first. Measured on
+ * this project from a cold `.next`: ~22s to gate on `/` alone, against 18.5s to
+ * gate on all three — warming them together is if anything FASTER than warming
+ * `/` and then the rest in series. So the port opens at substantially the same
+ * moment it did before, and "open" now means every entry route is servable
+ * rather than just the landing page.
+ *
+ * DEV_WARMUP=0 narrows the gate back to `/` for a caller that only wants the
+ * landing page and wants the port as early as possible.
+ *
+ * Exported for tests, which drive it against a stub upstream that answers `/`
+ * immediately and `/login` slowly — the shape that regressed.
  */
-async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) {
+export async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) {
   const started = Date.now();
   // When gated the upstream is loopback by construction. When not, `next dev`
   // holds the caller's own host: a wildcard bind is reachable over loopback, but
@@ -339,34 +406,104 @@ async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) {
       headers: { "user-agent": "alpha-crm-dev-warmup" },
     });
 
-  const [first, ...rest] = ENTRY_PATHS;
-  const deadline = started + GATE_MAX_MS;
+  const gateBudget = gateMaxMs();
+  const graceBudget = secondaryGraceMs();
+  const deadline = started + gateBudget;
+  const required = disabled(process.env.DEV_WARMUP) ? ENTRY_PATHS.slice(0, 1) : ENTRY_PATHS;
 
-  // Retry until the dev server accepts a connection at all (~3-5s), then stop
-  // retrying: a request that CONNECTS and is slow is the compile being paid for.
-  let unconfirmed = false;
-  for (;;) {
-    if (shuttingDown) return;
-    try {
-      await request(first);
-      devEverAnswered = true;
-      break;
-    } catch {
-      if (Date.now() > deadline) {
-        if (gated) {
-          console.warn(
-            `[dev] \`${first}\` did not answer within ${Math.round(GATE_MAX_MS / 1000)}s; ` +
-              "opening the port anyway so the app's own response — including an " +
-              "error page — is visible rather than hidden behind a shut port.",
-          );
+  /** When the first entry route answered — the point the shared graph went warm. */
+  let firstAnsweredAt = null;
+
+  /**
+   * The deadline a route may hold the gate to. The leading route gets the full
+   * budget (nothing is warm yet, and it is the one worth waiting for); the rest
+   * get a bounded grace period once something has answered. See
+   * `secondaryGraceMs`.
+   */
+  const limitFor = (leading) =>
+    leading || firstAnsweredAt === null
+      ? deadline
+      : Math.min(deadline, firstAnsweredAt + graceBudget);
+
+  /** How often an in-flight warm request re-checks the limit it is running under. */
+  const POLL_MS = 250;
+
+  /**
+   * Serve `route`. Retries only while the server refuses the CONNECTION (its
+   * ~3-5s startup); a request that connects and is slow is the compile being paid
+   * for, so it is awaited rather than retried. Resolves true when the route
+   * actually answered, false once its share of the gate budget has run out.
+   *
+   * The wait is polled in short slices rather than awaited outright because the
+   * limit TIGHTENS mid-flight: all routes start together, so `firstAnsweredAt`
+   * (and with it the secondary grace deadline) is still unset when a secondary
+   * route issues its first request. Awaiting the limit computed at that moment
+   * would commit the route to the full gate budget and defeat the grace period.
+   * Polling notices the tightened deadline without abandoning and re-issuing the
+   * request, which for a compiling route would just restart the clock.
+   */
+  const serve = async (route, leading) => {
+    for (;;) {
+      if (shuttingDown) return false;
+      if (Date.now() >= limitFor(leading)) return false;
+
+      // The detached catch matters: an attempt this function walks away from is
+      // still compiling the route (useful), but its later rejection would
+      // otherwise surface as an unhandled rejection and take the process down.
+      const attempt = request(route);
+      attempt.catch(() => {});
+
+      let settled = false;
+      while (!settled) {
+        const outcome = await Promise.race([
+          attempt.then(
+            () => "answered",
+            () => "failed",
+          ),
+          delay(POLL_MS).then(() => "pending"),
+        ]);
+        if (outcome === "answered") {
+          if (firstAnsweredAt === null) firstAnsweredAt = Date.now();
+          // Any one route answering proves the server got off the ground, which
+          // is all `devEverAnswered` claims (see the Turbopack retry in
+          // `serveDev`).
+          devEverAnswered = true;
+          return true;
         }
-        unconfirmed = true;
-        break;
+        if (outcome === "failed") {
+          // Refused connection (or an aborted WARM_REQUEST_MS): the server is
+          // still starting. Back off, then issue a fresh request.
+          settled = true;
+          await delay(POLL_MS);
+          continue;
+        }
+        // Still in flight. Give up only if this route's limit has passed.
+        if (shuttingDown) return false;
+        if (Date.now() >= limitFor(leading)) return false;
       }
-      await delay(250);
     }
-  }
+  };
+
+  // Concurrent, not sequential: the shared module graph is then compiled once
+  // rather than once per route in series, which is what keeps gating on all
+  // three as fast as gating on `/`.
+  const answered = await Promise.all(required.map((route, i) => serve(route, i === 0)));
   if (shuttingDown) return;
+
+  const unanswered = required.filter((_, i) => !answered[i]);
+  if (unanswered.length && gated) {
+    console.warn(
+      `[dev] ${unanswered.map((r) => `\`${r}\``).join(", ")} did not answer within ` +
+        `${Math.round(gateBudget / 1000)}s` +
+        // Only mention the tighter secondary bound when it is the one that fired,
+        // i.e. when something else did answer first.
+        (unanswered.length < required.length
+          ? ` (or within ${Math.round(graceBudget / 1000)}s of the first route that did)`
+          : "") +
+        "; opening the port anyway so the app's own response — including an error " +
+        "page — is visible rather than hidden behind a shut port.",
+    );
+  }
 
   if (gated) {
     try {
@@ -384,26 +521,17 @@ async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) {
     console.log(
       `[dev] Listening on http://${displayHost(host)}:${port} after ` +
         `${Math.round((Date.now() - started) / 1000)}s — ` +
-        (unconfirmed
-          ? "WITHOUT a confirmed response (see the warning above)."
-          : `\`${first}\` is compiled and served, so the port opens only now that ` +
-            "it can actually answer."),
+        (unanswered.length
+          ? `WITHOUT a confirmed response on ${unanswered.join(", ")} (see the warning above).`
+          : `every entry route (${required.join(", ")}) is compiled and served, so the ` +
+            "port opens only now that it can actually answer."),
     );
   }
 
-  if (unconfirmed || disabled(process.env.DEV_WARMUP)) return;
-  for (const route of rest) {
-    if (shuttingDown) return;
-    try {
-      await request(route);
-    } catch {
-      /* best effort: an uncompiled route just costs the first visitor instead */
-    }
-  }
-  if (shuttingDown) return;
+  if (unanswered.length) return;
   console.log(
     `[dev] Ready for QA in ${Math.round((Date.now() - started) / 1000)}s — entry routes ` +
-      `precompiled (${ENTRY_PATHS.join(", ")}).`,
+      `precompiled (${required.join(", ")}).`,
   );
 }
 

@@ -71,12 +71,22 @@ has actually been served on it. Left alone, `next dev` binds at ~3s and cannot
 render `/` for another ~14s, because dev compiles each route on its first request
 — so anything that treats an open port (or `✓ Ready`) as ready starts navigating
 into a 15s wait that looks exactly like a hang. Instead `next dev` is bound to an
-internal loopback port, `/` is compiled there unobserved, and only then does a
+internal loopback port, **all three entry routes** (`/`, `/login`,
+`/portal/login`) are compiled there unobserved, and only then does a
 byte-for-byte TCP forwarder open the public port: measured, the port opens at
-~19s instead of ~3s and the first `GET /` takes **0.9s instead of 15.9s**. The
-remaining entry routes (`/login`, `/portal/login`) warm behind the open port, and
-a `Ready for QA` line marks when all three are done. `DEV_GATE=0` restores
-`next dev`'s bind-immediately behaviour.
+~19s instead of ~3s and the first `GET /` takes **0.9s instead of 15.9s**.
+
+The gate deliberately covers every entry route, not just `/`. Opening on `/`
+alone left the login routes compiling behind an open port, so a caller that
+(correctly) read "port open" as "ready" spent its first navigation to `/login`
+paying that route's cold compile — which surfaces as the landing page loading
+fine while both logins time out. The routes are warmed concurrently, so the
+shared module graph is compiled once and gating on all three is no slower than
+gating on `/` (measured cold: 18.5s, and 8.2s with a warm filesystem cache, with
+`/login` and `/portal/login` answering in under a second either way). A
+`Ready for QA` line marks the same moment the port opens.
+`DEV_GATE=0` restores `next dev`'s bind-immediately behaviour; `DEV_WARMUP=0`
+narrows the gate back to `/`.
 
 ### Demo accounts
 
