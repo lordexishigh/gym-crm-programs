@@ -257,6 +257,209 @@ export function routeVerdict(results) {
   return { ok: failures.length === 0, failures };
 }
 
+/**
+ * The demo member whose sign-in is exercised against the live deployment.
+ *
+ * Same variables and same literal defaults as `scripts/seed.mjs`, which is the
+ * thing that provisions the account — test/demo-accounts.test.ts pins all three
+ * files together so a changed password cannot leave this checking credentials
+ * that no longer exist. Overridable via DEPLOY_VERIFY_MEMBER_* to verify a real
+ * account on an environment that was never seeded with demo data.
+ */
+function verifyMemberCredentials(env) {
+  return {
+    email:
+      env.DEPLOY_VERIFY_MEMBER_EMAIL || env.SEED_MEMBER_EMAIL || "member@demo.local",
+    password:
+      env.DEPLOY_VERIFY_MEMBER_PASSWORD ||
+      env.SEED_MEMBER_PASSWORD ||
+      "DemoMember!2026",
+  };
+}
+
+/**
+ * Whether this run can verify that a member can actually SIGN IN, and if not,
+ * why not.
+ *
+ * WHY THIS EXISTS. Everything else in this script checks that pages RENDER.
+ * `/login` and `/portal/login` are static, so they render perfectly on a
+ * deployment where nobody can get past them, and the whole dashboard and portal
+ * sit unreachable behind two flawless-looking forms. The health probe's
+ * `auth: "configured"` narrows that gap but does not close it: it is a
+ * presence check on two environment variable strings, and it reads "configured"
+ * for a deployment aimed at the wrong Supabase project, one whose seed never
+ * ran, or one whose accounts carry no `member_id` — every one of which is
+ * "member authentication is built but the running app doesn't serve it",
+ * the finding this project keeps receiving, and every one of which passes every
+ * check this script had.
+ *
+ * So the sign-in is performed for real, against the issuer THE DEPLOYMENT
+ * ITSELF reports (`auth_issuer` from /api/health). Using the local `.env`'s
+ * project instead would happily authenticate against a Supabase project the
+ * live app has never heard of and call the deploy verified.
+ *
+ * Pure and injectable so the policy — in particular every reason this check
+ * declines to run — is unit-tested rather than discovered during a deploy.
+ *
+ * `check: false` carries a `reason`; `check: true` carries everything the
+ * sign-in needs. Declared as one shape so callers (and the tests) see a single
+ * type rather than a union that has to be narrowed at every use.
+ *
+ * @param {{ env?: Record<string, string | undefined>, issuer?: string | null }} opts
+ * @returns {{ check: boolean, reason?: string, issuer?: string, key?: string,
+ *             email?: string, password?: string }}
+ */
+export function memberAuthPlan({ env = process.env, issuer = null } = {}) {
+  if (isSet(env.DEPLOY_SKIP_AUTH_CHECK)) {
+    return { check: false, reason: "DEPLOY_SKIP_AUTH_CHECK is set — not verifying member sign-in." };
+  }
+
+  if (!issuer) {
+    return {
+      check: false,
+      reason:
+        "The deployment reports no auth issuer, so it cannot authenticate " +
+        "anyone — already covered by the `auth: \"unconfigured\"` warning above.",
+    };
+  }
+
+  const localUrl = env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/$/, "");
+  const key = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+  if (!localUrl || !key) {
+    return {
+      check: false,
+      reason:
+        "No NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in this " +
+        "environment, so a sign-in cannot be attempted from here. The entry routes " +
+        "were still verified; member sign-in was NOT. Set them (they are public " +
+        "values) to have this deploy prove the portal login works.",
+    };
+  }
+
+  // Refuse to conclude anything from the wrong project. A pass here would be
+  // actively misleading: it would prove some OTHER Supabase project accepts the
+  // credential while saying nothing about the deployment just shipped.
+  const localIssuer = `${localUrl}/auth/v1`;
+  if (localIssuer !== issuer) {
+    return {
+      check: false,
+      reason:
+        `This environment's auth project (${localIssuer}) is not the one the ` +
+        `deployment uses (${issuer}), so a sign-in from here would prove nothing ` +
+        "about the live app. Member sign-in was NOT verified.",
+    };
+  }
+
+  return { check: true, issuer, key, ...verifyMemberCredentials(env) };
+}
+
+/** Claims of a JWT, without verifying it — the issuer just minted it. */
+function decodeClaims(token) {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a custom claim the way the app does: top level first, then
+ * `app_metadata`. Mirrors `claimValue` in lib/identity.ts deliberately — a
+ * check that read them from somewhere else could pass on a token the app then
+ * refuses.
+ */
+function claimValue(claims, key) {
+  const top = claims?.[key];
+  if (typeof top === "string" && top.length > 0) return top;
+  const meta = claims?.app_metadata?.[key];
+  return typeof meta === "string" && meta.length > 0 ? meta : undefined;
+}
+
+/**
+ * Turn a real sign-in attempt into a verdict, with a severity.
+ *
+ * Two kinds of failure that must NOT be conflated:
+ *
+ *   - `fatal` — the account authenticates but cannot produce a portal session,
+ *     or the auth service is broken. Nobody can use the member portal on this
+ *     deployment. There is no legitimate configuration in which this is fine,
+ *     so it fails the deploy.
+ *   - `warn` — the credentials were simply rejected. Expected on any
+ *     environment that was never seeded with demo data (`SEED_DEMO_DATA=0` for
+ *     a real gym, or overridden `SEED_*` passwords), so it must not fail a
+ *     legitimate production deploy. Reported loudly instead.
+ *
+ * The claim assertions are the interesting half. A token that verifies but
+ * carries no `tenant_id` makes `identityFromClaims` throw; one with no
+ * `member_id` fails `requireMember`'s own check. Either way `/portal` bounces
+ * straight back to `/portal/login` and the member is stuck in a loop with
+ * correct credentials — a login that succeeds and still leaves the portal
+ * unreachable, which is indistinguishable from "not deployed" to anyone
+ * outside and is exactly the state being guarded against.
+ *
+ * @param {{ status: number | null, accessToken?: string | null, error?: string }} result
+ */
+export function memberSignInVerdict({ status, accessToken = null, error = "" }) {
+  if (status === null) {
+    return { ok: false, severity: "fatal", detail: "the auth service did not respond" };
+  }
+  if (status === 400) {
+    return {
+      ok: false,
+      severity: "warn",
+      detail:
+        "the credentials were rejected. On a demo environment this means " +
+        "`npm run seed` has not been run against this deployment's database, so " +
+        "no member can sign in. On a real gym it just means the demo member does " +
+        "not exist — set DEPLOY_VERIFY_MEMBER_EMAIL/PASSWORD to a real account, " +
+        "or DEPLOY_SKIP_AUTH_CHECK=1",
+    };
+  }
+  if (status !== 200 || !accessToken) {
+    return {
+      ok: false,
+      severity: "fatal",
+      detail: `the auth service answered HTTP ${status} without a token${error ? ` (${error})` : ""}`,
+    };
+  }
+
+  const claims = decodeClaims(accessToken);
+  if (!claims) {
+    return { ok: false, severity: "fatal", detail: "the issued access token could not be decoded" };
+  }
+  if (claimValue(claims, "app_role") !== "member") {
+    return {
+      ok: false,
+      severity: "fatal",
+      detail:
+        "the account signed in but is not a member account (app_role is " +
+        `${JSON.stringify(claimValue(claims, "app_role") ?? null)}), so /portal ` +
+        "sends it to the staff sign-in page",
+    };
+  }
+  if (!claimValue(claims, "tenant_id")) {
+    return {
+      ok: false,
+      severity: "fatal",
+      detail:
+        "the issued token carries no tenant_id claim, so no RLS session can be " +
+        "established and /portal bounces every sign-in back to /portal/login",
+    };
+  }
+  if (!claimValue(claims, "member_id")) {
+    return {
+      ok: false,
+      severity: "fatal",
+      detail:
+        "the issued token carries no member_id claim, so `requireMember` rejects " +
+        "the session and /portal bounces every sign-in back to /portal/login",
+    };
+  }
+  return { ok: true, severity: "ok", detail: "signed in and the token resolves to a member session" };
+}
+
 /** Fetch a URL, returning `{ status, body }` — never throwing. */
 async function probe(url, timeoutMs = 20_000) {
   try {
@@ -401,6 +604,70 @@ async function verifyLive(previousBuildId) {
     );
   }
 
+  // The one check that proves the product is actually usable: sign a member in
+  // for real. See `memberAuthPlan` for why rendering + `auth: "configured"`
+  // are not enough, and `memberSignInVerdict` for what counts as a failure.
+  return await verifyMemberSignIn(health?.auth_issuer ?? null);
+}
+
+/**
+ * Perform a real member sign-in against the live deployment's own auth issuer.
+ *
+ * Returns false only for a `fatal` verdict — a deployment on which the member
+ * portal cannot be entered at all. A rejected credential is reported and
+ * tolerated; see `memberSignInVerdict`.
+ */
+async function verifyMemberSignIn(issuer) {
+  const plan = memberAuthPlan({ issuer });
+  if (!plan.check) {
+    console.warn(`[deploy] Member sign-in not verified: ${plan.reason}`);
+    return true;
+  }
+
+  console.log(
+    `[deploy] Verifying a real member sign-in as ${plan.email} against ${plan.issuer}.`,
+  );
+
+  let status = null;
+  let accessToken = null;
+  let error = "";
+  try {
+    const res = await fetch(`${plan.issuer}/token?grant_type=password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: plan.key },
+      body: JSON.stringify({ email: plan.email, password: plan.password }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+    status = res.status;
+    const body = await res.json().catch(() => ({}));
+    accessToken = body.access_token ?? null;
+    error = body.error_description || body.msg || body.error || "";
+  } catch {
+    status = null;
+  }
+
+  const verdict = memberSignInVerdict({ status, accessToken, error });
+  if (verdict.ok) {
+    console.log(`[deploy]   OK   member sign-in: ${verdict.detail}.`);
+    return true;
+  }
+
+  const label = verdict.severity === "fatal" ? "FAILED" : "WARNING";
+  const report = verdict.severity === "fatal" ? console.error : console.warn;
+  report(
+    `[deploy] ${label}: MEMBER SIGN-IN DOES NOT WORK on ${PROD_URL} — ${verdict.detail}.\n` +
+      "[deploy]   /portal/login renders, so every check that only fetches pages " +
+      "calls this deploy healthy, but no member can reach the portal — the " +
+      "member-facing training programs this product exists for are unreachable.",
+  );
+  if (verdict.severity === "fatal") {
+    console.error(
+      "[deploy]   Roll back with `npx vercel rollback` and fix before retrying, " +
+        "or set DEPLOY_SKIP_AUTH_CHECK=1 to deploy anyway.",
+    );
+    return false;
+  }
   return true;
 }
 
@@ -508,8 +775,9 @@ async function main() {
   if (!live) process.exit(1);
 
   console.log(
-    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}) and /, /login ` +
-      "and /portal/login all render.",
+    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}), /, /login ` +
+      "and /portal/login all render, and member sign-in was exercised against the " +
+      "live deployment (see the line above for the result).",
   );
 }
 

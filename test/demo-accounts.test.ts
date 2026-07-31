@@ -65,6 +65,38 @@ describe("demo account notice", () => {
     },
   );
 
+  /**
+   * `scripts/deploy.mjs` signs this member in against the live deployment to
+   * prove the portal login actually works, and it is plain Node too — so it
+   * holds a third copy of the same literals. Left unpinned, a changed seed
+   * password would turn that check into a permanent "credentials rejected"
+   * warning on every deploy: the deploy would still pass, and the one thing
+   * standing between "member auth is live" and "member auth silently isn't"
+   * would be quietly measuring nothing.
+   */
+  it("the deploy-time sign-in check uses the member credentials the seed sets", () => {
+    const deploySrc = readFileSync(
+      path.join(process.cwd(), "scripts", "deploy.mjs"),
+      "utf8",
+    );
+    const member = DEMO_ACCOUNTS.find((a) => a.role === "Member")!;
+
+    for (const [label, value] of [
+      ["email", member.email],
+      ["password", member.password],
+    ] as const) {
+      expect(
+        deploySrc.includes(`"${value}"`),
+        `scripts/deploy.mjs no longer defaults to the seeded member ${label} (${value})`,
+      ).toBe(true);
+    }
+
+    // And it must read the same overrides the seed does, or an operator who
+    // seeds a custom member gets a check aimed at an account that never existed.
+    expect(deploySrc).toMatch(/SEED_MEMBER_EMAIL/);
+    expect(deploySrc).toMatch(/SEED_MEMBER_PASSWORD/);
+  });
+
   it("sends every account to a sign-in route that exists", () => {
     for (const account of DEMO_ACCOUNTS) {
       expect(["/login", "/portal/login"]).toContain(account.href);

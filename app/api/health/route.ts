@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import { authConfigured } from "@/lib/auth/supabase";
+import { authConfigured, authIssuer } from "@/lib/auth/supabase";
 
 // Always evaluated at request time so deploy smoke checks reflect live state.
 export const dynamic = "force-dynamic";
@@ -112,6 +112,13 @@ export async function GET() {
     ? "configured"
     : "unconfigured";
 
+  // WHICH auth project, not just whether one is set — see `authIssuer`. A
+  // deployment aimed at the wrong Supabase project reports `configured` and
+  // then rejects every real credential, so the deploy check that actually
+  // signs a member in needs to know it is talking to this deployment's own
+  // issuer before it is entitled to conclude anything from the result.
+  const issuer = authIssuer();
+
   const ok = db.state === "up";
 
   return NextResponse.json(
@@ -125,6 +132,8 @@ export async function GET() {
       ...(db.error ? { db_error: db.error } : {}),
       email,
       auth,
+      // Omitted rather than null when unconfigured — `auth` already says so.
+      ...(issuer ? { auth_issuer: issuer } : {}),
       time: new Date().toISOString(),
       // Which process/build is actually answering — see BUILD_ID above.
       instance: {

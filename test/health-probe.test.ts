@@ -135,6 +135,42 @@ describe("GET /api/health", () => {
       expect((await (await GET()).json()).auth).toBe("configured");
     });
 
+    /**
+     * WHICH auth project, not just whether one is set. A deployment aimed at
+     * the wrong Supabase project has both variables set and so reports
+     * `configured`, renders both login pages, and then rejects every real
+     * credential. scripts/deploy.mjs signs a member in against this issuer to
+     * prove the portal login works, and refuses to conclude anything when the
+     * verifying environment names a different project.
+     */
+    it("names the auth issuer it will accept tokens from", async () => {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co/";
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+      const { GET } = await import("@/app/api/health/route");
+
+      const body = await (await GET()).json();
+      // Trailing slash normalised, and it matches the `iss` claim shape that
+      // lib/identity.ts verifies tokens against.
+      expect(body.auth_issuer).toBe("https://proj.supabase.co/auth/v1");
+    });
+
+    it("omits the issuer entirely when auth is unconfigured", async () => {
+      const { GET } = await import("@/app/api/health/route");
+      const body = await (await GET()).json();
+
+      expect(body.auth).toBe("unconfigured");
+      expect(body.auth_issuer).toBeUndefined();
+    });
+
+    it("never exposes the publishable key or any secret in the probe", async () => {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+      const { GET } = await import("@/app/api/health/route");
+
+      // The probe is unauthenticated; the issuer is public by design, keys are not.
+      expect(JSON.stringify(await (await GET()).json())).not.toContain("sb_publishable_test");
+    });
+
     it("reports auth as unconfigured when a variable is missing", async () => {
       process.env.NEXT_PUBLIC_SUPABASE_URL = "https://auth.example.test";
       const { GET } = await import("@/app/api/health/route");

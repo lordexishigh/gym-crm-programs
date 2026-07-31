@@ -126,6 +126,30 @@ export function authConfigured(): boolean {
 }
 
 /**
+ * WHICH auth project this deployment authenticates against, as the issuer that
+ * appears in the `iss` claim of every token it will accept — or null when
+ * sign-in is unconfigured.
+ *
+ * `authConfigured()` answers "are the variables set?", which is a strictly
+ * weaker question than "will a sign-in work?". A deployment pointed at the
+ * WRONG Supabase project has both variables set, renders both login pages, and
+ * rejects every real credential — reported from outside as `auth: "configured"`
+ * and a healthy deploy. Publishing the issuer lets a deploy-time check verify a
+ * member sign-in against THIS deployment's auth project rather than against
+ * whatever the operator's local `.env` happens to name (see
+ * `memberAuthPlan` in scripts/deploy.mjs, which refuses to conclude anything
+ * when the two disagree).
+ *
+ * Safe to expose unauthenticated: it is derived from
+ * NEXT_PUBLIC_SUPABASE_URL, a value Supabase deployments publish to every
+ * browser by design. No key or secret is included.
+ */
+export function authIssuer(): string | null {
+  const config = readAuthEnv();
+  return config ? `${config.url}/auth/v1` : null;
+}
+
+/**
  * Bounded wait for every call to the auth service.
  *
  * `fetch` does NOT time out on its own: undici caps how long it will wait for
