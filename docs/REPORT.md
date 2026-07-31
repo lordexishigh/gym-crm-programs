@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-75%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-80%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 75/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 80/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 70 | `██████████████░░░░░░` |
-| Code quality | 82 | `████████████████░░░░` |
-| Robustness & error handling | 75 | `███████████████░░░░░` |
-| Builds & tests | 86 | `█████████████████░░░` |
-| UX & design | 63 | `█████████████░░░░░░░` |
+| Spec coverage | 78 | `████████████████░░░░` |
+| Code quality | 83 | `█████████████████░░░` |
+| Robustness & error handling | 80 | `████████████████░░░░` |
+| Builds & tests | 87 | `█████████████████░░░` |
+| UX & design | 74 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -43,21 +43,21 @@
 
 ## Strengths
 
-- All eight spec features are backed by substantive code files with no stub markers — program authoring (ProgramBuilder.tsx + ExerciseDraftList.tsx), RLS migrations, JWT identity layer, and invite flow are all wired end-to-end in the codebase.
-- The test suite is genuinely meaningful: 239 tests including a security-floor pin against two HIGH Next.js CVEs, a real ES256 JWT signing harness for post-login redirect logic, and a dev-server readiness-gate test that caught a real 14-second startup race.
-- Authentication is hardened correctly: per-audience rate limiting with separate member/staff buckets, server-side JWT verification before session establishment, and tenant_id derived exclusively from the verified token — never from form input.
-- The CI/CD pipeline is mature for a v1: dependabot.yml, multi-workflow GitHub Actions (ci.yml at 17KB, deploy.yml, membership-expiry.yml), dependency audit passing clean, and secrets gitignored.
+- Security architecture is genuinely defence-in-depth: JWT identity is derived server-side via jose (lib/identity.ts), never trusted from the browser, and all DB queries run under withTenantContext as the RLS-bound app_user — a tenant isolation model that is correct by construction rather than by convention.
+- The test suite is substantive and behaviorally meaningful: 239 passing tests include timing-contract assertions for the health probe, policy-decision unit tests for the deploy script, a dev-server readiness gate regression guard, and a demo-credential drift detector — none of these are trivial happy-path stubs.
+- Operational readiness is well above baseline: bounded health probes, structured observability (lib/observability/), GDPR export/anonymisation pipeline (lib/gdpr/export.ts at 18 KB), Stripe webhook handling, rate limiting (lib/rate-limit.ts), and full CI/CD in .github/workflows/ with a dedicated membership-expiry workflow.
+- All 8 spec features are implemented in real, wired-up code with no stub markers — program authoring (ProgramBuilder.tsx, ExerciseDraftList.tsx), assignment (AssignPanel.tsx, lib/assignments.ts), member portal (app/portal/ProgramView.tsx, portal/programs/[id]/page.tsx), and invite flow (app/invite/accept/, lib/invites.ts) are all present and connected.
 
 ## To improve
 
-- The /portal/login route times out at 45 seconds in every runtime crawl round — investigate whether app/portal/login/page.tsx triggers a cold-compile of a heavy import chain on first request; add an explicit warm-up fetch of /portal/login inside scripts/dev.mjs (alongside the existing /api/health probe) so the route is compiled before the readiness gate opens.
-- No basic reporting dashboard exists anywhere in the file tree — add app/dashboard/reports/page.tsx that queries the members table for active count, computes MRR from the Stripe billing data already in lib/stripe.ts and lib/billing.ts, and renders per-class attendance from lib/classes.ts; this is the only table-stakes market feature still missing.
-- The automated check WARNs that production failures are invisible — wire lib/observability/monitoring.ts (which already exists at 6KB) to an external sink in instrumentation.ts so that server-side exceptions surface in an alerting channel rather than silently swallowing to logs.
-- Two img elements lack alt text (automated WARN) — audit app/components/Avatar.tsx and app/dashboard/members/MemberPhotoPanel.tsx for img tags without alt attributes and add descriptive or empty-string alt values to clear the accessibility warning.
+- e2e/staff-journey.spec.ts must actually submit the trainer@demo.local credentials, assert the dashboard loads with seeded member data, navigate to /dashboard/programs, create a program with at least one exercise (sets/reps/rest/notes), assign it to the seeded member, then log in as member@demo.local on /portal/login and confirm the program renders — without this chain, the product's entire wedge remains unverified at the running-app layer across every evaluation round.
+- The automated check 'Error visibility: no error tracking or global error handler' is still flagging WARN despite lib/observability/monitoring.ts existing — wire captureException into app/global-error.tsx (which is already present but apparently not calling it) so unhandled server errors are surfaced to the monitoring sink rather than silently swallowed in production.
+- Two img elements lack alt text (automated WARN) — locate the offending renders (likely in app/components/Avatar.tsx or the member photo panel) and add descriptive alt attributes to clear the accessibility check.
+- scripts/smoke-portal.mjs was added in the latest file-change round but it is unclear whether it is wired into .github/workflows/ci.yml as a required step — if the portal smoke runs only locally and not in CI, a broken /portal/login will not block a merge; add it as a required job in the CI workflow.
 
 ## Summary
 
-The codebase is architecturally complete and well-tested — all eight spec features are genuinely implemented, rate limiting and RLS are properly wired, and 239 meaningful tests pass — but the member portal (the product's stated wedge) has timed out in every runtime evaluation round, making the product undeliverable to end users despite the code being present; unblocking /portal/login startup latency is the single change that would most raise this score.
+A mature, fully-implemented codebase — all 8 spec features are genuinely wired up, security is defence-in-depth, and 239 behaviorally substantive tests pass — but the product has failed to execute a single post-authentication user journey in any evaluation round, leaving program authoring, assignment, and the member portal entirely unverified at runtime; closing that gap with a real end-to-end login-through-portal test chain is the single highest-leverage improvement.
 
 ---
-_Scored 2026-07-31 19:12 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 20:00 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
