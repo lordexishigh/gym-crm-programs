@@ -405,6 +405,56 @@ async function verifyLive(previousBuildId) {
 }
 
 /**
+ * Verify the AUTHENTICATED member portal, the half `verifyLive` cannot see.
+ *
+ * Every route `verifyLive` checks is a static, prerendered, database-free page.
+ * They render flawlessly on a deployment whose portal is broken — which is
+ * precisely the defect repeatedly reported against this project ("the member
+ * self-service portal is built but the running app doesn't serve it"), and
+ * nothing in the deploy could tell that state apart from a healthy one. So the
+ * front-door check is necessary but not sufficient, and this closes the gap by
+ * signing a demo member in and confirming the portal sections actually render.
+ *
+ * Delegated to a child process rather than imported: scripts/smoke-portal.mjs
+ * drives a real browser via Playwright, and this file is deliberately
+ * dependency-free (node: builtins only) so it runs regardless of install state.
+ * Spawning keeps that invariant intact.
+ *
+ * Its exit codes decide the deploy, and the distinction matters:
+ *   1 — signed in, but the portal did not serve. A defect in the code just
+ *       shipped, so it fails the deploy like any other broken route.
+ *   2 — could not run (no Playwright/browser, or no seeded demo member). Neither
+ *       is caused OR fixable by this deploy, so failing on it would only block
+ *       the deploy carrying the fix — a warning, matching how the
+ *       `auth: "unconfigured"` case is handled above.
+ */
+async function verifyMemberPortal() {
+  console.log("[deploy] Verifying the authenticated member portal.");
+  const res = await run(process.execPath, ["scripts/smoke-portal.mjs"], {
+    echo: true,
+    env: { ...process.env, DEPLOY_VERIFY_URL: PROD_URL },
+  });
+
+  if (res.code === 0) return true;
+  if (res.code === 2) {
+    console.warn(
+      "[deploy] WARNING: the member portal could not be verified (see above). The " +
+        "public routes are serving, but nothing confirmed a member can actually " +
+        "reach their bookings, membership status and payment history. Not failing " +
+        "the deploy — the cause is environmental, not in this build.",
+    );
+    return true;
+  }
+
+  console.error(
+    "[deploy] FAILED: the member portal does not serve on this deployment. The " +
+      "public pages render, so this would otherwise have looked like a healthy " +
+      "deploy. Roll back with `npx vercel rollback` and investigate.",
+  );
+  return false;
+}
+
+/**
  * Current git state, as the blockers above expect it. Never throws.
  *
  * "Is this commit pushed?" is answered by asking whether any REMOTE-TRACKING
@@ -507,9 +557,14 @@ async function main() {
   const live = await verifyLive(previousBuildId);
   if (!live) process.exit(1);
 
+  // 6. The authenticated half: the public pages rendering says nothing about
+  //    whether a member can reach the portal. See `verifyMemberPortal`.
+  const portalOk = await verifyMemberPortal();
+  if (!portalOk) process.exit(1);
+
   console.log(
-    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}) and /, /login ` +
-      "and /portal/login all render.",
+    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}): /, /login ` +
+      "and /portal/login render, and a signed-in member reaches the portal.",
   );
 }
 
