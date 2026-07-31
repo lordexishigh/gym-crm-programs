@@ -1,4 +1,10 @@
--- 0019_waitlist_promotion.sql
+-- 0020_waitlist_promotion.sql
+--
+-- Renumbered from 0019_waitlist_promotion.sql: it shared the `0019` prefix
+-- with 0019_member_photo.sql (an unrelated, independent migration added in
+-- the same batch). See scripts/migrate.mjs's RENAMED map for the backfill
+-- that keeps an already-migrated database (which recorded the old filename)
+-- from re-running this file's DDL under the new name.
 --
 -- Market-gap fix: waitlist auto-promotion needs to be OBSERVABLE, not just
 -- performed.

@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { validateClassInput } from "../lib/classes";
 
 const CLASSES_SRC = readFileSync(path.join(process.cwd(), "lib", "classes.ts"), "utf8");
-const MIGRATION_0019 = readFileSync(
-  path.join(process.cwd(), "migrations", "0019_waitlist_promotion.sql"),
+const MIGRATION_WAITLIST_PROMOTION = readFileSync(
+  path.join(process.cwd(), "migrations", "0020_waitlist_promotion.sql"),
   "utf8",
 );
 
@@ -116,15 +116,17 @@ describe("cancelBooking", () => {
   });
 });
 
-describe("migration 0019", () => {
+describe("migration 0020_waitlist_promotion", () => {
   it("adds the promotion columns idempotently", () => {
-    expect(MIGRATION_0019).toContain("add column if not exists promoted_at timestamptz");
-    expect(MIGRATION_0019).toContain(
+    expect(MIGRATION_WAITLIST_PROMOTION).toContain(
+      "add column if not exists promoted_at timestamptz",
+    );
+    expect(MIGRATION_WAITLIST_PROMOTION).toContain(
       "add column if not exists promotion_notified_at timestamptz",
     );
   });
 
   it("adds no default, so existing bookings read as never promoted", () => {
-    expect(MIGRATION_0019).not.toMatch(/promoted_at timestamptz[^;]*default/i);
+    expect(MIGRATION_WAITLIST_PROMOTION).not.toMatch(/promoted_at timestamptz[^;]*default/i);
   });
 });

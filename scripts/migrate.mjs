@@ -32,10 +32,18 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
  * 0011/0012 were renumbered from a duplicate `0003_` prefix so ordering is
  * unambiguous; `0003_library_and_templates.sql` KEEPS its number because
  * 0009/0010 extend the `exercise_library` table it creates and must run after it.
+ *
+ * 0020_waitlist_promotion.sql was renumbered from a duplicate `0019_` prefix
+ * shared with 0019_member_photo.sql (independent tables, so the collision was
+ * harmless in practice, but ambiguous by construction — see
+ * test/migration-filenames.test.ts, which now fails the build on any future
+ * duplicate). `0019_member_photo.sql` KEEPS its number; only the other file
+ * of the colliding pair moves.
  */
 const RENAMED = {
   "0011_assignment_lifecycle.sql": "0003_assignment_lifecycle.sql",
   "0012_member_extended_fields.sql": "0003_member_extended_fields.sql",
+  "0020_waitlist_promotion.sql": "0019_waitlist_promotion.sql",
 };
 
 /**
