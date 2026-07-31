@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-80%2F100-brightgreen)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 80/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 78 | `████████████████░░░░` |
-| Code quality | 83 | `█████████████████░░░` |
-| Robustness & error handling | 80 | `████████████████░░░░` |
-| Builds & tests | 87 | `█████████████████░░░` |
-| UX & design | 74 | `███████████████░░░░░` |
+| Spec coverage | 73 | `███████████████░░░░░` |
+| Code quality | 86 | `█████████████████░░░` |
+| Robustness & error handling | 79 | `████████████████░░░░` |
+| Builds & tests | 84 | `█████████████████░░░` |
+| UX & design | 77 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -43,21 +43,21 @@
 
 ## Strengths
 
-- Security architecture is genuinely defence-in-depth: JWT identity is derived server-side via jose (lib/identity.ts), never trusted from the browser, and all DB queries run under withTenantContext as the RLS-bound app_user — a tenant isolation model that is correct by construction rather than by convention.
-- The test suite is substantive and behaviorally meaningful: 239 passing tests include timing-contract assertions for the health probe, policy-decision unit tests for the deploy script, a dev-server readiness gate regression guard, and a demo-credential drift detector — none of these are trivial happy-path stubs.
-- Operational readiness is well above baseline: bounded health probes, structured observability (lib/observability/), GDPR export/anonymisation pipeline (lib/gdpr/export.ts at 18 KB), Stripe webhook handling, rate limiting (lib/rate-limit.ts), and full CI/CD in .github/workflows/ with a dedicated membership-expiry workflow.
-- All 8 spec features are implemented in real, wired-up code with no stub markers — program authoring (ProgramBuilder.tsx, ExerciseDraftList.tsx), assignment (AssignPanel.tsx, lib/assignments.ts), member portal (app/portal/ProgramView.tsx, portal/programs/[id]/page.tsx), and invite flow (app/invite/accept/, lib/invites.ts) are all present and connected.
+- Security and isolation architecture is production-grade: RLS policies in migrations/0002_rls_policies.sql, withTenantContext wrapping every query, JWT verified server-side in lib/identity.ts with no trust placed on browser-supplied identity, and login throttling in lib/auth/login-throttle.ts.
+- Test suite is substantive and explains its invariants: 239 tests covering health-probe timeout contracts, deploy-gate policy, dev-server readiness races, and start-wrapper fallback — each test file documents the specific production defect it prevents.
+- Implementation is complete and unstubbed across all 8 spec features, with real domain logic in lib/programs.ts, lib/assignments.ts, lib/invites.ts, lib/members.ts, and full UI in app/dashboard/programs/ and app/portal/.
+- Codebase has well-separated module boundaries with clear responsibilities: lib/ owns domain logic and DB access, app/dashboard/ owns staff UI, app/portal/ owns member UI, and lib/auth/ owns all identity concerns — no cross-cutting leakage visible in the sample.
 
 ## To improve
 
-- e2e/staff-journey.spec.ts must actually submit the trainer@demo.local credentials, assert the dashboard loads with seeded member data, navigate to /dashboard/programs, create a program with at least one exercise (sets/reps/rest/notes), assign it to the seeded member, then log in as member@demo.local on /portal/login and confirm the program renders — without this chain, the product's entire wedge remains unverified at the running-app layer across every evaluation round.
-- The automated check 'Error visibility: no error tracking or global error handler' is still flagging WARN despite lib/observability/monitoring.ts existing — wire captureException into app/global-error.tsx (which is already present but apparently not calling it) so unhandled server errors are surfaced to the monitoring sink rather than silently swallowed in production.
-- Two img elements lack alt text (automated WARN) — locate the offending renders (likely in app/components/Avatar.tsx or the member photo panel) and add descriptive alt attributes to clear the accessibility check.
-- scripts/smoke-portal.mjs was added in the latest file-change round but it is unclear whether it is wired into .github/workflows/ci.yml as a required step — if the portal smoke runs only locally and not in CI, a broken /portal/login will not block a merge; add it as a required job in the CI workflow.
+- The E2E suite (e2e/staff-journey.spec.ts and e2e/invite-flow.spec.ts) is not wired into the CI gate that produces the green result — add a ci.yml step that runs `npx playwright test` against a seeded database so authenticated flows (dashboard load, program creation, member portal render) are machine-verified on every push rather than left to manual crawl.
+- The automated check warns 'no error tracking or global error handler' despite app/global-error.tsx existing — wire a real error-reporting sink (e.g. Sentry DSN) into instrumentation.ts so production runtime exceptions are visible; the current observability stack in lib/observability/monitoring.ts captures metrics but not unhandled exceptions.
+- Two img elements lack alt text (automated WARN) — audit app/page.tsx and app/dashboard/ for bare <img> tags and add descriptive alt attributes, which is also a WCAG 2.1 AA failure blocking accessibility compliance.
+- The server readiness race has caused /portal/login and /login to time out in every evaluation round since Round 3 — scripts/dev.mjs should poll /api/health until it returns HTTP 200 before yielding to the caller, mirroring the contract already tested in test/dev-server.test.ts but not enforced in the dev entry point.
 
 ## Summary
 
-A mature, fully-implemented codebase — all 8 spec features are genuinely wired up, security is defence-in-depth, and 239 behaviorally substantive tests pass — but the product has failed to execute a single post-authentication user journey in any evaluation round, leaving program authoring, assignment, and the member portal entirely unverified at runtime; closing that gap with a real end-to-end login-through-portal test chain is the single highest-leverage improvement.
+All 8 spec features are genuinely implemented with production-quality code, strong RLS isolation, and a substantive 239-test suite — but the running app has failed to serve any authenticated page across 8 consecutive evaluation rounds, leaving the product's core wedge (program authoring, assignment, and the member portal) completely unverifiable at runtime; resolving the server readiness race and wiring E2E tests into CI are the two changes that would most close this gap.
 
 ---
-_Scored 2026-07-31 20:00 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 20:02 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
