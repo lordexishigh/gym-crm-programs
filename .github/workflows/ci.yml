@@ -176,10 +176,16 @@ jobs:
       - name: Install Playwright browser (chromium)
         run: npx playwright install --with-deps chromium
 
-      - name: End-to-end journey test (invite → accept → login → portal)
+      - name: End-to-end journey tests (member onboarding + staff dashboard)
         # Playwright starts the GoTrue auth stand-in AND the built app itself
-        # (see playwright.config.ts webServer); the journey seeds its fixtures
-        # into the job's throwaway Postgres and cleans them up after.
+        # (see playwright.config.ts webServer); each journey seeds its own
+        # fixtures into the job's throwaway Postgres and cleans them up after.
+        #
+        # Two journeys, one per side of the product:
+        #   e2e/invite-flow.spec.ts    invite → accept → login → member portal
+        #   e2e/staff-journey.spec.ts  login → dashboard → member → program →
+        #                              assignment (the staff half, previously
+        #                              covered only by isolated unit tests)
         run: npm run test:e2e
 
       - name: Upload Playwright report on failure
@@ -193,8 +199,9 @@ jobs:
 
       - name: Upload rendered screenshots (every run)
         # e2e/capture.ts saves full-page PNGs of the landing page, both sign-in
-        # pages, the invite-accept form, and the authenticated member portal at
-        # desktop + mobile viewports. Published unconditionally so visual
+        # pages, the invite-accept form, the authenticated member portal, and
+        # the staff dashboard + an assigned program, at desktop + mobile
+        # viewports. Published unconditionally so visual
         # coherence can be reviewed from real renders on any commit.
         if: always()
         uses: actions/upload-artifact@v4
