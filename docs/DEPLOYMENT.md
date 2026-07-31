@@ -113,10 +113,42 @@ What it does, in order:
    dashboard and portal unreachable behind a page that looks fine. It warns
    rather than fails because a missing project env var cannot be fixed *by* a
    deploy, so blocking on it would only block the deploy carrying the fix.
+5. **Signs in for real, and fails the deploy if nobody can.** Step 4 proves the
+   pages are *there*; this proves there is a way *past* them. It runs
+   [`e2e/live/staff-login.spec.ts`](../e2e/live/staff-login.spec.ts) in a real
+   browser against the production URL: `/login` → submit the seeded staff
+   credentials → land on `/dashboard` with both session cookies set → follow a
+   second guarded route → log out. That closes the one shape of "built but not
+   live" a route check cannot see, because `auth: "configured"` above only means
+   two variables are *non-empty* — it cannot tell a working key from a rotated
+   one, or a seeded database from an empty one. Skipped with a warning (never
+   failed) when Playwright is not installed, so `deploy.mjs` stays runnable from a
+   production install. Override with `DEPLOY_SKIP_SIGNIN_CHECK=1` when the deploy
+   *is* the fix for a broken environment.
 
 Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 `https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
-`DEPLOY_SKIP_MIGRATE`, `DEPLOY_VERCEL_PKG`.
+`DEPLOY_SKIP_MIGRATE`, `DEPLOY_SKIP_SIGNIN_CHECK`, `DEPLOY_VERCEL_PKG`.
+
+### Verifying a running deployment on its own — `npm run verify:live`
+
+The same sign-in journey, runnable any time without deploying — the quickest way
+to answer "is staff login actually working in production?" with evidence:
+
+```bash
+npm run verify:live                                   # production
+VERIFY_BASE_URL=https://preview-xyz.vercel.app npm run verify:live
+```
+
+It starts no servers and needs no database or secrets — it drives the public
+sign-in path exactly as a visitor does. Credentials come from
+[`lib/demo-accounts.ts`](../lib/demo-accounts.ts) (the list the forms themselves
+advertise, pinned against `scripts/seed.mjs` by `test/demo-accounts.test.ts`);
+override with `VERIFY_STAFF_EMAIL`/`VERIFY_STAFF_PASSWORD` where the `SEED_*`
+defaults were changed. It deliberately has **no wrong-password case** — sign-in is
+throttled at 6 attempts per account per 5 minutes, so a negative control would
+park the demo account in a lockout for the next visitor; that path is covered
+locally in `e2e/invite-flow.spec.ts` instead.
 
 ### `.github/workflows/deploy.yml`
 

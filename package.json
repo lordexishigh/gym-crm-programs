@@ -18,7 +18,8 @@
     "notify:expiry": "node scripts/notify-membership-expiry.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "verify:live": "playwright test --config playwright.live.config.ts"
   },
   "dependencies": {
     "jose": "^5.9.6",

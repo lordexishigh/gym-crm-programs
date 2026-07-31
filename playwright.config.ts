@@ -21,6 +21,13 @@ const AUTH_STUB_URL = "http://127.0.0.1:54321";
 
 export default defineConfig({
   testDir: "./e2e",
+  /**
+   * `e2e/live/` verifies an ALREADY-DEPLOYED app and must not run here: it signs
+   * in with the `npm run seed` demo accounts, which do not exist in the auth
+   * stand-in this config boots, so it would fail for a reason that says nothing
+   * about the code. It has its own config — see playwright.live.config.ts.
+   */
+  testIgnore: "live/**",
   timeout: 90_000,
   // The journey mutates shared DB fixtures; keep it strictly serial.
   fullyParallel: false,

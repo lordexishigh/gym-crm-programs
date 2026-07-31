@@ -58,6 +58,8 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 /**
@@ -257,6 +259,90 @@ export function routeVerdict(results) {
   return { ok: failures.length === 0, failures };
 }
 
+/**
+ * Whether to prove that staff SIGN-IN works after deploying, and why.
+ *
+ * Pure and injectable, like the decisions above, so the policy is unit-tested.
+ *
+ * This is the check that finally answers "the code implements staff
+ * authentication but the running app doesn't serve it". `verifyLive` can only
+ * see that /login RENDERS, and /login is a static page — see the long note at
+ * the end of `verifyLive` for why that leaves the entire dashboard and portal
+ * unverified behind a form that looks perfect.
+ *
+ * Skipped rather than failed when Playwright is absent, because `deploy.mjs` is
+ * otherwise dependency-free by design and must stay runnable from a production
+ * install (`--omit=dev`), where a browser driver is legitimately not there.
+ *
+ * @param {{ env?: Record<string, string | undefined>, playwrightAvailable?: boolean }} opts
+ */
+export function decideSignInCheck({ env = process.env, playwrightAvailable = false } = {}) {
+  if (isSet(env.DEPLOY_SKIP_SIGNIN_CHECK)) {
+    return { check: false, reason: "DEPLOY_SKIP_SIGNIN_CHECK is set — not verifying sign-in." };
+  }
+  if (!playwrightAvailable) {
+    return {
+      check: false,
+      reason:
+        "Playwright is not installed in this checkout, so the post-deploy sign-in " +
+        "check is being skipped — the entry routes were verified to render, but " +
+        "whether anyone can actually SIGN IN was not proven. Run `npm install` " +
+        "(dev dependencies) and `npm run verify:live` to confirm.",
+    };
+  }
+  return {
+    check: true,
+    reason: "Verifying that staff email + password sign-in actually works on the live URL.",
+  };
+}
+
+/** True when this checkout can drive a browser (dev dependencies installed). */
+function playwrightInstalled() {
+  return existsSync(path.join(process.cwd(), "node_modules", "@playwright", "test"));
+}
+
+/**
+ * Drive the real staff sign-in against the deployment (e2e/live/staff-login.spec.ts).
+ *
+ * A hard failure, unlike the `auth: "unconfigured"` warning it supersedes: a
+ * deployment nobody can sign in to has an unreachable dashboard and portal, which
+ * is worse than a page that 500s because every outside signal still reads as
+ * healthy. DEPLOY_SKIP_SIGNIN_CHECK=1 exists for the one case where failing would
+ * be counterproductive — a deploy whose PURPOSE is to carry the fix for a broken
+ * environment — mirroring DEPLOY_ALLOW_DIRTY.
+ */
+async function verifySignIn() {
+  const { check, reason } = decideSignInCheck({ playwrightAvailable: playwrightInstalled() });
+  console.log(`[deploy] ${reason}`);
+  if (!check) return true;
+
+  const res = await run(
+    `npx --yes playwright test --config playwright.live.config.ts`,
+    [],
+    { echo: true, line: true, env: { ...process.env, VERIFY_BASE_URL: PROD_URL } },
+  );
+  if (res.code !== 0) {
+    console.error(
+      `[deploy] FAILED: ${PROD_URL} renders its sign-in form but staff cannot sign in, ` +
+        "so the dashboard and the member portal are unreachable — every feature " +
+        "behind them is deployed and unusable. This is the 'built but not live' " +
+        "state, in the only form that survives a route check.\n" +
+        "[deploy] The three causes, in the order worth checking:\n" +
+        "[deploy]   1. NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY " +
+        `missing or stale on the ${VERCEL_PROJECT} project (\`npx vercel env ls production\`).\n` +
+        "[deploy]   2. The demo/staff accounts were never seeded into this " +
+        "environment (`npm run seed` against its DATABASE_URL).\n" +
+        "[deploy]   3. Tokens are issued by a different Supabase project than the " +
+        "one whose JWKS this deployment verifies against.\n" +
+        "[deploy] Override with DEPLOY_SKIP_SIGNIN_CHECK=1 only when this deploy is " +
+        "itself the fix.",
+    );
+    return false;
+  }
+  console.log("[deploy] Staff sign-in verified: /login → /dashboard on the live URL.");
+  return true;
+}
+
 /** Fetch a URL, returning `{ status, body }` — never throwing. */
 async function probe(url, timeoutMs = 20_000) {
   try {
@@ -384,6 +470,12 @@ async function verifyLive(previousBuildId) {
   // environment variable cannot be repaired BY a deploy, so failing on it would
   // only block the deploy that carries the fix. The route check fails hard
   // because what it catches is a defect in the code being shipped.
+  //
+  // NOTE: this flag only reports whether two variables are NON-EMPTY. It cannot
+  // tell a working key from a rotated one, nor a seeded database from an empty
+  // one, so `verifySignIn` below now proves the same thing by actually signing
+  // in. This stays because it names the likely cause when that check fails, and
+  // because it still reports something useful when Playwright is unavailable.
   let health = null;
   try {
     health = JSON.parse(body);
@@ -507,9 +599,14 @@ async function main() {
   const live = await verifyLive(previousBuildId);
   if (!live) process.exit(1);
 
+  // 6. And confirm the product is USABLE, not merely rendered: sign in for real.
+  //    Step 5 proves the pages are there; this proves there is a way past them.
+  const signInWorks = await verifySignIn();
+  if (!signInWorks) process.exit(1);
+
   console.log(
-    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}) and /, /login ` +
-      "and /portal/login all render.",
+    `[deploy] Done. ${PROD_URL} is serving this commit (${state.branch}), /, /login ` +
+      "and /portal/login all render, and staff sign-in reaches the dashboard.",
   );
 }
 
