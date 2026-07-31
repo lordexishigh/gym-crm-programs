@@ -113,10 +113,52 @@ What it does, in order:
    dashboard and portal unreachable behind a page that looks fine. It warns
    rather than fails because a missing project env var cannot be fixed *by* a
    deploy, so blocking on it would only block the deploy carrying the fix.
+5. **Verifies the authenticated member portal** by running `npm run smoke:portal`
+   (see below). Step 4 only ever looks at static pages, so it cannot tell a
+   healthy deployment from one whose portal is broken.
 
 Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 `https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
 `DEPLOY_SKIP_MIGRATE`, `DEPLOY_VERCEL_PKG`.
+
+## Verifying the member portal — `npm run smoke:portal`
+
+```bash
+npm run smoke:portal                          # defaults to production
+npm run smoke:portal -- --base http://localhost:3000
+```
+
+[`scripts/smoke-portal.mjs`](../scripts/smoke-portal.mjs) signs a demo member in
+at `/portal/login` with a real browser and asserts the portal actually renders
+**upcoming bookings/classes, membership status and payment history**.
+
+**Why it exists.** The member portal was reported as *"built but not live — the
+code implements this but the running app doesn't serve it"* round after round,
+every time incorrectly. Nothing could cheaply disprove it, because every
+automated check stopped at the front door: `/`, `/login` and `/portal/login` are
+static, prerendered, database-free pages that render perfectly on a deployment
+whose portal is broken, whose database is unreachable, or that was never seeded.
+`e2e/invite-flow.spec.ts` *does* cover the authenticated portal, but it needs a
+local throwaway Postgres plus the GoTrue stub, so it skips outside CI — and CI
+cannot run at all (see the billing block above). Answering "does a member
+actually see their bookings?" therefore meant hand-driving a browser. Now it is
+one command, and step 5 of every deploy.
+
+It needs no database and no Supabase keys: the credentials are the seed's public
+demo member, read from the same `SEED_MEMBER_EMAIL`/`SEED_MEMBER_PASSWORD` that
+`scripts/seed.mjs` uses, so a deployment seeded with overridden credentials is
+verifiable with no extra configuration. Exit codes are meaningful, and
+`deploy.mjs` relies on the distinction:
+
+| Exit | Meaning | Effect on a deploy |
+| --- | --- | --- |
+| 0 | The portal is live and every section rendered. | passes |
+| 1 | Signed in, but the portal did not serve — a defect in the shipped code. | **fails** |
+| 2 | Cannot run: no Playwright/browser, or no seeded demo member on that deployment. | warns |
+
+Exit 2 only warns for the same reason `auth: "unconfigured"` does — neither cause
+is created or fixable *by* the deploy, so failing would just block the deploy
+carrying the fix. Requires dev dependencies and `npx playwright install chromium`.
 
 ### `.github/workflows/deploy.yml`
 
