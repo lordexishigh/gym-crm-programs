@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-77%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-75%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 77/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 75/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 74 | `███████████████░░░░░` |
-| Code quality | 80 | `████████████████░░░░` |
-| Robustness & error handling | 78 | `████████████████░░░░` |
-| Builds & tests | 83 | `█████████████████░░░` |
-| UX & design | 73 | `███████████████░░░░░` |
+| Spec coverage | 70 | `██████████████░░░░░░` |
+| Code quality | 82 | `████████████████░░░░` |
+| Robustness & error handling | 75 | `███████████████░░░░░` |
+| Builds & tests | 86 | `█████████████████░░░` |
+| UX & design | 63 | `█████████████░░░░░░░` |
 
 ## Readiness checks
 
@@ -43,21 +43,21 @@
 
 ## Strengths
 
-- Security architecture is production-grade: RLS enforced at the Postgres layer, tenant_id and member_id derived exclusively from a server-verified JWT (never from the browser), rate limiting wired into both staff and member login actions, and GDPR anonymization/export implemented across lib/gdpr/.
-- Test suite is substantive and regression-focused — 239 passing tests include real ES256 key generation, post-login redirect loop prevention, dev-server readiness-gate regression, and sign-in-reason rendering, all of which guard specific, previously confirmed failure modes.
-- Module boundaries are clean and idiomatic for the stack: lib/ holds all business logic, app/ holds only routing and UI, migrations/ are versioned sequentially, and no stub markers or dead code were found.
-- Scope beyond the spec is coherent and additive: CSV member import (app/dashboard/members/import/), class scheduling (lib/classes.ts, migrations/0015), workout logging (lib/workout-logs.ts), and Stripe billing (lib/stripe.ts) are all wired features, not placeholders.
+- All eight spec features are backed by substantive code files with no stub markers — program authoring (ProgramBuilder.tsx + ExerciseDraftList.tsx), RLS migrations, JWT identity layer, and invite flow are all wired end-to-end in the codebase.
+- The test suite is genuinely meaningful: 239 tests including a security-floor pin against two HIGH Next.js CVEs, a real ES256 JWT signing harness for post-login redirect logic, and a dev-server readiness-gate test that caught a real 14-second startup race.
+- Authentication is hardened correctly: per-audience rate limiting with separate member/staff buckets, server-side JWT verification before session establishment, and tenant_id derived exclusively from the verified token — never from form input.
+- The CI/CD pipeline is mature for a v1: dependabot.yml, multi-workflow GitHub Actions (ci.yml at 17KB, deploy.yml, membership-expiry.yml), dependency audit passing clean, and secrets gitignored.
 
 ## To improve
 
-- The product walkthrough has failed to reach any post-auth page in eight consecutive rounds despite demo credentials being visible on the login pages — add a seed-verification step in scripts/dev.mjs that pings /api/health AND attempts a demo-credential token exchange against the configured Supabase URL before marking the server ready, so QA can confirm the auth path is end-to-end live before each evaluation.
-- The memory/ directory (agent memory files: MEMORY.md, exercise-catalog-per-tenant.md, etc.) is committed directly into the application source tree and will be bundled or served; move it to .claude/ and add memory/ to .gitignore so it does not ship with the application.
-- Two img elements lack alt text (flagged by the automated accessibility check) — audit app/components/Avatar.tsx and any other img usage and add descriptive alt attributes so screen-reader users and the accessibility check both pass.
-- No reporting dashboard exists: the market-fit check flags this as the one missing table-stakes feature; add /dashboard/reports with server-side aggregations (active member count from the members table, MRR from Stripe payment_events, per-class attendance from class_bookings joins) so gym owners have at-a-glance operational visibility.
+- The /portal/login route times out at 45 seconds in every runtime crawl round — investigate whether app/portal/login/page.tsx triggers a cold-compile of a heavy import chain on first request; add an explicit warm-up fetch of /portal/login inside scripts/dev.mjs (alongside the existing /api/health probe) so the route is compiled before the readiness gate opens.
+- No basic reporting dashboard exists anywhere in the file tree — add app/dashboard/reports/page.tsx that queries the members table for active count, computes MRR from the Stripe billing data already in lib/stripe.ts and lib/billing.ts, and renders per-class attendance from lib/classes.ts; this is the only table-stakes market feature still missing.
+- The automated check WARNs that production failures are invisible — wire lib/observability/monitoring.ts (which already exists at 6KB) to an external sink in instrumentation.ts so that server-side exceptions surface in an alerting channel rather than silently swallowing to logs.
+- Two img elements lack alt text (automated WARN) — audit app/components/Avatar.tsx and app/dashboard/members/MemberPhotoPanel.tsx for img tags without alt attributes and add descriptive or empty-string alt values to clear the accessibility warning.
 
 ## Summary
 
-The build is architecturally solid — all eight spec features have complete, non-stub implementations, 239 tests pass including regression guards backed by real cryptography, and the security fundamentals (RLS, JWT enforcement, rate limiting, GDPR) are production-grade — but eight consecutive walkthrough rounds have failed to authenticate past the login pages, leaving every core user journey empirically unverified at runtime and preventing a higher score on spec coverage and UX.
+The codebase is architecturally complete and well-tested — all eight spec features are genuinely implemented, rate limiting and RLS are properly wired, and 239 meaningful tests pass — but the member portal (the product's stated wedge) has timed out in every runtime evaluation round, making the product undeliverable to end users despite the code being present; unblocking /portal/login startup latency is the single change that would most raise this score.
 
 ---
-_Scored 2026-07-31 17:46 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 19:12 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
