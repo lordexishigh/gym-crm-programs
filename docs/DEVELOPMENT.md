@@ -19,6 +19,43 @@ The exact commands depend on the tech stack (see `docs/ARCHITECTURE.md`). Genera
    - Frontend: `npm start` (the install already built it) or `npm run dev`
    - Backend:  start the app entrypoint documented in the architecture
 
+### Running the authenticated journeys
+
+`npm test` and `npm run test:e2e` both **skip** everything that needs a database
+rather than failing, so a green run on a machine with no Postgres says nothing
+about the signed-in product. That is not a hypothetical gap: it is how a review
+could report "no authenticated user journey was run, leaving the entire staff
+side unverified" while every suite passed.
+
+Two Playwright journeys cover the two halves of the product, and they are the
+only tests that exercise a real session against real RLS:
+
+| spec | journey |
+| --- | --- |
+| `e2e/invite-flow.spec.ts` | invite → accept → auto sign-in → member portal → logout → password sign-in |
+| `e2e/staff-journey.spec.ts` | staff sign-in → dashboard → add a member → author a program → assign it → confirm the counts → logout |
+
+Both need a **local throwaway Postgres** (they refuse to touch a non-local
+`DATABASE_URL`, mirroring `test/setup/db-safety.ts`) and a build made against
+the GoTrue stand-in, because Next.js inlines `NEXT_PUBLIC_*` at build time:
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+  --name alpha-pg postgres:16
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+export NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+export NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_e2e_stub
+
+npm run migrate
+npm run build          # must be built with the NEXT_PUBLIC_* values above
+npm run test:e2e       # Playwright starts e2e/auth-stub.mjs and `npm start`
+```
+
+Each journey seeds its own gym, staff/member and auth-stub users, and deletes
+them afterwards. Screenshots of every surface they walk — the staff dashboard
+and an assigned program included — land in `e2e-screenshots/` (gitignored; CI
+uploads them on every run).
+
 ### `npm install` builds the app, on purpose
 
 `.next/` is gitignored, so a fresh clone has no production build.
