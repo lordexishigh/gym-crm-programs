@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-78%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-77%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 78/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 77/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 73 | `███████████████░░░░░` |
-| Code quality | 83 | `█████████████████░░░` |
-| Robustness & error handling | 77 | `███████████████░░░░░` |
-| Builds & tests | 87 | `█████████████████░░░` |
-| UX & design | 74 | `███████████████░░░░░` |
+| Spec coverage | 74 | `███████████████░░░░░` |
+| Code quality | 80 | `████████████████░░░░` |
+| Robustness & error handling | 78 | `████████████████░░░░` |
+| Builds & tests | 83 | `█████████████████░░░` |
+| UX & design | 73 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -22,7 +22,7 @@
 - ✅ No hardcoded secrets — no secret-shaped literals found
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
-- ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
+- ✅ Dependency vulnerabilities — no critical/high vulnerabilities in the last audit
 - ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
@@ -43,22 +43,21 @@
 
 ## Strengths
 
-- RLS isolation is enforced at the database layer and guarded by a CI test (test/isolation-coverage.test.ts) that auto-discovers every tenant-carrying table from the live pg_class catalog, making it structurally impossible for a new table to ship without RLS without breaking CI.
-- Pure/impure module discipline is consistent: lib/member-photo.ts and lib/members.ts carry no database or environment imports and are fully unit-testable in isolation, while DB queries are confined to actions.ts and lib/db.ts withTenantContext calls.
-- The test suite is substantively non-trivial — 239 tests including infrastructure regression guards (dev server startup race, missing-build fallback, RLS auto-discovery) that pin real, previously-observed failure modes with measured evidence.
-- Feature scope significantly exceeds the spec: exercise library per tenant, class scheduling with waitlist, billing/membership plans, GDPR export and erasure, member photo upload with magic-byte sniffing, bulk CSV import, and workout logging are all wired up beyond what was promised.
+- Security architecture is production-grade: RLS enforced at the Postgres layer, tenant_id and member_id derived exclusively from a server-verified JWT (never from the browser), rate limiting wired into both staff and member login actions, and GDPR anonymization/export implemented across lib/gdpr/.
+- Test suite is substantive and regression-focused — 239 passing tests include real ES256 key generation, post-login redirect loop prevention, dev-server readiness-gate regression, and sign-in-reason rendering, all of which guard specific, previously confirmed failure modes.
+- Module boundaries are clean and idiomatic for the stack: lib/ holds all business logic, app/ holds only routing and UI, migrations/ are versioned sequentially, and no stub markers or dead code were found.
+- Scope beyond the spec is coherent and additive: CSV member import (app/dashboard/members/import/), class scheduling (lib/classes.ts, migrations/0015), workout logging (lib/workout-logs.ts), and Stripe billing (lib/stripe.ts) are all wired features, not placeholders.
 
 ## To improve
 
-- Two high-severity dependency vulnerabilities are unaddressed (automated WARN) — run `npm audit` to identify the affected packages and pin safe versions or apply `npm audit fix` so the dependency risk does not reach production.
-- The crawl has failed to authenticate past /login or /portal/login across every evaluation round — verify the demo credential flow (trainer@demo.local / DemoTrainer!2026 and member@demo.local / DemoMember!2026) works end-to-end in the deployed environment by running a headed Playwright script against the live URL and confirming the staff dashboard, member list, program builder, and member portal each render with seeded data.
-- Error tracking has no external sink (automated WARN) — wire lib/observability/monitoring.ts captureException to a real DSN (Sentry, BetterStack, or equivalent) so production exceptions are visible; currently the global-error.tsx boundary catches errors but nothing surfaces them outside the process.
-- Two `<img>` elements are missing alt attributes (automated WARN) — locate them (likely in app/components/Avatar.tsx or member photo surfaces) and add descriptive alt text or alt="" for decorative images to clear the accessibility warning.
-- No reporting dashboard exists (/dashboard/reports is absent from the file tree and market fit check flags it as missing) — add a reports page backed by aggregation queries over payment_events (MRR), members (active count), and class_bookings (attendance per class) so gym owners have a baseline business view.
+- The product walkthrough has failed to reach any post-auth page in eight consecutive rounds despite demo credentials being visible on the login pages — add a seed-verification step in scripts/dev.mjs that pings /api/health AND attempts a demo-credential token exchange against the configured Supabase URL before marking the server ready, so QA can confirm the auth path is end-to-end live before each evaluation.
+- The memory/ directory (agent memory files: MEMORY.md, exercise-catalog-per-tenant.md, etc.) is committed directly into the application source tree and will be bundled or served; move it to .claude/ and add memory/ to .gitignore so it does not ship with the application.
+- Two img elements lack alt text (flagged by the automated accessibility check) — audit app/components/Avatar.tsx and any other img usage and add descriptive alt attributes so screen-reader users and the accessibility check both pass.
+- No reporting dashboard exists: the market-fit check flags this as the one missing table-stakes feature; add /dashboard/reports with server-side aggregations (active member count from the members table, MRR from Stripe payment_events, per-class attendance from class_bookings joins) so gym owners have at-a-glance operational visibility.
 
 ## Summary
 
-The codebase is genuinely complete against the spec — all eight promised features are implemented without stubs, the test suite is sophisticated and passes at 239 tests, and the scope far exceeds the pitch. The dominant risk remains that the crawl cannot authenticate in the running app across multiple evaluation rounds, leaving every post-login feature runtime-unverified; resolving the deployed demo credential flow is the single highest-leverage action before this build can be called production-ready.
+The build is architecturally solid — all eight spec features have complete, non-stub implementations, 239 tests pass including regression guards backed by real cryptography, and the security fundamentals (RLS, JWT enforcement, rate limiting, GDPR) are production-grade — but eight consecutive walkthrough rounds have failed to authenticate past the login pages, leaving every core user journey empirically unverified at runtime and preventing a higher score on spec coverage and UX.
 
 ---
-_Scored 2026-07-30 21:39 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 17:46 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
