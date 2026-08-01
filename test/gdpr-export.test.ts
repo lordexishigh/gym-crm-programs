@@ -110,6 +110,21 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
         "insert into workout_log (tenant_id, member_id, program_id, effort, note) values ($1,$2,$3,7,'leg day')",
         [gymA, memberA1, programA1],
       );
+      // A check-in and a class booking for member A1 (export should include both).
+      await c.query(
+        "insert into check_ins (tenant_id, member_id, method) values ($1,$2,'pin')",
+        [gymA, memberA1],
+      );
+      const classA1 = (
+        await c.query(
+          "insert into classes (tenant_id, name, starts_at, duration_minutes, capacity) values ($1,'Spin',now(),45,10) returning id",
+          [gymA],
+        )
+      ).rows[0].id as string;
+      await c.query(
+        "insert into class_bookings (tenant_id, class_id, member_id, status) values ($1,$2,$3,'booked')",
+        [gymA, classA1, memberA1],
+      );
 
       Object.assign(seed, {
         gymA,
@@ -145,6 +160,14 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
       effort: 7,
       note: "leg day",
     });
+    // Check-in (attendance) and class booking history are part of the export too.
+    expect(data!.check_ins).toHaveLength(1);
+    expect(data!.check_ins[0]).toMatchObject({ method: "pin" });
+    expect(data!.class_bookings).toHaveLength(1);
+    expect(data!.class_bookings[0]).toMatchObject({
+      class_name: "Spin",
+      status: "booked",
+    });
   });
 
   it("a cross-tenant export resolves to nothing (RLS isolation)", async () => {
@@ -162,6 +185,9 @@ describe.skipIf(!hasDb)("GDPR export — scope & audit", () => {
     expect(data!.programs.map((p) => p.program.id)).toEqual([seed.programA1]);
     // The member's own workout logs ARE part of a self-export.
     expect(data!.workout_logs).toHaveLength(1);
+    // ...as are their own check-ins and class bookings.
+    expect(data!.check_ins).toHaveLength(1);
+    expect(data!.class_bookings).toHaveLength(1);
     // Staff-internal records are not exposed to a member self-export.
     expect(data!.invites).toHaveLength(0);
     expect(data!.status_history).toHaveLength(0);
