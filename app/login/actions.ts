@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { signInWithPassword } from "@/lib/auth/supabase";
 import { verifyAccessToken, sessionRole } from "@/lib/identity";
 import { establishSession } from "@/lib/auth/session";
+import { guardLoginAttempt, clearLoginThrottle } from "@/lib/auth/login-throttle";
 
 /**
  * Staff sign-in (mvp-auth-002).
@@ -26,6 +27,11 @@ export async function loginAction(
     return { error: "Email and password are required." };
   }
 
+  // Throttled before touching the auth service: a blocked attempt costs no
+  // GoTrue round-trip and cannot be used to probe account existence.
+  const throttled = await guardLoginAttempt("staff", email);
+  if (throttled) return throttled;
+
   const result = await signInWithPassword(email, password);
   if (!result.ok) {
     return { error: result.error };
@@ -47,6 +53,7 @@ export async function loginAction(
     };
   }
 
+  await clearLoginThrottle("staff", email);
   await establishSession(result.tokens);
   redirect("/dashboard");
 }

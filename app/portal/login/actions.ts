@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { signInWithPassword } from "@/lib/auth/supabase";
 import { verifyAccessToken, sessionRole, claimValue } from "@/lib/identity";
 import { establishSession } from "@/lib/auth/session";
+import { guardLoginAttempt, clearLoginThrottle } from "@/lib/auth/login-throttle";
 
 /**
  * Member portal sign-in (mvp-auth-003).
@@ -25,6 +26,11 @@ export async function memberLoginAction(
   if (!email || !password) {
     return { error: "Email and password are required." };
   }
+
+  // Throttled before touching the auth service: a blocked attempt costs no
+  // GoTrue round-trip and cannot be used to probe account existence.
+  const throttled = await guardLoginAttempt("member", email);
+  if (throttled) return throttled;
 
   const result = await signInWithPassword(email, password);
   if (!result.ok) {
@@ -53,6 +59,7 @@ export async function memberLoginAction(
     };
   }
 
+  await clearLoginThrottle("member", email);
   await establishSession(result.tokens);
   redirect("/portal");
 }
