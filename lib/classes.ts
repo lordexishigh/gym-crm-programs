@@ -396,6 +396,52 @@ export async function promoteFromWaitlist(
 }
 
 /**
+ * Promotions that happened but were never successfully emailed.
+ *
+ * Migration 0019 created `idx_class_bookings_promotion_unnotified` for exactly
+ * this query — "the notify sweep looks for promoted-but-not-yet-notified rows" —
+ * but no sweep existed to run it. Notification happened only inline, on the
+ * `cancelBooking` path that caused the promotion, so any send that failed there
+ * (a provider blip, or simply a deployment with no `RESEND_API_KEY` — which is
+ * production today) left `promotion_notified_at` null forever with nothing to
+ * retry it. The member keeps their spot and is never told, which is the precise
+ * failure 0019 was written to prevent.
+ *
+ * `waitlist_promotion_notify` (lib/task-handlers.ts) is that sweep. Admin
+ * context, `tenant_id` matched explicitly, for the same reason as the promotion
+ * itself: these rows belong to other members.
+ *
+ * Past classes are excluded — emailing "a spot opened up" for a session that has
+ * already happened is worse than saying nothing, and those rows would otherwise
+ * be retried forever.
+ */
+export async function unnotifiedPromotions(
+  tenantId: string,
+  limit = 100,
+): Promise<PromotedBooking[]> {
+  const capped = Math.min(Math.max(1, Math.floor(limit)), 500);
+  return withAdminContext(async (c) => {
+    const { rows } = await c.query<PromotedBooking>(
+      `select cb.id as booking_id, cb.member_id,
+              m.full_name as member_name, m.email as member_email,
+              cl.id as class_id, cl.name as class_name, cl.starts_at
+         from class_bookings cb
+         join member  m  on m.id  = cb.member_id and m.tenant_id  = $1
+         join classes cl on cl.id = cb.class_id  and cl.tenant_id = $1
+        where cb.tenant_id = $1
+          and cb.promoted_at is not null
+          and cb.promotion_notified_at is null
+          and cb.status = 'booked'
+          and cl.starts_at >= now()
+        order by cb.promoted_at asc
+        limit $2`,
+      [tenantId, capped],
+    );
+    return rows;
+  });
+}
+
+/**
  * Stamp `promotion_notified_at` on bookings whose promoted member was
  * successfully emailed, so a later sweep or retry never double-sends. Runs in
  * admin context for the same reason the promotion itself does: the rows belong
