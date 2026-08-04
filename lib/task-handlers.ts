@@ -255,15 +255,51 @@ export async function sweepScheduledWork(
   // One row per gym rather than one per member: the handler does the per-member
   // work in a single query inside the tenant's own context, which keeps the
   // queue small and the connection count low (lib/db.ts caps this process at 3).
-  const tenants = await withAdminContext(async (c) => {
-    const { rows } = await c.query<{ id: string }>(`select id from gym`);
+  //
+  // Both sweeps enqueue only for tenants with WORK TO DO, and that filter is
+  // load-bearing rather than an optimisation. The production database carries
+  // roughly 154 junk tenants left behind by the RLS test suites, which seed
+  // conflicting gyms and never clean up. A bare `select id from gym` would
+  // therefore enqueue ~310 tasks a day for gyms that do not exist, against a
+  // dispatcher that claims 25 per run on a once-daily cron — so the queue would
+  // never drain, and the one real gym's reminders would sit behind a backlog of
+  // work for phantoms. Filtering on the existence of a subject makes the sweep
+  // proportional to real tenants instead of to accumulated test debris.
+  const briefTenants = await withAdminContext(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      // An at-risk brief needs a member who trained and stopped, so a gym with
+      // no active members has nothing to file. Cheap: `idx_member_tenant`.
+      `select g.id
+         from gym g
+        where exists (
+                select 1 from member m
+                 where m.tenant_id = g.id and m.status = 'active'
+              )`,
+    );
+    return rows.map((r) => r.id);
+  });
+
+  const waitlistTenants = await withAdminContext(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      // Only gyms that actually have a promotion awaiting an email. This is the
+      // query `idx_class_bookings_promotion_unnotified` (migration 0019) was
+      // built for, and it normally matches nothing — so the common case
+      // enqueues no waitlist task at all rather than one per gym per day.
+      `select distinct cb.tenant_id as id
+         from class_bookings cb
+         join classes cl on cl.id = cb.class_id and cl.tenant_id = cb.tenant_id
+        where cb.promoted_at is not null
+          and cb.promotion_notified_at is null
+          and cb.status = 'booked'
+          and cl.starts_at >= now()`,
+    );
     return rows.map((r) => r.id);
   });
 
   const week = isoWeek(now);
   const day = dayStamp(now);
 
-  for (const tenantId of tenants) {
+  for (const tenantId of briefTenants) {
     // At-risk briefs are weekly by occasion — see `buildAtRiskBrief`'s dedupe
     // key. Enqueueing them weekly too keeps the queue consistent with the
     // ledger instead of filing a task a day that files nothing.
@@ -272,7 +308,9 @@ export async function sweepScheduledWork(
       kind: TASK_KINDS.atRiskBriefs,
       dedupeKey: dedupeKey(tenantId, week),
     });
+  }
 
+  for (const tenantId of waitlistTenants) {
     // The waitlist sweep is a retry net for a path that normally notifies
     // inline, so daily is the right cadence: anything it finds is something that
     // already failed once. A promotion that fails after today's sweep is picked
