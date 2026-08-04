@@ -1,31 +1,58 @@
-name: Membership expiry reminders
+name: Scheduled work (backup trigger)
 
-# Daily scheduled job (market gap #7): email members whose subscription
-# renews within 7 days. No in-process cron exists in a serverless Next.js
-# deployment, so this runs the standalone script on a schedule instead.
+# Drains the task queue: renewal reminders, weekly at-risk briefs, and the
+# waitlist-notification retry sweep (migration 0020, lib/task-handlers.ts).
+#
+# THIS IS THE BACKUP TRIGGER, NOT THE PRIMARY ONE. The primary is Vercel Cron
+# (`crons` in vercel.json), which runs on the same platform as the app and needs
+# no checkout, no `npm ci`, and no second copy of the database or mail secrets.
+# This workflow is kept as a manual/secondary path — `workflow_dispatch` is
+# genuinely useful for running the queue from a browser when something is parked.
+#
+# Two things worth knowing before relying on it:
+#
+#   1. Actions on this repository has been failing on a spending limit since
+#      2026-07-30 — every workflow dies in about four seconds. So in practice
+#      this has not run, and that is exactly why the primary trigger moved to
+#      Vercel Cron. A green run here should not be assumed.
+#   2. What this workflow used to do was email members DIRECTLY via
+#      scripts/notify-membership-expiry.mjs, which recorded nothing — so a daily
+#      run emailed each renewing member once per day for seven days. It now just
+#      calls the dispatch endpoint, and the queue's dedupe key guarantees one
+#      email per renewal however often this fires.
+#
+# Needs two repository secrets, both far narrower than the four it needed before:
+#   CRON_SECRET  - bearer token for /api/tasks/dispatch (same value as the app's)
+#   APP_BASE_URL - e.g. https://app.yourdomain.eu
+# Note that neither is a database credential or a mail key. Nothing here talks to
+# Postgres or Resend any more; the app does, and it already holds those secrets.
+
 on:
   schedule:
-    - cron: "0 8 * * *" # 08:00 UTC daily
+    - cron: "30 8 * * *" # 08:30 UTC daily — deliberately offset from the Vercel
+      # cron at 08:00 so the two triggers do not race. They are safe if they do
+      # (the lease in migration 0020 means concurrent dispatchers take disjoint
+      # work), but a 30-minute gap also means this one finds anything the
+      # primary left behind rather than duplicating its run.
   workflow_dispatch: {} # allow a manual run from the Actions tab
 
 jobs:
-  notify:
+  dispatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Send membership-expiry reminders
+      - name: Trigger scheduled work
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          INVITE_FROM_EMAIL: ${{ secrets.INVITE_FROM_EMAIL }}
-        run: node scripts/notify-membership-expiry.mjs
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$APP_BASE_URL" ]; then
+            echo "::error::CRON_SECRET and APP_BASE_URL must both be configured as repository secrets."
+            exit 1
+          fi
+          # --fail-with-body so a non-2xx is a failed step AND the reason is
+          # printed: a 503 here means the deployment has no CRON_SECRET set,
+          # which is a different problem from a 401 (wrong secret).
+          curl --silent --show-error --fail-with-body \
+               --max-time 120 \
+               -H "Authorization: Bearer $CRON_SECRET" \
+               -X POST "${APP_BASE_URL%/}/api/tasks/dispatch"
