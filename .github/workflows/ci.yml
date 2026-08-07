@@ -27,6 +27,19 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
+      # lib/db.ts defaults the pg pool to max: 3 — deliberately small because
+      # production talks to Supabase's SHARED session-mode pooler (global cap
+      # 15 across every warm instance). This job's Postgres has no such thing:
+      # it's a dedicated, single-tenant throwaway container this job's `next
+      # start` is the only client of, with Postgres's own default
+      # max_connections (100). A page can legitimately want more than 3
+      # connections at once (lib/db.ts's own comment: the member portal fans
+      # out 7 concurrent withTenantContext calls), so capping this job to 3
+      # makes ordinary concurrent renders and Server Actions queue for a pool
+      # slot that nothing is actually contending for. Raised well below the
+      # container's ceiling, which still leaves ample headroom for the
+      # migration/seed child processes and the test suite's own connections.
+      DB_POOL_MAX: "20"
       # Build-time auth endpoint. Next.js inlines NEXT_PUBLIC_* at build time,
       # so this points at the local GoTrue stand-in (e2e/auth-stub.mjs) that the
       # Playwright journey test starts — the SAME build is then used for both
