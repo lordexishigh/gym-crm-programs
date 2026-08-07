@@ -136,19 +136,29 @@ jobs:
           # "http://localhost:3000/login is already used". So kill the children
           # too, then block until the port is genuinely released.
           #
-          # THE WRAPPER IS SIGNALLED FIRST, and that order is load-bearing now that
-          # it SUPERVISES the server (scripts/lib/supervise.mjs): killing the child
-          # first is indistinguishable from the crash supervision exists to recover
-          # from, so the wrapper would dutifully start a replacement and re-take
-          # port 3000. Signalling the wrapper latches its shutdown flag, which is
-          # what makes it reap its child instead of restarting it. The child sweep
-          # stays as a backstop for a wrapper that never got the signal.
+          # `kill "$SERVER_PID"` targets bash's `$!`, which is the `npm` process —
+          # NOT `node scripts/start.mjs`. npm does not forward SIGTERM to the
+          # script it runs (reproduced directly: a child with its own SIGTERM
+          # handler never saw the signal when only the parent `npm` PID was
+          # killed), so the wrapper's own shutdown/reap logic in
+          # scripts/lib/supervise.mjs never ran, and once `npm` exited the
+          # wrapper was reparented — breaking `pkill -P "$SERVER_PID"` too, since
+          # its PPID was no longer `$SERVER_PID` by the time that ran. Both of
+          # the old sweeps were therefore no-ops, which is what let `next start`
+          # keep holding port 3000 into the next step.
+          #
+          # Signal the wrapper directly by its stable script path instead —
+          # that reaches its real `process.on("SIGTERM", ...)` handler, which
+          # this project's own supervision code uses to gracefully kill and reap
+          # `next start` in turn. `pkill -f "next-server"` never matched the
+          # `next start` process either: Next.js only renames `process.title`
+          # (what `ps` shows), not the argv `pkill -f` actually matches, so it's
+          # kept below only as a last-resort net for a wrapper that already died
+          # some other way.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            # Give the wrapper a moment to reap its own child before sweeping.
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
             for _ in $(seq 1 30); do
               if ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
                 return 0
@@ -254,14 +264,14 @@ jobs:
           npm run start > /tmp/fresh-start.log 2>&1 &
           SERVER_PID=$!
 
-          # Wrapper first — it supervises and would restart a child killed under it.
-          # See the smoke-test step above for why that order matters.
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
             pkill -f "next dev" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
           }
 
           # Deliberately far tighter than a full build: ~4x the measured cold dev
@@ -331,12 +341,13 @@ jobs:
 
           npm run start > /tmp/postinstall-start.log 2>&1 &
           SERVER_PID=$!
-          # Wrapper first — it supervises and would restart a child killed under it.
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
           }
 
           # Deliberately tight: `next start` on a built tree answers in well under
