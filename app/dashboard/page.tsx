@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { CapabilityNotice } from "@/app/components/CapabilityNotice";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,7 @@ type OverviewStats = {
   activeMembers: number;
   programs: number;
   activeAssignments: number;
+  pendingSuggestions: number;
 };
 
 /**
@@ -33,12 +35,14 @@ export default async function DashboardPage() {
         active_members: string;
         programs: string;
         active_assignments: string;
+        pending_suggestions: string;
       }>(
         `select
            (select count(*) from member) as members,
            (select count(*) from member where status = 'active') as active_members,
            (select count(*) from program) as programs,
-           (select count(*) from program_assignment where status = 'active') as active_assignments`,
+           (select count(*) from program_assignment where status = 'active') as active_assignments,
+           (select count(*) from suggestions where status = 'pending') as pending_suggestions`,
       );
       const r = rows[0];
       return {
@@ -46,6 +50,7 @@ export default async function DashboardPage() {
         activeMembers: Number(r?.active_members ?? 0),
         programs: Number(r?.programs ?? 0),
         activeAssignments: Number(r?.active_assignments ?? 0),
+        pendingSuggestions: Number(r?.pending_suggestions ?? 0),
       };
     },
   );
@@ -82,6 +87,21 @@ export default async function DashboardPage() {
   ];
 
   const actions = [
+    // First, and conditional: a pending brief is time-sensitive in a way that
+    // "add a member" is not — it names a member who has already stopped
+    // training, and the value of contacting them decays daily. Hidden entirely
+    // when the queue is empty rather than shown as a zero, so it reads as work
+    // waiting rather than as a permanent fixture.
+    ...(stats.pendingSuggestions > 0
+      ? [
+          {
+            label: `Review ${stats.pendingSuggestions} suggestion${stats.pendingSuggestions === 1 ? "" : "s"}`,
+            hint: "Members who have gone quiet, with the evidence",
+            href: "/dashboard/suggestions",
+            icon: IconPulse,
+          },
+        ]
+      : []),
     {
       label: "Add a member",
       hint: "Create a member and invite them to the portal",
@@ -110,6 +130,9 @@ export default async function DashboardPage() {
           Welcome back. Build training programs and assign them to your members.
         </p>
       </div>
+
+      {/* Deployment gaps, if any — see the component for why this is here. */}
+      <CapabilityNotice />
 
       {/* KPI row */}
       <section aria-label="Gym at a glance">

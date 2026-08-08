@@ -19,6 +19,25 @@ const nextConfig = {
   compress: true,
   productionBrowserSourceMaps: false,
   poweredByHeader: false,
+
+  experimental: {
+    // Server Actions cap their request body at 1 MB by default, and exceeding it
+    // is a framework-level rejection the action never sees — so the member
+    // photo upload would fail with a generic error instead of the readable
+    // message lib/member-photo.ts is written to produce. The headroom here sits
+    // ABOVE that module's own 2 MB ceiling on purpose: the app's limit should be
+    // the one that rejects an oversized photo, with a sentence explaining it.
+    // (Uploads are downscaled in the browser to ~50 KB before they are sent.)
+    serverActions: { bodySizeLimit: "4mb" },
+  },
+
+  // `npm start` on a checkout with no production build serves with `next dev`
+  // instead, so the port answers in seconds rather than after an ~85s build
+  // (scripts/start.mjs explains why that matters). In that mode the dev server is
+  // standing in for the real one, and the floating dev-tools indicator would
+  // overlay every page of the product with a debug badge — so it is off for that
+  // mode only. Plain `npm run dev` does not set this and keeps the indicator.
+  ...(process.env.START_DEV_FALLBACK === "1" ? { devIndicators: false } : {}),
 };
 
 export default nextConfig;

@@ -1,4 +1,7 @@
 import type { PoolClient } from "pg";
+import { withTenantContext, type Identity } from "@/lib/db";
+
+export type StaffRole = "owner" | "trainer";
 
 /**
  * Resolve the signed-in staff member's `users.id` (the FK target for
@@ -19,4 +22,24 @@ export async function resolveStaffUserId(
     [authUserId],
   );
   return rows[0]?.id ?? null;
+}
+
+/**
+ * Resolve the signed-in staff member's `users.role` ("owner" | "trainer").
+ *
+ * The JWT only carries `app_role` ("staff" | "member") — the owner/trainer
+ * distinction lives in the `users` row, so this is a small extra read
+ * (RLS-scoped, same pattern as `resolveStaffUserId`). Defaults to "trainer"
+ * (the least-privileged role) when the row can't be resolved, so a lookup
+ * failure never accidentally grants owner-only access.
+ */
+export async function getStaffRole(identity: Identity): Promise<StaffRole> {
+  if (!identity.userId) return "trainer";
+  return withTenantContext(identity, async (c) => {
+    const { rows } = await c.query<{ role: StaffRole }>(
+      "select role from users where auth_user_id = $1",
+      [identity.userId],
+    );
+    return rows[0]?.role ?? "trainer";
+  });
 }

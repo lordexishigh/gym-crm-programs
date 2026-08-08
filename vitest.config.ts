@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -8,6 +9,14 @@ export default defineConfig({
   // skip the JSX transform — override it for the test pipeline.
   oxc: {
     jsx: { runtime: "automatic" },
+  },
+  resolve: {
+    // Mirrors tsconfig's `"@/*": ["./*"]` so lib modules that import via the
+    // `@/` alias (the Next.js convention) resolve under Vitest too, without
+    // adding a vite-tsconfig-paths dependency.
+    alias: {
+      "@": path.resolve(__dirname),
+    },
   },
   test: {
     // RLS tests open real DB connections; keep them serial and give DB setup

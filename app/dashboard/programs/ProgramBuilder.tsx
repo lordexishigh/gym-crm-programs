@@ -3,29 +3,20 @@
 import { useActionState, useRef, useState } from "react";
 import Link from "next/link";
 import type { ProgramFormState } from "./actions";
+import {
+  inputClass,
+  toDraft,
+  type ExerciseDefault,
+  type ExerciseDraft,
+  type LibraryItem,
+} from "./builder-model";
+import { LibraryPicker } from "./LibraryPicker";
+import { ExerciseDraftList } from "./ExerciseDraftList";
 
 type Action = (
   state: ProgramFormState,
   formData: FormData,
 ) => Promise<ProgramFormState>;
-
-/** One exercise as edited in the browser; `key` is client-only (React list key). */
-type ExerciseDraft = {
-  key: string;
-  name: string;
-  sets: string;
-  reps: string;
-  rest: string;
-  notes: string;
-};
-
-type ExerciseDefault = {
-  name: string;
-  sets: number | null;
-  reps: string | null;
-  rest: string | null;
-  notes: string | null;
-};
 
 type Defaults = {
   id?: string;
@@ -34,39 +25,15 @@ type Defaults = {
   exercises?: ExerciseDefault[];
 };
 
-/** A library exercise the trainer can insert into the program. */
-type LibraryItem = {
-  id: string;
-  name: string;
-  sets: number | null;
-  reps: string | null;
-  rest: string | null;
-  notes: string | null;
-};
-
-const inputClass =
-  "rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand";
-
-function toDraft(e: ExerciseDefault, key: string): ExerciseDraft {
-  return {
-    key,
-    name: e.name,
-    sets: e.sets === null ? "" : String(e.sets),
-    reps: e.reps ?? "",
-    rest: e.rest ?? "",
-    notes: e.notes ?? "",
-  };
-}
-
 /**
- * Trainer-facing program builder (mvp-program-002). Name a program and
- * add/edit/reorder/remove exercises with their sets, reps, rest, and notes.
+ * Trainer-facing program builder (mvp-program-002). The library picker lives in
+ * `LibraryPicker` and the editable rows in `ExerciseDraftList`; this component
+ * owns only the draft array, the form fields, and submission.
  *
- * Exercises are dynamic, so they live in React state and are serialised into a
- * single hidden `exercises` field on submit (the sub-inputs are intentionally
- * unnamed so only the JSON reaches the Server Action, which re-validates it).
- * Wrapping the Server Action via `useActionState` surfaces validation errors
- * inline without losing the entered values.
+ * Drafts live in React state and are serialised into a single hidden
+ * `exercises` field on submit (the row sub-inputs are intentionally unnamed so
+ * only the JSON reaches the Server Action, which re-validates it).
+ * `useActionState` surfaces validation errors inline without losing input.
  */
 export function ProgramBuilder({
   action,
@@ -93,13 +60,8 @@ export function ProgramBuilder({
     (defaults.exercises ?? []).map((e) => toDraft(e, makeKey())),
   );
 
-  // Library picker selection (empty string = no selection yet).
-  const [selectedLib, setSelectedLib] = useState("");
-
   /** Append the chosen library exercise as a new, editable draft. */
-  function addFromLibrary() {
-    const item = library.find((l) => l.id === selectedLib);
-    if (!item) return;
+  function addFromLibrary(item: LibraryItem) {
     setExercises((prev) => [
       ...prev,
       toDraft(
@@ -113,7 +75,6 @@ export function ProgramBuilder({
         makeKey(),
       ),
     ]);
-    setSelectedLib("");
   }
 
   function addExercise() {
@@ -195,31 +156,7 @@ export function ProgramBuilder({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-900">Exercises</h2>
           <div className="flex flex-wrap items-center gap-2">
-            {library.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <select
-                  aria-label="Choose an exercise from the library"
-                  value={selectedLib}
-                  onChange={(ev) => setSelectedLib(ev.target.value)}
-                  className={`${inputClass} py-1.5 text-sm`}
-                >
-                  <option value="">From library…</option>
-                  {library.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={addFromLibrary}
-                  disabled={!selectedLib}
-                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-40"
-                >
-                  Insert
-                </button>
-              </div>
-            ) : null}
+            <LibraryPicker library={library} onInsert={addFromLibrary} />
             <button
               type="button"
               onClick={addExercise}
@@ -230,122 +167,12 @@ export function ProgramBuilder({
           </div>
         </div>
 
-        {exercises.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
-            No exercises yet. Add your first exercise to build the program.
-          </div>
-        ) : (
-          <ol className="flex flex-col gap-3">
-            {exercises.map((e, i) => (
-              <li
-                key={e.key}
-                className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-semibold text-slate-500">
-                    Exercise {i + 1}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => move(i, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move exercise ${i + 1} up`}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(i, 1)}
-                      disabled={i === exercises.length - 1}
-                      aria-label={`Move exercise ${i + 1} down`}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeExercise(e.key)}
-                      aria-label={`Remove exercise ${i + 1}`}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm font-medium text-red-600 transition hover:bg-red-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-
-                <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                  Name
-                  <input
-                    type="text"
-                    value={e.name}
-                    onChange={(ev) =>
-                      updateExercise(e.key, "name", ev.target.value)
-                    }
-                    className={inputClass}
-                    placeholder="Back squat"
-                  />
-                </label>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                    Sets
-                    <input
-                      type="number"
-                      min={0}
-                      inputMode="numeric"
-                      value={e.sets}
-                      onChange={(ev) =>
-                        updateExercise(e.key, "sets", ev.target.value)
-                      }
-                      className={inputClass}
-                      placeholder="5"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                    Reps
-                    <input
-                      type="text"
-                      value={e.reps}
-                      onChange={(ev) =>
-                        updateExercise(e.key, "reps", ev.target.value)
-                      }
-                      className={inputClass}
-                      placeholder="5 (or 8-12)"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                    Rest
-                    <input
-                      type="text"
-                      value={e.rest}
-                      onChange={(ev) =>
-                        updateExercise(e.key, "rest", ev.target.value)
-                      }
-                      className={inputClass}
-                      placeholder="90s"
-                    />
-                  </label>
-                </div>
-
-                <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                  Notes{" "}
-                  <span className="font-normal text-slate-400">(optional)</span>
-                  <input
-                    type="text"
-                    value={e.notes}
-                    onChange={(ev) =>
-                      updateExercise(e.key, "notes", ev.target.value)
-                    }
-                    className={inputClass}
-                    placeholder="Tempo, cues, or substitutions"
-                  />
-                </label>
-              </li>
-            ))}
-          </ol>
-        )}
+        <ExerciseDraftList
+          exercises={exercises}
+          onUpdate={updateExercise}
+          onMove={move}
+          onRemove={removeExercise}
+        />
       </div>
 
       {state.error ? (

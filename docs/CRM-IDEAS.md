@@ -1,7 +1,33 @@
 # Alpha CRM — Competitive Ideas & Prioritized Roadmap
 
 > **For:** Product owner, morning review.
-> **Date:** 2026-06-25.
+> **Date:** 2026-06-25. **Partially superseded — see the status note below.**
+> **Companion doc:** [`AI-IDEAS.md`](AI-IDEAS.md) (2026-08-04) covers the
+> architecture ideas taken from an agent-first CRM, and what shipped from them.
+
+## Status note (added 2026-08-04)
+
+Two things in this document are now out of date, and one of them is a reversal
+rather than a delay — worth knowing before using this as a prioritisation input.
+
+- **"Explicitly not doing: class scheduling / booking" is no longer true.** It
+  shipped: migrations `0015_class_scheduling` and `0016_checkin`,
+  `lib/classes.ts`, `lib/checkin.ts`, and the `/dashboard/classes` and
+  `/dashboard/checkin` routes. The argument below for *not* building it (off-wedge,
+  competing where incumbents are entrenched) was never rebutted anywhere — the
+  feature simply arrived. That is worth a decision either way rather than leaving
+  the doc contradicting the product.
+- **Several "apply now" items have landed.** #1 roster engagement signal
+  (`memberEngagementLevel` + the roster badge), #2 live dashboard tiles
+  (`app/dashboard/page.tsx` KPI row). Item #1's follow-through — turning the badge
+  into something actionable — shipped on 2026-08-04 as the at-risk *brief* and the
+  `/dashboard/suggestions` review queue (`lib/briefs.ts`, migration 0021).
+- **Still open:** #3 per-exercise set logging + PRs (`ga-engagement-002`) — which
+  is also the prerequisite for progression suggestions in `AI-IDEAS.md` — #4
+  member-detail activity timeline, #5 trainer follow-up tasks, and #6 lifecycle
+  nudges. Note that #6 no longer needs new infrastructure: the task queue
+  (migration 0020) is the scheduling substrate it was missing, and the at-risk
+  signal that should trigger it already exists.
 > **What this is:** A grounded scan of what the best gym/fitness CRMs and a few leading SaaS CRMs do well, evaluated specifically against *our* wedge — **member-facing training programs** delivered on a mobile-first web portal, on a Next.js + Postgres-RLS, EU/GDPR stack. Every idea is tagged with effort/impact and tied to our existing architecture. Sources are real and linked at the bottom; nothing here is invented from memory.
 
 **Our reality check (so recommendations stay honest):** We are a 1–2 dev team. Our differentiator is trainer-authored programs that members actually open and *log*. We already have: staff dashboard (roster with search/filter/pagination, member detail + status history, invite lifecycle, exercise library, program templates, program builder, assignment lifecycle), member portal (view program, history, **log workout**, workout history), GDPR export/erasure, email invites with webhook tracking, observability, a11y/web-vitals budgets. We do **not** have billing, scheduling/booking, or native apps — and several of those are deliberate.
@@ -72,10 +98,10 @@ Tags: **Impact** (member retention / trainer daily value) × **Effort** (for our
 
 ### Explicitly not doing (and why)
 
-- **Class scheduling / booking & door-access integrations (Mindbody/Glofox/Kisi).** Off-wedge. We're a *program-delivery* CRM, not a front-desk/booking system. Adding it dilutes focus and competes head-on where incumbents are entrenched.
+- ~~**Class scheduling / booking & door-access integrations (Mindbody/Glofox/Kisi).** Off-wedge. We're a *program-delivery* CRM, not a front-desk/booking system. Adding it dilutes focus and competes head-on where incumbents are entrenched.~~ **Reversed in practice, not in argument** — scheduling, booking, waitlists and QR/PIN check-in shipped (0015/0016). Door access remains out. See the status note at the top.
 - **Full marketing-site builder + lead-gen pipeline (PushPress Grow).** Our entry is invite-only B2B onboarding, not consumer lead capture. The marketing machinery is a different product and a team-size mismatch.
 - **SMS/WhatsApp as the *primary* channel (now).** Adds a vendor, per-message cost, and extra GDPR consent surface. Email (already wired via Resend) covers the lifecycle nudges first; reconsider SMS only if open rates prove inadequate.
-- **ML-based churn prediction.** The incumbents' "AI" framing is mostly a rules engine over attendance/engagement. Our rules-based at-risk score (#1) captures the value without the modeling, data-volume, and explainability burden.
+- **ML-based churn prediction.** The incumbents' "AI" framing is mostly a rules engine over attendance/engagement. Our rules-based at-risk score (#1) captures the value without the modeling, data-volume, and explainability burden. **Still the right call, and now implemented that way**: `lib/briefs.ts` decides who is at risk with rules and narrates it with a template, so the output is deterministic and auditable — which it has to be, since it is read as the basis for contacting a member about their training. See [`AI-IDEAS.md`](AI-IDEAS.md) for where a model could legitimately fit and why it is gated off by default.
 - **Billing / payments (now).** Deliberately deferred per project scope; access stays decoupled from payment. Revisit when paying-gym scale demands it.
 
 ---

@@ -176,7 +176,62 @@ proceeds unless the isolation audit is green**.
 
 ---
 
-## 4. Residual notes / future hardening
+## 4. Dependency vulnerability audit (`npm audit`)
+
+Audited 2026-07-25 against the npm advisory database. Result with the pins
+below in place — the exact zero-high/critical evidence:
+
+```
+$ npm audit
+found 0 vulnerabilities
+```
+
+(`npm audit --json` metadata: `info 0, low 0, moderate 0, high 0, critical 0`
+across 263 resolved packages.)
+
+### 4.1 `next` — pinned to `^15.5.21` (lockfile resolves 15.5.21)
+
+15.5.21 is the **minimum** version clearing every published advisory on the
+15.x line; the most recent batch is fixed *exactly* in 15.5.21, so nothing
+lower passes audit:
+
+Advisories are identified by their GHSA slug (the npm advisory database's
+primary identifier); consult each linked advisory for any CVE assignment.
+
+| Advisory | Severity | Fixed in |
+| --- | --- | --- |
+| [GHSA-89xv-2m56-2m9x](https://github.com/advisories/GHSA-89xv-2m56-2m9x) — SSRF in Server Actions on custom servers | high | **15.5.21** |
+| [GHSA-m99w-x7hq-7vfj](https://github.com/advisories/GHSA-m99w-x7hq-7vfj) — DoS in App Router using Server Actions | high | **15.5.21** |
+| [GHSA-p9j2-gv94-2wf4](https://github.com/advisories/GHSA-p9j2-gv94-2wf4) — SSRF in rewrites via attacker-controlled destination | high | **15.5.21** |
+| [GHSA-26hh-7cqf-hhc6](https://github.com/advisories/GHSA-26hh-7cqf-hhc6) — middleware/proxy bypass via segment-prefetch routes (incomplete-fix follow-up) | high | 15.5.18 |
+| [GHSA-492v-c6pp-mqqv](https://github.com/advisories/GHSA-492v-c6pp-mqqv) — middleware/proxy bypass via dynamic route parameter injection | high | 15.5.16 |
+| [GHSA-c4j6-fc7j-m34r](https://github.com/advisories/GHSA-c4j6-fc7j-m34r) — SSRF via WebSocket upgrades | high | 15.5.16 |
+| [GHSA-267c-6grr-h53f](https://github.com/advisories/GHSA-267c-6grr-h53f) — middleware/proxy bypass via segment-prefetch routes | high | 15.5.16 |
+| [GHSA-mg66-mrh9-m8jx](https://github.com/advisories/GHSA-mg66-mrh9-m8jx) — DoS via connection exhaustion (Cache Components) | high | 15.5.16 |
+| [GHSA-9qr9-h5gf-34mp](https://github.com/advisories/GHSA-9qr9-h5gf-34mp) — RCE in React flight protocol | **critical** | 15.5.7 |
+
+(Plus the moderate/low 15.5.21-fixed advisories GHSA-68g3-v927-f742,
+GHSA-4633-3j49-mh5q, GHSA-4c39-4ccg-62r3, GHSA-955p-x3mx-jcvp — all cleared by
+the same pin.)
+
+### 4.2 `sharp` — override `^0.35.3` (lockfile resolves 0.35.3)
+
+`sharp` is an optional dependency of `next` (image optimization), so it is not
+a direct dependency; the `overrides` entry in `package.json` forces the
+resolved version wherever it installs:
+
+| Advisory | Severity | Fixed in |
+| --- | --- | --- |
+| [GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) — inherited libvips vulnerabilities | high | 0.35.0 |
+
+The override (`0.35.3` in the lockfile) sits above the 0.35.0 fix boundary.
+
+Note: `overrides` changes only take effect on a clean install
+(`rm -rf node_modules && npm install` / `npm ci`), not an incremental one.
+
+---
+
+## 5. Residual notes / future hardening
 
 - Edge middleware gates protected paths coarsely (valid token → proceed); exact
   role-vs-path enforcement is in the route layouts (`requireStaff` /

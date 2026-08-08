@@ -6,6 +6,7 @@ import {
   REFRESH_TOKEN_COOKIE,
   sessionCookieOptions,
 } from "@/lib/auth/cookies";
+import { SIGN_IN_REASON_PARAM } from "@/lib/auth/sign-in-reason";
 
 /**
  * Session refresh + protected-route gating (edge runtime).
@@ -66,10 +67,14 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // No usable session: clear any stale cookies and redirect to login.
+  // No usable session: clear any stale cookies and redirect to login. The
+  // original query string is dropped (it belongs to the protected route, not to
+  // the form) but the reason is carried so the form can explain itself rather
+  // than appearing to have rejected the visitor for nothing.
   const url = req.nextUrl.clone();
   url.pathname = loginPathFor(pathname);
   url.search = "";
+  url.searchParams.set(SIGN_IN_REASON_PARAM, "session-expired");
   const res = NextResponse.redirect(url);
   res.cookies.delete(ACCESS_TOKEN_COOKIE);
   res.cookies.delete(REFRESH_TOKEN_COOKIE);

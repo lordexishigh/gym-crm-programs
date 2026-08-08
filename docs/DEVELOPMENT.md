@@ -10,13 +10,205 @@ The exact commands depend on the tech stack (see `docs/ARCHITECTURE.md`). Genera
 
 1. **Install dependencies**
    - Python: `python -m pip install -r requirements.txt`
-   - Node:   `npm install`
+   - Node:   `npm install` — takes about a minute longer than you may expect,
+     because it also produces the production build (see below)
 2. **Run tests**
    - Python: `python -m pytest`
    - Node:   `npm test`
 3. **Build / start**
-   - Frontend: `npm run build` then `npm run dev` / `npm start`
+   - Frontend: `npm start` (the install already built it) or `npm run dev`
    - Backend:  start the app entrypoint documented in the architecture
+
+### Running the authenticated journeys
+
+`npm test` and `npm run test:e2e` both **skip** everything that needs a database
+rather than failing, so a green run on a machine with no Postgres says nothing
+about the signed-in product. That is not a hypothetical gap: it is how a review
+could report "no authenticated user journey was run, leaving the entire staff
+side unverified" while every suite passed.
+
+Two Playwright journeys cover the two halves of the product, and they are the
+only tests that exercise a real session against real RLS:
+
+| spec | journey |
+| --- | --- |
+| `e2e/invite-flow.spec.ts` | invite → accept → auto sign-in → member portal → logout → password sign-in |
+| `e2e/staff-journey.spec.ts` | staff sign-in → dashboard → add a member → author a program → assign it → confirm the counts → logout |
+
+Both need a **local throwaway Postgres** (they refuse to touch a non-local
+`DATABASE_URL`, mirroring `test/setup/db-safety.ts`) and a build made against
+the GoTrue stand-in, because Next.js inlines `NEXT_PUBLIC_*` at build time:
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+  --name alpha-pg postgres:16
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+export NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+export NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_e2e_stub
+
+npm run migrate
+npm run build          # must be built with the NEXT_PUBLIC_* values above
+npm run test:e2e       # Playwright starts e2e/auth-stub.mjs and `npm start`
+```
+
+Each journey seeds its own gym, staff/member and auth-stub users, and deletes
+them afterwards. Screenshots of every surface they walk — the staff dashboard
+and an assigned program included — land in `e2e-screenshots/` (gitignored; CI
+uploads them on every run).
+
+### `npm install` builds the app, on purpose
+
+`.next/` is gitignored, so a fresh clone has no production build.
+`scripts/postinstall.mjs` creates one during install, because that is the only
+point in the lifecycle where waiting for a build costs nothing — nothing is
+listening on a port, so no client can be kept waiting by it. Measured here, time
+from launching `npm start` to a served `/`:
+
+| checkout state | time to a served `/` |
+| --- | --- |
+| production build present (`next start`) | **0.2s** |
+| no build (`next dev` fallback) | **20s** |
+
+A QA harness gives a navigation 20s, so the unbuilt path sat exactly on the
+budget and intermittently reported the entire app as unreachable — the same
+"`goto('/')`: Timeout 20000ms exceeded" finding, four review rounds running. The
+20s is the first webpack/Turbopack compile and cannot be gated or warmed away;
+the only real fix is for the build to already exist.
+
+It skips itself whenever building would be wasted or wrong: `ALPHA_SKIP_BUILD=1`
+(CI sets this — it builds in its own step), on Vercel (which builds after
+installing, with the deployment's env), when `.next/BUILD_ID` is already present,
+when devDependencies are absent (`--omit=dev` cannot build), and when another
+process already owns `.next`. It never fails an install: if the build fails,
+`npm start` still serves via its `next dev` fallback.
+
+### Never install without devDependencies
+
+That last sentence has one exception, and it used to be this project's worst bug.
+The `next dev` fallback is **not** a safety net for a tree installed with
+`--omit=dev` (or `NODE_ENV=production`, which npm treats identically), because
+the packages that turn source into HTML are themselves devDependencies:
+`tailwindcss` and `autoprefixer` are the PostCSS plugins named by
+`postcss.config.mjs`, `app/globals.css` is imported by `app/layout.tsx` on every
+route, and every route is TypeScript. Without them nothing compiles — not a
+build, not a dev server, not one page.
+
+The result was total unreachability that named nothing: install quietly skipped
+the build, `next dev` shelled out to npm mid-boot to install TypeScript for
+itself, no route ever compiled, the readiness gate waited on entry routes that
+could never answer, and every caller reported a timeout. Reproduced end to end:
+`NODE_ENV=production npm ci` installed **70** packages instead of 230, and
+`GET /` returned nothing for 222s and then timed out at exactly 45.005s. That is
+the "member portal is completely unreachable — `/login` and `/portal/login` time
+out at 45s" finding, and it recurred for several review rounds because every
+verification used a normal `npm ci`, which is the one install that works.
+
+Two things now prevent it:
+
+- **`.npmrc` sets `include=dev`.** `include` is the inverse of `omit` and wins
+  over it wherever either is set, so devDependencies survive both an inherited
+  `NODE_ENV=production` and an explicit `--omit=dev` on the command line.
+  Verified: `npm ci --omit=dev` installs all 230 packages.
+- **`npm start` preflights them** (`missingRenderDeps` in
+  `scripts/lib/dev-server.mjs`) and refuses to start in under a second, naming
+  the missing packages and the fix, rather than holding a port that could never
+  answer. A hand-pruned `node_modules` therefore fails loudly instead of mutely.
+
+CI asserts the first of these on every run (`npm ci --omit=dev --dry-run` must
+still plan to install tailwindcss, autoprefixer and typescript).
+
+### `npm run dev` takes ~20s to open its port, on purpose
+
+`npm run dev` runs `scripts/dev.mjs`, which does not open the port until every
+entry route — `/`, `/login` and `/portal/login` — has actually been served on it.
+`next dev` on its own binds at ~3s but cannot render `/` for another ~14s (dev
+compiles each route on its first request), so an open port used to mean
+"connections accepted, none answered" — and the first navigation, from a browser
+or a QA harness, waited out that whole compile and looked like a hang.
+Withholding the port turns that into "not open yet", which readiness loops
+already handle correctly; total time is unchanged, but the first page load drops
+from ~16s to under 1s.
+
+The gate covers all three routes rather than just `/`, because gating on `/`
+alone only moves the problem: the login routes then compile *behind* an open
+port, and a caller that reads "port open" as "ready for QA" spends its first
+navigation to `/login` paying that route's cold compile. The distinctive symptom
+is the landing page loading fine while both login pages time out — which reads as
+a broken auth wall rather than as a server announced ready too early. Warming is
+concurrent, so the shared module graph compiles once and covering all three costs
+nothing (measured cold: port at 18.5s, then `/login` 0.9s, `/portal/login` 1.0s;
+8.2s to the port with a warm cache).
+
+Once it is up, all three are compiled and a `Ready for QA` line says so.
+Everything else behaves like plain `next dev`, HMR included — the port is fronted
+by a byte-for-byte TCP forwarder, not a proxy that rewrites anything.
+
+- `DEV_GATE=0` — bind immediately, exactly as `next dev` does
+- `DEV_WARMUP=0` — narrow the gate back to `/` only
+- `START_DEV_TURBOPACK=0` — skip Turbopack
+- `npm run dev:next` — plain `next dev`, no wrapper at all
+
+## `npm start` and unusable builds
+
+`npm start` treats "there is a build" as the whole artifact set `next start` opens,
+not just `.next/BUILD_ID`. This matters because `next start` checks BUILD_ID and
+then opens several manifests *without* checking them, so a partial `.next` dies on
+a bare `ENOENT` **and exits 0** — a dead server reporting success, with nothing
+bound to the port, which every caller sees as "`/` times out". Two states produce
+it routinely: an interrupted build (BUILD_ID is written before the manifests), and
+a dev server killed mid-write (a full set of files plus a dev-shaped
+`routes-manifest.json` with no `dataRoutes`, which crashes `next start` on
+`routesManifest.dataRoutes is not iterable`). Both are detected, named in the log,
+and rebuilt by the install-time build.
+
+Because a file check cannot catch a *corrupt* manifest or a build from another
+Next.js version, the wrapper also supervises the server it starts: if `next start`
+exits without ever answering a request, it falls back to `next dev` instead of
+exiting onto a dark port. An unbound port black-holes connections rather than
+refusing them, so leaving one dark is what turns a broken build into "the whole
+product is unreachable".
+
+- `START_PROD_FALLBACK=0` — make an unusable production build a hard failure
+- `START_PROD_READY_MS` — how long to wait for the first response (default 30s)
+- `START_AUTOBUILD=0` — make a *missing* build a hard failure
+
+## `npm start` keeps the server alive, not just started
+
+Everything above guards **startup**. Nothing used to guard the rest of the server's
+life: a single death at any later point ended the wrapper and left the port unbound
+for the remainder of the run. Reproduced against a good production build — `/`
+answered `200` in 15ms, the server process was killed the way a crash or an OOM
+kill kills it, and 20s later the wrapper had exited (code 1) with nothing
+listening.
+
+That is what an automated review reported as "the app itself intermittently times
+out even on `/`". The first part of a crawl gets clean 200s; after one death every
+URL fails, the static landing page included. Locally that failure is a prompt
+connection refusal, but a caller reaching the host through a forwarded port,
+container or proxy gets no refusal at all — an unbound port black-holes the SYN —
+so each request instead hangs to its full budget. One recoverable crash therefore
+reads as root-level instability blocking all QA.
+
+So the serving process is now watched for its whole lifetime and relaunched
+(`scripts/lib/supervise.mjs`), on both the `next start` and the `next dev` fallback
+path. A production server is answering again about a second after it dies; the dev
+fallback takes ~10s, since it recompiles the entry routes behind the gate. The
+policy is deliberately narrow: a server that **never answered** is not restarted
+(the fallback above is the better answer for that), a deliberate Ctrl-C or CI
+teardown is not a crash, and restarts are bounded so a genuine crash loop is
+reported rather than hidden under a thousand relaunches. The budget resets after a
+run that stayed up, so a server that crashes rarely is always recovered.
+
+- `START_SUPERVISE=0` — exit with the server, as before (for callers running their
+  own process supervisor, e.g. systemd or a container restart policy)
+- `START_MAX_RESTARTS` — consecutive quick deaths tolerated (default 5)
+- `START_PORT_RELEASE_MS` — how long to wait for the dying server to release the
+  port before relaunching (default 10s)
+
+**When stopping a supervised server, signal the wrapper — not its child.** Killing
+the child is indistinguishable from the crash supervision exists to recover from,
+so the wrapper will start a replacement and re-take the port. `ci.yml` does this in
+the right order; copy it rather than the other way round.
 
 ## Project layout
 

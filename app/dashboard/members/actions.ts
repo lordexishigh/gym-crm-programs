@@ -14,6 +14,8 @@ import {
 import { sendEmail } from "@/lib/email/resend";
 import { captureException, reportHandledError } from "@/lib/observability/monitoring";
 import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
+import { generateUniquePinCode } from "@/lib/checkin";
+import { isUuid, sniffImageType, validatePhotoUpload } from "@/lib/member-photo";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -56,18 +58,45 @@ export async function createMemberAction(
     phone: formData.get("phone"),
     status: formData.get("status"),
     notes: formData.get("notes"),
+    photoUrl: formData.get("photoUrl"),
+    emergencyContactName: formData.get("emergencyContactName"),
+    emergencyContactPhone: formData.get("emergencyContactPhone"),
+    membershipStatus: formData.get("membershipStatus"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, phone, status, notes } = parsed.value;
+  const {
+    fullName,
+    email,
+    phone,
+    status,
+    notes,
+    photoUrl,
+    emergencyContactName,
+    emergencyContactPhone,
+    membershipStatus,
+  } = parsed.value;
 
   let newId: string;
   try {
     newId = await withTenantContext(session.identity, async (c) => {
       const { rows } = await c.query<{ id: string }>(
-        `insert into member (tenant_id, full_name, email, phone, status, notes)
-         values ($1, $2, $3, $4, $5, $6)
+        `insert into member
+           (tenant_id, full_name, email, phone, status, notes, photo_url,
+            emergency_contact_name, emergency_contact_phone, membership_status)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          returning id`,
-        [session.identity.tenantId, fullName, email, phone, status, notes],
+        [
+          session.identity.tenantId,
+          fullName,
+          email,
+          phone,
+          status,
+          notes,
+          photoUrl,
+          emergencyContactName,
+          emergencyContactPhone,
+          membershipStatus,
+        ],
       );
       const id = rows[0].id;
       // Seed the status history with the initial status (old_status null).
@@ -77,6 +106,9 @@ export async function createMemberAction(
          values ($1, $2, null, $3, $4)`,
         [session.identity.tenantId, id, status, await staffUserId(c, session.identity.userId)],
       );
+      // Every member gets a check-in PIN from day one (market gap #5) — the
+      // qr_token column already defaults itself via gen_random_uuid().
+      await generateUniquePinCode(c, session.identity.tenantId, id);
       return id;
     });
   } catch (err) {
@@ -106,9 +138,23 @@ export async function updateMemberAction(
     phone: formData.get("phone"),
     status: formData.get("status"),
     notes: formData.get("notes"),
+    photoUrl: formData.get("photoUrl"),
+    emergencyContactName: formData.get("emergencyContactName"),
+    emergencyContactPhone: formData.get("emergencyContactPhone"),
+    membershipStatus: formData.get("membershipStatus"),
   });
   if (!parsed.ok) return { error: parsed.error };
-  const { fullName, email, phone, status, notes } = parsed.value;
+  const {
+    fullName,
+    email,
+    phone,
+    status,
+    notes,
+    photoUrl,
+    emergencyContactName,
+    emergencyContactPhone,
+    membershipStatus,
+  } = parsed.value;
 
   let updated: number;
   try {
@@ -125,9 +171,22 @@ export async function updateMemberAction(
       const res = await c.query(
         `update member
             set full_name = $2, email = $3, phone = $4, status = $5,
-                notes = $6, updated_at = now()
+                notes = $6, photo_url = $7, emergency_contact_name = $8,
+                emergency_contact_phone = $9, membership_status = $10,
+                updated_at = now()
           where id = $1`,
-        [id, fullName, email, phone, status, notes],
+        [
+          id,
+          fullName,
+          email,
+          phone,
+          status,
+          notes,
+          photoUrl,
+          emergencyContactName,
+          emergencyContactPhone,
+          membershipStatus,
+        ],
       );
 
       if (prev.status !== status) {
@@ -162,7 +221,22 @@ export async function updateMemberAction(
   redirect(`/dashboard/members/${id}`);
 }
 
-export type InviteState = { error?: string; success?: string };
+export type InviteState = {
+  error?: string;
+  success?: string;
+  /**
+   * Set when the invite IS valid but its email could not be delivered. Distinct
+   * from `error`, which means no usable invite exists.
+   */
+  warning?: string;
+  /**
+   * The onboarding link for the invite just issued. Returned so staff can pass
+   * it on themselves — the only way to onboard a member on a deployment with no
+   * mail provider configured, and a useful escape hatch when a member simply
+   * never receives the email.
+   */
+  acceptUrl?: string;
+};
 
 /**
  * Issue an invite for a member: store a single-use, token-bound invite row and
@@ -216,9 +290,8 @@ export async function sendInviteAction(
           )
         ).rows[0]?.id ?? null;
 
-      // NOTE: prior pending invites are NOT revoked here — only after the email
-      // for this new invite actually sends (below). If the send fails we delete
-      // this row, and the member keeps whatever valid invite they already had.
+      // Prior pending invites are superseded below, once this row is known to
+      // be the one staff will actually use.
       const { rows } = await c.query<{ id: string }>(
         `insert into invite
            (tenant_id, member_id, email, token_hash, status, expires_at, created_by)
@@ -251,55 +324,73 @@ export async function sendInviteAction(
     text: inviteEmailText(member.full_name, acceptUrl),
   });
 
-  if (!sent.ok) {
-    // A synchronous send failure (bad config, provider rejection, network) is a
-    // critical reliability signal: invites are how members onboard, so a failing
-    // send path should page someone, not just surface to one staff member.
-    await captureException(new Error(`Invite send failed: ${sent.error}`), {
-      source: "send-invite",
-      severity: "critical",
-      memberId,
-      tenantId: session.identity.tenantId,
-    });
-    // Roll the invite back so we don't leave a token-bound row that was never
-    // delivered; staff can simply try again.
-    try {
-      await withTenantContext(session.identity, async (c) => {
-        await c.query("delete from invite where id = $1", [inviteId]);
-      });
-    } catch {
-      // best-effort cleanup
-    }
-    return { error: `Invite created but the email failed to send: ${sent.error}` };
-  }
-
-  // The new link is delivered — record the Resend message id (so the inbound
-  // webhook can correlate later bounce/complaint events back to this invite) and
-  // supersede any OTHER still-pending invite so only the newest link works. Done
-  // post-send so a failed send never leaves the member with no valid invite.
-  // Best-effort: the new invite is already usable.
+  // A failed SEND is not a failed INVITE.
+  //
+  // This used to delete the row and report an error, which made onboarding
+  // impossible on any deployment without a mail provider: the invite that had
+  // just been granted was destroyed because the notification about it did not
+  // go out, so there was no link left for anyone to use and no trace in the
+  // invite list. Since the row IS the grant of access — and the token is
+  // already in hand — the invite is kept and the link is handed to the staff
+  // member instead. Email is one delivery channel for it, not the invite
+  // itself.
+  //
+  // The outcome is recorded either way: 'sent' carries the Resend message id so
+  // the inbound webhook can correlate later bounce/complaint events back to
+  // this row, and 'failed' carries the reason, which `InviteList` already
+  // surfaces as a "Delivery failed" flag against the invite.
   try {
     await withTenantContext(session.identity, async (c) => {
       await c.query(
         `update invite
-            set resend_message_id = $2,
-                delivery_status   = 'sent',
+            set resend_message_id   = $2,
+                delivery_status     = $3,
+                delivery_detail     = $4,
                 delivery_updated_at = now()
           where id = $1`,
-        [inviteId, sent.id],
+        [
+          inviteId,
+          sent.ok ? sent.id : null,
+          sent.ok ? "sent" : "failed",
+          sent.ok ? null : sent.error,
+        ],
       );
+      // Supersede any OTHER still-pending invite so only the newest link works.
       await c.query(
         "update invite set status = 'revoked' where member_id = $1 and status = 'pending' and id <> $2",
         [memberId, inviteId],
       );
     });
   } catch {
-    // best-effort supersede; the delivered invite remains valid regardless
+    // Best-effort bookkeeping; the invite itself is already usable.
   }
 
   revalidatePath(`/dashboard/members/${memberId}`);
   revalidatePath("/dashboard/invites");
-  return { success: `Invite sent to ${member.email}.` };
+
+  if (!sent.ok) {
+    // An unconfigured mail provider is an operator-level gap, not an incident:
+    // it would otherwise page on every single invite, on a deployment where
+    // nothing is broken and the manual-link path works. A provider REJECTION or
+    // an unreachable service is the reliability signal worth escalating —
+    // invites are how members onboard.
+    await captureException(new Error(`Invite email failed: ${sent.error}`), {
+      source: "send-invite",
+      severity: sent.reason === "not_configured" ? "warning" : "critical",
+      reason: sent.reason,
+      memberId,
+      tenantId: session.identity.tenantId,
+    });
+    return {
+      warning:
+        sent.reason === "not_configured"
+          ? `The invite for ${member.email} is ready, but this deployment cannot send email. Share the link below with them directly.`
+          : `The invite for ${member.email} is ready, but the email could not be sent (${sent.error}). Share the link below with them directly.`,
+      acceptUrl,
+    };
+  }
+
+  return { success: `Invite sent to ${member.email}.`, acceptUrl };
 }
 
 /**
@@ -345,6 +436,130 @@ export async function revokeInviteAction(
   revalidatePath("/dashboard/invites");
   if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
   return { success: "Invite revoked." };
+}
+
+/**
+ * Issue a fresh check-in PIN for a member (market gap #5) — used for a
+ * pre-existing member created before PINs existed, or when a member forgets
+ * theirs and asks for a new one.
+ */
+export async function regeneratePinAction(formData: FormData): Promise<void> {
+  const session = await requireStaff();
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId) return;
+
+  await withTenantContext(session.identity, (c) =>
+    generateUniquePinCode(c, session.identity.tenantId, memberId),
+  );
+
+  revalidatePath(`/dashboard/members/${memberId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Member profile photo (market gap: "staff cannot attach a face to a record").
+//
+// Both actions are invoked DIRECTLY from the client panel rather than as a
+// `<form action>` — the uploader downscales the chosen image in the browser
+// first, so it builds its own FormData. They therefore take a plain FormData and
+// return a result object instead of following the `useActionState` shape.
+//
+// The bytes are stored in `member_photo` (migration 0019), an RLS-scoped table:
+// the INSERT runs as `app_user`, so a cross-tenant member id is rejected by the
+// policy's WITH CHECK rather than by a predicate this code has to remember.
+
+export type PhotoActionState = { error?: string; success?: string };
+
+/** Store (or replace) a member's profile photo. */
+export async function uploadMemberPhotoAction(
+  formData: FormData,
+): Promise<PhotoActionState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
+
+  const file = formData.get("photo");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose an image to upload." };
+  }
+
+  const check = validatePhotoUpload({ type: file.type, size: file.size });
+  if (!check.ok) return { error: check.error };
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+
+  // Derive the content type from the BYTES, never from the browser's claim: the
+  // photo route echoes the stored type back on the response, so this is what
+  // stops mislabelled content being served under an image content type.
+  const contentType = sniffImageType(bytes);
+  if (!contentType) {
+    return { error: "That file is not a JPEG, PNG or WebP image." };
+  }
+
+  let saved: boolean;
+  try {
+    saved = await withTenantContext(session.identity, async (c) => {
+      // RLS makes a member outside this gym invisible, so this doubles as the
+      // authorisation check — and turns the composite-FK violation that would
+      // otherwise follow into a clean "not found".
+      const found = await c.query("select 1 from member where id = $1", [memberId]);
+      if ((found.rowCount ?? 0) === 0) return false;
+
+      await c.query(
+        `insert into member_photo
+           (member_id, tenant_id, content_type, bytes, byte_size)
+         values ($1, $2, $3, $4, $5)
+         on conflict (member_id) do update
+           set content_type = excluded.content_type,
+               bytes        = excluded.bytes,
+               byte_size    = excluded.byte_size,
+               updated_at   = now()`,
+        [memberId, session.identity.tenantId, contentType, bytes, bytes.length],
+      );
+      return true;
+    });
+  } catch (err) {
+    await reportHandledError(err, "upload-member-photo", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not save the photo. Please try again." };
+  }
+
+  if (!saved) return { error: "Member not found." };
+
+  revalidatePath("/dashboard/members");
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return { success: "Photo updated." };
+}
+
+/**
+ * Remove a member's uploaded photo. Idempotent — removing a photo that is
+ * already gone reports success, since the end state the caller asked for holds.
+ */
+export async function removeMemberPhotoAction(
+  formData: FormData,
+): Promise<PhotoActionState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
+
+  try {
+    await withTenantContext(session.identity, async (c) => {
+      await c.query("delete from member_photo where member_id = $1", [memberId]);
+    });
+  } catch (err) {
+    await reportHandledError(err, "remove-member-photo", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not remove the photo. Please try again." };
+  }
+
+  revalidatePath("/dashboard/members");
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return { success: "Photo removed." };
 }
 
 // ---------------------------------------------------------------------------

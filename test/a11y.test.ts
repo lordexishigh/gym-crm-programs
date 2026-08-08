@@ -23,6 +23,8 @@ vi.mock("../app/invite/accept/actions", () => ({
 import { ProgramView } from "../app/portal/ProgramView";
 import { MemberForm } from "../app/dashboard/members/MemberForm";
 import { ProgramBuilder } from "../app/dashboard/programs/ProgramBuilder";
+import { LibraryPicker } from "../app/dashboard/programs/LibraryPicker";
+import { ExerciseDraftList } from "../app/dashboard/programs/ExerciseDraftList";
 import { ExerciseLibraryGrid } from "../app/dashboard/exercises/ExerciseLibraryGrid";
 import MemberLoginPage from "../app/portal/login/page";
 import StaffLoginPage from "../app/login/page";
@@ -223,6 +225,47 @@ describe("automated a11y (WCAG A/AA)", () => {
             },
           ],
         },
+      }),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("library picker (standalone) has no violations", async () => {
+    const violations = await violationsFor(
+      createElement(LibraryPicker, {
+        onInsert: () => {},
+        library: [
+          {
+            id: "lib-1",
+            name: "Bench Press",
+            sets: 3,
+            reps: "8-12",
+            rest: "120s",
+            notes: null,
+          },
+        ],
+      }),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("exercise draft list (standalone) has no violations", async () => {
+    const violations = await violationsFor(
+      createElement(ExerciseDraftList, {
+        onUpdate: () => {},
+        onMove: () => {},
+        onRemove: () => {},
+        exercises: [
+          {
+            key: "ex-0",
+            name: "Back Squat",
+            sets: "5",
+            reps: "5",
+            rest: "180s",
+            notes: "",
+          },
+          { key: "ex-1", name: "", sets: "", reps: "", rest: "", notes: "" },
+        ],
       }),
     );
     expect(violations).toEqual([]);

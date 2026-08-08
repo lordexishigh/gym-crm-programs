@@ -41,6 +41,15 @@ export async function acceptInviteAction(
   }
 
   const invite = await lookupInviteByToken(token);
+  // The token could not be CHECKED (database down). Reported before the
+  // catch-all below, which would otherwise blame the member's link for our own
+  // outage and send them off for a replacement that would fail identically.
+  if (invite.status === "unavailable") {
+    return {
+      error:
+        "We couldn't verify your invite just now — that's a problem on our side. Please try again in a moment.",
+    };
+  }
   if (invite.status === "expired") {
     return { error: "This invite has expired. Ask your gym for a new one." };
   }

@@ -273,6 +273,25 @@ const FULL_NAME = process.env.SEED_ADMIN_NAME || "Demo Owner";
 const GYM_NAME = process.env.SEED_GYM_NAME || "Demo Gym";
 const GYM_SLUG = process.env.SEED_GYM_SLUG || "demo-gym";
 
+/**
+ * Demo walkthrough accounts (trainer + member).
+ *
+ * The owner account alone proves the app can be logged into, but it cannot
+ * demonstrate the product: the wedge is a trainer building a program and a
+ * MEMBER opening it on the portal, and that needs a second signed-in audience
+ * plus data already linking them. Without these, a first-time evaluator has to
+ * hand-create a trainer, invite a member, accept the invite in another browser
+ * and build a program before seeing anything — so the demo below ships that
+ * end state ready to walk.
+ */
+const TRAINER_EMAIL = process.env.SEED_TRAINER_EMAIL || "trainer@demo.local";
+const TRAINER_PASSWORD = process.env.SEED_TRAINER_PASSWORD || "DemoTrainer!2026";
+const TRAINER_NAME = process.env.SEED_TRAINER_NAME || "Demo Trainer";
+
+const MEMBER_EMAIL = process.env.SEED_MEMBER_EMAIL || "member@demo.local";
+const MEMBER_PASSWORD = process.env.SEED_MEMBER_PASSWORD || "DemoMember!2026";
+const MEMBER_NAME = process.env.SEED_MEMBER_NAME || "Demo Member";
+
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
 const SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 const DB_URL = process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL;
@@ -307,16 +326,22 @@ async function findAuthUserByEmail(email) {
   return found?.id ?? null;
 }
 
-/** Create (or update) a confirmed staff auth user; returns its id. */
-async function upsertStaffAuthUser(tenantId) {
-  const appMetadata = { app_role: "staff", tenant_id: tenantId };
-
+/**
+ * Create (or update) a confirmed auth user with the given claims; returns its id.
+ *
+ * `appMetadata` is the claim set lib/identity.ts reads to authorise a session —
+ * `{ app_role: "staff", tenant_id }` for the dashboard, or
+ * `{ app_role: "member", tenant_id, member_id }` for the portal (a member
+ * session without `member_id` is bounced back to the portal login by
+ * `requireMember`, so it must be present).
+ */
+async function upsertAuthUser({ email, password, appMetadata }) {
   const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
     method: "POST",
     headers: adminHeaders,
     body: JSON.stringify({
-      email: EMAIL,
-      password: PASSWORD,
+      email,
+      password,
       email_confirm: true,
       app_metadata: appMetadata,
     }),
@@ -325,22 +350,22 @@ async function upsertStaffAuthUser(tenantId) {
   const body = await createRes.json().catch(() => ({}));
 
   if (createRes.ok && body.id) {
-    console.log(`+ created auth user ${EMAIL}`);
+    console.log(`+ created auth user ${email}`);
     return body.id;
   }
 
   // Already exists → look it up and refresh password + claims so the login works.
-  const existingId = await findAuthUserByEmail(EMAIL);
+  const existingId = await findAuthUserByEmail(email);
   if (!existingId) {
     throw new Error(
-      `Could not create or find auth user ${EMAIL}: ${body.msg || body.error || createRes.status}`,
+      `Could not create or find auth user ${email}: ${body.msg || body.error || createRes.status}`,
     );
   }
   const updRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${existingId}`, {
     method: "PUT",
     headers: adminHeaders,
     body: JSON.stringify({
-      password: PASSWORD,
+      password,
       email_confirm: true,
       app_metadata: appMetadata,
     }),
@@ -350,8 +375,336 @@ async function upsertStaffAuthUser(tenantId) {
     const e = await updRes.json().catch(() => ({}));
     throw new Error(`Found auth user but failed to update it: ${e.msg || e.error || updRes.status}`);
   }
-  console.log(`= reused auth user ${EMAIL} (password + claims refreshed)`);
+  console.log(`= reused auth user ${email} (password + claims refreshed)`);
   return existingId;
+}
+
+/**
+ * The demo program a first-time evaluator sees already assigned to the member.
+ * Three compound lifts with real prescriptions — enough that the portal's
+ * program view and the workout logger both have something meaningful to render.
+ */
+export const DEMO_PROGRAM = {
+  name: "Foundation Strength — Week 1",
+  description:
+    "A three-day full-body introduction to barbell training. Built by the demo trainer and assigned to the demo member so the portal has real content on first login.",
+  exercises: [
+    { name: "Back Squat", sets: 5, reps: "5", rest: "120s", notes: "Work up to a heavy but controlled top set." },
+    { name: "Bench Press", sets: 5, reps: "5", rest: "120s", notes: "Keep the shoulder blades retracted throughout." },
+    { name: "Barbell Row", sets: 3, reps: "8-10", rest: "90s", notes: "Pull to the sternum; no torso english." },
+  ],
+};
+
+/**
+ * The gym's price list — one plan per billing tier the schema allows (0014), so
+ * the plans screen demonstrates all three rather than a single example.
+ * Cyprus-market monthly/annual pricing with the annual priced as ten months.
+ */
+export const DEMO_PLANS = [
+  { name: "Monthly Unlimited", tier: "monthly", priceCents: 4500 },
+  { name: "Annual Unlimited", tier: "annual", priceCents: 45000 },
+  { name: "Drop-in Session", tier: "drop_in", priceCents: 1200 },
+];
+
+/**
+ * The gym's upcoming class timetable.
+ *
+ * Without at least one FUTURE class the member portal's class section has
+ * nothing to list — `listUpcomingClassesForMember` filters on
+ * `starts_at >= now()` — so the booking feature cannot be seen or exercised by
+ * anyone evaluating the app, which is precisely how a review concluded it was
+ * not live. `inDays`/`atHour` are relative so a re-run rolls the timetable
+ * FORWARD instead of leaving a schedule that has silently fallen into the past.
+ *
+ * `atHour` is a CYPRUS local hour (see `seedDemoClasses`), which is the whole
+ * point of a gym timetable — a class is at 07:00 for the people attending it,
+ * not at whatever 07:00 UTC happens to render as. Names deliberately claim no
+ * weekday, since the schedule slides with the seed date and a "Saturday" class
+ * landing on a Wednesday reads as a bug.
+ *
+ * Capacities are deliberately small so the waitlist path (booking a full class)
+ * is reachable in a demo rather than theoretical.
+ */
+export const DEMO_CLASSES = [
+  { name: "Morning Strength", inDays: 1, atHour: 7, durationMinutes: 60, capacity: 12 },
+  { name: "HIIT Conditioning", inDays: 2, atHour: 18, durationMinutes: 45, capacity: 16 },
+  { name: "Olympic Lifting Technique", inDays: 4, atHour: 19, durationMinutes: 90, capacity: 8 },
+  { name: "Open Gym", inDays: 6, atHour: 10, durationMinutes: 120, capacity: 20 },
+];
+
+/**
+ * Idempotently upsert the demo timetable for one gym, taught by `instructorId`.
+ *
+ * Keyed on (tenant_id, name): `classes` has no unique constraint on the name (a
+ * real gym runs the same class weekly), so this is an explicit find-or-insert
+ * that UPDATES the existing row's start time rather than stacking a duplicate
+ * timetable on every re-run. Exported so the schema-coupled SQL can be exercised
+ * against a throwaway Postgres — see test/seed-demo.test.ts.
+ */
+export async function seedDemoClasses(client, tenantId, instructorId, instructorName) {
+  for (const cl of DEMO_CLASSES) {
+    // Computed in SQL (not JS) so the times are relative to the DATABASE clock,
+    // which is what `starts_at >= now()` is compared against.
+    //
+    // Anchored to Europe/Nicosia rather than the server's UTC: `date_trunc('day',
+    // now())` would give midnight UTC, so an `atHour` of 7 lands at 10:00 in the
+    // Cyprus market this product serves. Truncating the LOCAL day and converting
+    // back with `AT TIME ZONE` makes `atHour` mean the wall-clock hour a member
+    // actually turns up, and stays correct across the EEST/EET DST change.
+    const startsAt =
+      `(date_trunc('day', now() at time zone 'Europe/Nicosia') ` +
+      `+ interval '${cl.inDays} days' + interval '${cl.atHour} hours') ` +
+      `at time zone 'Europe/Nicosia'`;
+    const existing = await client.query(
+      `select id from classes where tenant_id = $1 and name = $2 limit 1`,
+      [tenantId, cl.name],
+    );
+    if (existing.rows[0]) {
+      await client.query(
+        `update classes
+            set starts_at = ${startsAt}, duration_minutes = $1, capacity = $2,
+                instructor_id = $3, instructor_name = $4, updated_at = now()
+          where id = $5 and tenant_id = $6`,
+        [cl.durationMinutes, cl.capacity, instructorId, instructorName, existing.rows[0].id, tenantId],
+      );
+    } else {
+      await client.query(
+        `insert into classes (tenant_id, name, instructor_id, instructor_name,
+                              starts_at, duration_minutes, capacity)
+           values ($1, $2, $3, $4, ${startsAt}, $5, $6)`,
+        [tenantId, cl.name, instructorId, instructorName, cl.durationMinutes, cl.capacity],
+      );
+    }
+  }
+  console.log(`+ ${DEMO_CLASSES.length} upcoming class(es) on the timetable`);
+  return DEMO_CLASSES.length;
+}
+
+/**
+ * Seed the demo trainer, member and an assigned program (idempotent).
+ *
+ * Ordering matters: the member ROW must exist before its auth user, because the
+ * `member_id` claim on that user points at the row. So this creates the member
+ * row first, then the auth user carrying its id, then links the row back via
+ * `auth_user_id` — the same end state `/invite/accept` produces, minus the
+ * out-of-band email round-trip.
+ *
+ * `provisionAuthUser` is injected so the SQL below can be exercised against a
+ * throwaway Postgres without a Supabase project to talk to (see
+ * test/seed-demo.test.ts, which runs in CI). Production callers get the real
+ * `upsertAuthUser` by default — this seam exists to make the schema-coupled
+ * half testable, not to allow skipping account creation.
+ */
+export async function seedDemoWalkthrough(
+  client,
+  tenantId,
+  provisionAuthUser = upsertAuthUser,
+) {
+  // 1. Trainer staff row + auth user (staff claims; role='trainer' gates billing).
+  const trainerAuthId = await provisionAuthUser({
+    email: TRAINER_EMAIL,
+    password: TRAINER_PASSWORD,
+    appMetadata: { app_role: "staff", tenant_id: tenantId },
+  });
+  const trainer = await client.query(
+    `insert into users (tenant_id, email, full_name, role, auth_user_id)
+       values ($1, $2, $3, 'trainer', $4)
+       on conflict (auth_user_id) do update
+         set tenant_id = excluded.tenant_id,
+             email     = excluded.email,
+             full_name = excluded.full_name,
+             role      = 'trainer',
+             updated_at = now()
+       returning id`,
+    [tenantId, TRAINER_EMAIL, TRAINER_NAME, trainerAuthId],
+  );
+  const trainerId = trainer.rows[0].id;
+  console.log(`+ staff trainer row for ${TRAINER_EMAIL}`);
+
+  // 2. Member row, with the safety/status fields (0013) populated so the member
+  //    profile demonstrates them rather than rendering empty. There is no unique
+  //    constraint on member (tenant_id, email) — email is nullable and a gym may
+  //    legitimately have two members without one — so this is an explicit
+  //    find-or-insert rather than an ON CONFLICT upsert.
+  const existingMember = await client.query(
+    `select id from member where tenant_id = $1 and lower(email) = lower($2) limit 1`,
+    [tenantId, MEMBER_EMAIL],
+  );
+  let memberId = existingMember.rows[0]?.id;
+  if (memberId) {
+    await client.query(
+      `update member
+          set full_name = $1, phone = '+357 99 123456', status = 'active',
+              membership_status = 'active',
+              emergency_contact_name = 'Elena Demetriou',
+              emergency_contact_phone = '+357 99 654321',
+              updated_at = now()
+        where id = $2 and tenant_id = $3`,
+      [MEMBER_NAME, memberId, tenantId],
+    );
+  } else {
+    const created = await client.query(
+      `insert into member (tenant_id, email, full_name, phone, status,
+                           membership_status, emergency_contact_name,
+                           emergency_contact_phone, notes)
+         values ($1, $2, $3, '+357 99 123456', 'active', 'active',
+                 'Elena Demetriou', '+357 99 654321',
+                 'Seeded demo member — safe to delete.')
+         returning id`,
+      [tenantId, MEMBER_EMAIL, MEMBER_NAME],
+    );
+    memberId = created.rows[0].id;
+  }
+  console.log(`+ member row for ${MEMBER_EMAIL}`);
+
+  // 3. Member auth user carrying the member_id claim, then link it to the row.
+  const memberAuthId = await provisionAuthUser({
+    email: MEMBER_EMAIL,
+    password: MEMBER_PASSWORD,
+    appMetadata: { app_role: "member", tenant_id: tenantId, member_id: memberId },
+  });
+  await client.query(
+    `update member set auth_user_id = $1, updated_at = now()
+       where id = $2 and tenant_id = $3`,
+    [memberAuthId, memberId, tenantId],
+  );
+
+  // 4. Demo program authored by the trainer. Keyed on (tenant, name) so a
+  //    re-run updates in place instead of stacking duplicates; there is no
+  //    unique constraint on program.name, so this is an explicit find-or-insert.
+  const existingProgram = await client.query(
+    `select id from program where tenant_id = $1 and name = $2 limit 1`,
+    [tenantId, DEMO_PROGRAM.name],
+  );
+  let programId = existingProgram.rows[0]?.id;
+  if (programId) {
+    await client.query(
+      `update program set description = $1, created_by = $2, updated_at = now()
+         where id = $3 and tenant_id = $4`,
+      [DEMO_PROGRAM.description, trainerId, programId, tenantId],
+    );
+  } else {
+    const created = await client.query(
+      `insert into program (tenant_id, name, description, created_by)
+         values ($1, $2, $3, $4) returning id`,
+      [tenantId, DEMO_PROGRAM.name, DEMO_PROGRAM.description, trainerId],
+    );
+    programId = created.rows[0].id;
+  }
+
+  // Exercises are positional and fully owned by the program; replace them so a
+  // re-run cannot accumulate duplicate rows.
+  await client.query(`delete from exercise where program_id = $1 and tenant_id = $2`, [
+    programId,
+    tenantId,
+  ]);
+  for (const [position, ex] of DEMO_PROGRAM.exercises.entries()) {
+    await client.query(
+      `insert into exercise (tenant_id, program_id, position, name, sets, reps, rest, notes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [tenantId, programId, position, ex.name, ex.sets, ex.reps, ex.rest, ex.notes],
+    );
+  }
+  console.log(
+    `+ program "${DEMO_PROGRAM.name}" with ${DEMO_PROGRAM.exercises.length} exercise(s)`,
+  );
+
+  // 5. Assign it to the member — the thing that makes the portal non-empty.
+  //    `uq_assignment_one_active_per_member` (0011) is a PARTIAL unique index
+  //    allowing at most one ACTIVE assignment per member, so any other active
+  //    row must be archived first or the insert below violates it. Archiving (not
+  //    deleting) matches the lifecycle the app itself uses and keeps history.
+  await client.query(
+    `update program_assignment set status = 'archived'
+       where tenant_id = $1 and member_id = $2 and status = 'active'
+         and program_id <> $3`,
+    [tenantId, memberId, programId],
+  );
+  const existingAssignment = await client.query(
+    `select id from program_assignment
+       where tenant_id = $1 and program_id = $2 and member_id = $3 limit 1`,
+    [tenantId, programId, memberId],
+  );
+  if (existingAssignment.rows[0]) {
+    await client.query(
+      `update program_assignment set status = 'active', assigned_by = $1
+         where id = $2 and tenant_id = $3`,
+      [trainerId, existingAssignment.rows[0].id, tenantId],
+    );
+  } else {
+    await client.query(
+      `insert into program_assignment (tenant_id, program_id, member_id, assigned_by, status)
+         values ($1, $2, $3, $4, 'active')`,
+      [tenantId, programId, memberId, trainerId],
+    );
+  }
+  console.log(`+ assigned "${DEMO_PROGRAM.name}" to ${MEMBER_EMAIL}`);
+
+  // 6. A price list covering all three billing tiers (0014), plus an ACTIVE
+  //    subscription for the demo member so the billing panel and the portal's
+  //    membership status render real data instead of an empty state. No Stripe
+  //    ids are set — this is a local record, so nothing here touches Stripe or
+  //    fabricates a payment; a real checkout fills those columns in via webhook.
+  const planIds = {};
+  for (const plan of DEMO_PLANS) {
+    const existing = await client.query(
+      `select id from membership_plans where tenant_id = $1 and tier = $2 limit 1`,
+      [tenantId, plan.tier],
+    );
+    if (existing.rows[0]) {
+      planIds[plan.tier] = existing.rows[0].id;
+      await client.query(
+        `update membership_plans
+            set name = $1, price_cents = $2, currency = 'EUR', active = true,
+                updated_at = now()
+          where id = $3 and tenant_id = $4`,
+        [plan.name, plan.priceCents, existing.rows[0].id, tenantId],
+      );
+    } else {
+      const created = await client.query(
+        `insert into membership_plans (tenant_id, name, tier, price_cents, currency, active)
+           values ($1, $2, $3, $4, 'EUR', true) returning id`,
+        [tenantId, plan.name, plan.tier, plan.priceCents],
+      );
+      planIds[plan.tier] = created.rows[0].id;
+    }
+  }
+  console.log(`+ ${DEMO_PLANS.length} membership plan tier(s) (monthly / annual / drop-in)`);
+
+  const monthlyPlanId = planIds.monthly;
+  const existingSub = await client.query(
+    `select id from member_plans where tenant_id = $1 and member_id = $2 limit 1`,
+    [tenantId, memberId],
+  );
+  if (existingSub.rows[0]) {
+    await client.query(
+      `update member_plans
+          set plan_id = $1, status = 'active',
+              current_period_end = now() + interval '30 days', updated_at = now()
+        where id = $2 and tenant_id = $3`,
+      [monthlyPlanId, existingSub.rows[0].id, tenantId],
+    );
+  } else {
+    await client.query(
+      `insert into member_plans (tenant_id, member_id, plan_id, status, current_period_end)
+         values ($1, $2, $3, 'active', now() + interval '30 days')`,
+      [tenantId, memberId, monthlyPlanId],
+    );
+  }
+  console.log(`+ active monthly subscription for ${MEMBER_EMAIL}`);
+
+  // 7. An upcoming class timetable, so the portal's class-booking section has
+  //    something to list and book. See `seedDemoClasses`.
+  await seedDemoClasses(client, tenantId, trainerId, TRAINER_NAME);
+
+  return {
+    trainerId,
+    memberId,
+    programId,
+    planIds,
+    trainerEmail: TRAINER_EMAIL,
+    memberEmail: MEMBER_EMAIL,
+  };
 }
 
 async function main() {
@@ -370,7 +723,11 @@ async function main() {
     console.log(`+ gym "${GYM_NAME}" (${tenantId})`);
 
     // 2. Create/refresh the staff auth user with the tenant claim.
-    const authUserId = await upsertStaffAuthUser(tenantId);
+    const authUserId = await upsertAuthUser({
+      email: EMAIL,
+      password: PASSWORD,
+      appMetadata: { app_role: "staff", tenant_id: tenantId },
+    });
 
     // 3. Upsert the matching staff (owner) row.
     await client.query(
@@ -389,9 +746,29 @@ async function main() {
     // 4. Seed the built-in exercise catalog into every gym's library.
     await seedAllGyms(client);
 
-    console.log("\n✓ Seed complete. Log in at /login with:");
-    console.log(`    email:    ${EMAIL}`);
-    console.log(`    password: ${PASSWORD}`);
+    // 5. Demo trainer + member + assigned program + plan tiers, so the full
+    //    trainer→member journey is walkable with no manual setup. Opt out with
+    //    SEED_DEMO_DATA=0 when bootstrapping a REAL gym, where fake members and
+    //    subscriptions in the roster would be actively unwanted.
+    const withDemo =
+      process.env.SEED_DEMO_DATA !== "0" && process.env.SEED_DEMO_DATA !== "false";
+    if (withDemo) {
+      await seedDemoWalkthrough(client, tenantId);
+    } else {
+      console.log("= skipped demo trainer/member/program (SEED_DEMO_DATA=0)");
+    }
+
+    console.log("\n✓ Seed complete.\n");
+    console.log(`  Staff dashboard  /login`);
+    console.log(`    owner:    ${EMAIL} / ${PASSWORD}`);
+    if (withDemo) {
+      console.log(`    trainer:  ${TRAINER_EMAIL} / ${TRAINER_PASSWORD}`);
+      console.log(`\n  Member portal    /portal/login`);
+      console.log(`    member:   ${MEMBER_EMAIL} / ${MEMBER_PASSWORD}`);
+      console.log(
+        `\n  ${MEMBER_NAME} already has "${DEMO_PROGRAM.name}" assigned and an active monthly plan.`,
+      );
+    }
   } finally {
     await client.end();
   }

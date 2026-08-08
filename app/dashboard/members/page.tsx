@@ -15,6 +15,8 @@ import {
   memberEngagementLevel,
   type EngagementLevel,
 } from "@/lib/workout-logs";
+import { memberAvatarSrc } from "@/lib/member-photo";
+import { Avatar } from "@/app/components/Avatar";
 
 export const dynamic = "force-dynamic";
 
@@ -84,12 +86,30 @@ export default async function MembersPage({
             People at your gym who can be assigned training programs.
           </p>
         </div>
-        <Link
-          href="/dashboard/members/new"
-          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
-        >
-          Add member
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* The roster is where a trainer thinks about who does and does not
+              have portal access (the "Portal active" pills below say so), so it
+              needs a way through to issuing an invite — the action itself lives
+              on /dashboard/invites. */}
+          <Link
+            href="/dashboard/invites"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            Invite member
+          </Link>
+          <Link
+            href="/dashboard/members/import"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            Import CSV
+          </Link>
+          <Link
+            href="/dashboard/members/new"
+            className="inline-flex items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
+          >
+            Add member
+          </Link>
+        </div>
       </div>
 
       {/* Search + filter. A plain GET form keeps state in the URL (shareable,
@@ -139,10 +159,23 @@ export default async function MembersPage({
       </form>
 
       {members.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          {filtering
-            ? "No members match your search."
-            : "No members yet. Add your first member to get started."}
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+          {filtering ? (
+            "No members match your search."
+          ) : (
+            <>
+              <p>
+                No members yet. Add your first member, or bring your whole roster
+                over from another system.
+              </p>
+              <Link
+                href="/dashboard/members/import"
+                className="font-medium text-brand hover:underline"
+              >
+                Import members from a CSV file
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -153,13 +186,20 @@ export default async function MembersPage({
                   href={`/dashboard/members/${m.id}`}
                   className="flex items-center justify-between gap-4 px-4 py-3 transition hover:bg-slate-50"
                 >
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium text-slate-900">
-                      {m.full_name}
-                    </span>
-                    <span className="truncate text-sm text-slate-500">
-                      {m.email ?? "No email"}
-                    </span>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Avatar
+                      name={m.full_name}
+                      src={memberAvatarSrc(m)}
+                      size="sm"
+                    />
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate font-medium text-slate-900">
+                        {m.full_name}
+                      </span>
+                      <span className="truncate text-sm text-slate-500">
+                        {m.email ?? "No email"}
+                      </span>
+                    </div>
                   </div>
                   <span className="flex shrink-0 items-center gap-2">
                     <EngagementBadge
@@ -173,6 +213,11 @@ export default async function MembersPage({
                     {m.auth_user_id ? (
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                         Portal active
+                      </span>
+                    ) : null}
+                    {m.membership_status !== "active" ? (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium capitalize text-amber-700">
+                        {m.membership_status}
                       </span>
                     ) : null}
                     <span
