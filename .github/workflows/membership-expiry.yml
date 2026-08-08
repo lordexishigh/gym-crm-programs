@@ -9,23 +9,23 @@ name: Scheduled work (backup trigger)
 # This workflow is kept as a manual/secondary path — `workflow_dispatch` is
 # genuinely useful for running the queue from a browser when something is parked.
 #
-# Two things worth knowing before relying on it:
-#
-#   1. Actions on this repository has been failing on a spending limit since
-#      2026-07-30 — every workflow dies in about four seconds. So in practice
-#      this has not run, and that is exactly why the primary trigger moved to
-#      Vercel Cron. A green run here should not be assumed.
-#   2. What this workflow used to do was email members DIRECTLY via
-#      scripts/notify-membership-expiry.mjs, which recorded nothing — so a daily
-#      run emailed each renewing member once per day for seven days. It now just
-#      calls the dispatch endpoint, and the queue's dedupe key guarantees one
-#      email per renewal however often this fires.
+# One thing worth knowing before relying on it: what this workflow used to do
+# was email members DIRECTLY via scripts/notify-membership-expiry.mjs, which
+# recorded nothing — so a daily run emailed each renewing member once per day
+# for seven days. It now just calls the dispatch endpoint, and the queue's
+# dedupe key guarantees one email per renewal however often this fires.
 #
 # Needs two repository secrets, both far narrower than the four it needed before:
 #   CRON_SECRET  - bearer token for /api/tasks/dispatch (same value as the app's)
 #   APP_BASE_URL - e.g. https://app.yourdomain.eu
 # Note that neither is a database credential or a mail key. Nothing here talks to
 # Postgres or Resend any more; the app does, and it already holds those secrets.
+#
+# Until those secrets are configured, this workflow logs a warning and exits
+# successfully rather than failing the run — it's an OPTIONAL backup for a
+# path Vercel Cron already covers, so there's no value in a red X here every
+# single day for something that was never wired up. Configure the two secrets
+# under Settings -> Secrets and variables -> Actions to make this trigger live.
 
 on:
   schedule:
@@ -46,8 +46,8 @@ jobs:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
         run: |
           if [ -z "$CRON_SECRET" ] || [ -z "$APP_BASE_URL" ]; then
-            echo "::error::CRON_SECRET and APP_BASE_URL must both be configured as repository secrets."
-            exit 1
+            echo "::warning::CRON_SECRET and/or APP_BASE_URL are not configured as repository secrets — skipping. This is the optional backup trigger; Vercel Cron is the primary and needs no configuration here. Set both under Settings -> Secrets and variables -> Actions if you want this backup path live too."
+            exit 0
           fi
           # --fail-with-body so a non-2xx is a failed step AND the reason is
           # printed: a 503 here means the deployment has no CRON_SECRET set,
