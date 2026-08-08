@@ -2,6 +2,61 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-31 20:03 — deep session
+
+- Rounds: 1 (1 approved, 0 rejected) · 48.2 min · subscription (unmetered)
+- Score: 75 → 80
+- Product gaps: 5 → 6
+- Effort mix: product ×5, judge ×3
+- Churn: "Blueprint item built but not live — the code implements 'Member authentication — email and password login' but the running app doesn't serve it (push and redeploy, don't rebuild)." was attacked in multiple rounds without being resolved — it needs a different approach (or a human).
+- 56% of the session's 141.5 min of agent work went to one stage: implement (79.5 min). That ran inside 48.2 min of wall clock (2.9x overlap). The agent's first pass at the change. The dominant cost of a round; the lever is fewer/smaller items, not a shorter clock.
+
+## 2026-07-30 21:39 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 72.7 min · subscription (unmetered)
+- Score: 76 → 78
+- Product gaps: 4 → 5
+- Effort mix: product ×4, market ×2, judge ×2
+- 135% of the session's 72.7 min went to one stage: implement (98.3 min). The agent's first pass at the change. The dominant cost of a round; the lever is fewer/smaller items, not a shorter clock.
+
+## 2026-07-30 19:24 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 69.3 min · subscription (unmetered)
+- Score: 68 → 76
+- Product gaps: 5 → 4
+- Effort mix: judge ×4, product ×2, market ×2
+- 175% of the session's 69.3 min went to one stage: implement (121.0 min). The agent's first pass at the change. The dominant cost of a round; the lever is fewer/smaller items, not a shorter clock.
+
+## 2026-07-30 17:58 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 157.3 min · subscription (unmetered)
+- Score: 68 → 68
+- Product gaps: 5 → 5
+- Effort mix: product ×3, judge ×3, market ×2
+- Round(s) 1 made the product WORSE and were auto-reverted — that work had negative value; their items need a different approach.
+- 93% of the session's 157.3 min went to one stage: change (145.7 min). That's the coding agent itself — smaller batches (NOUS_IMPROVE_BATCH) and fewer features per round (NOUS_IMPROVE_FEATURES) land more of it.
+
+## 2026-07-30 02:54 — manual session
+
+- Rounds: 1 (0 approved, 1 rejected) · 79.9 min · subscription (unmetered)
+- Score: 75 → 70
+- Product gaps: 5 → 5
+- Effort mix: product ×5, judge ×3
+- 1 of 1 round(s) were rejected by review — that work was paid for and thrown away.
+- 93% of the session's 79.9 min went to one stage: change (74.7 min). That's the coding agent itself — smaller batches (NOUS_IMPROVE_BATCH) and fewer features per round (NOUS_IMPROVE_FEATURES) land more of it.
+- 5 issue(s) were never started — the round budget (NOUS_IMPROVE_ROUND_MINUTES) ran out first.
+
+## 2026-07-30 01:24 — manual session
+
+- Rounds: 1 (1 approved, 0 rejected) · 39.9 min · subscription (unmetered)
+- Score: 75 → 75
+- Product gaps: 5 → 5
+- Effort mix: product ×5, judge ×2, market ×1
+- Round(s) 1 made the product WORSE and were auto-reverted — that work had negative value; their items need a different approach.
+- 75% of the session's 39.9 min went to one stage: change (29.9 min). That's the coding agent itself — smaller batches (NOUS_IMPROVE_BATCH) and fewer features per round (NOUS_IMPROVE_FEATURES) land more of it.
+- Round(s) 1 landed some of their changes and not others — the rejected ones stay open and come back next round (before batching, one rejection threw away the whole round).
+- 5 issue(s) were never started — the round budget (NOUS_IMPROVE_ROUND_MINUTES) ran out first.
+
 ## 2026-07-27 13:25 — manual session
 
 - Rounds: 1 (1 approved, 0 rejected) · 34.4 min · subscription (unmetered)

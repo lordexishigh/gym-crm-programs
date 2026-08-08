@@ -1,7 +1,9 @@
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { isEmailConfigured } from "@/lib/email/resend";
 import { expireStalePendingInvites } from "@/lib/invite-status";
 import { InviteList, type InviteListRow } from "./InviteList";
+import { InviteMemberPanel, type InvitableMember } from "./InviteMemberPanel";
 import { InviteRowActions } from "./InviteRowActions";
 
 export const dynamic = "force-dynamic";
@@ -18,22 +20,45 @@ export const dynamic = "force-dynamic";
 export default async function InvitesPage() {
   const session = await requireStaff();
 
-  const invites = await withTenantContext(session.identity, async (c) => {
-    // Bring stored statuses in line with real time before reading them.
-    await expireStalePendingInvites(c);
+  const { invites, invitable } = await withTenantContext(
+    session.identity,
+    async (c) => {
+      // Bring stored statuses in line with real time before reading them.
+      await expireStalePendingInvites(c);
 
-    const { rows } = await c.query<InviteListRow>(
-      `select i.id, i.email, i.status, i.expires_at, i.created_at, i.accepted_at,
-              i.member_id, i.delivery_status, i.delivery_detail,
-              m.full_name    as member_name,
-              m.auth_user_id as member_auth_user_id
-         from invite i
-         left join member m
-           on m.id = i.member_id and m.tenant_id = i.tenant_id
-        order by i.created_at desc`,
-    );
-    return rows;
-  });
+      const { rows } = await c.query<InviteListRow>(
+        `select i.id, i.email, i.status, i.expires_at, i.created_at, i.accepted_at,
+                i.member_id, i.delivery_status, i.delivery_detail,
+                m.full_name    as member_name,
+                m.auth_user_id as member_auth_user_id
+           from invite i
+           left join member m
+             on m.id = i.member_id and m.tenant_id = i.tenant_id
+          order by i.created_at desc`,
+      );
+
+      // Who the "Invite a member" control can offer. An invite needs a
+      // deliverable address and is pointless once the member has a portal
+      // account; erased members are excluded outright. The sweep above ran
+      // first, so `status = 'pending'` here already means genuinely live.
+      // No tenant predicate — RLS scopes both queries to this gym.
+      const { rows: invitable } = await c.query<InvitableMember>(
+        `select m.id, m.full_name, m.email,
+                exists (
+                  select 1 from invite i
+                   where i.member_id = m.id and i.status = 'pending'
+                ) as pending
+           from member m
+          where m.auth_user_id is null
+            and m.erased_at is null
+            and m.email is not null
+            and m.email <> ''
+          order by m.full_name`,
+      );
+
+      return { invites: rows, invitable };
+    },
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -44,6 +69,11 @@ export default async function InvitesPage() {
           that should no longer work.
         </p>
       </div>
+
+      <InviteMemberPanel
+        members={invitable}
+        emailConfigured={isEmailConfigured()}
+      />
 
       <InviteList
         invites={invites}

@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import QRCode from "qrcode";
 import { withTenantContext, type Identity } from "@/lib/db";
+import { memberAvatarSrc } from "@/lib/member-photo";
 
 /**
  * QR/PIN check-in (market gap #5): a staff-side kiosk records attendance in
@@ -48,14 +49,97 @@ export async function generateUniquePinCode(
   throw new Error("Could not generate a unique PIN code after several attempts.");
 }
 
+/**
+ * Assign PINs to many members at once (bulk CSV import).
+ *
+ * `generateUniquePinCode` costs two round-trips per member; at import scale
+ * (up to 1000 rows) that is thousands of statements inside one transaction,
+ * which would blow the pool's `statement_timeout` budget and leave the whole
+ * import rolled back. Instead: read the tenant's taken PINs once, allocate
+ * against an in-memory set, and write them all in a single UPDATE ... FROM.
+ *
+ * Same safety property as the single-member path — uniqueness is checked before
+ * writing, never by catching a unique-violation, because an error would abort
+ * the surrounding transaction and undo the member inserts themselves.
+ */
+export async function assignPinCodes(
+  c: PoolClient,
+  tenantId: string,
+  memberIds: string[],
+): Promise<void> {
+  if (memberIds.length === 0) return;
+
+  const taken = new Set(
+    (
+      await c.query<{ pin_code: string }>(
+        "select pin_code from member where tenant_id = $1 and pin_code is not null",
+        [tenantId],
+      )
+    ).rows.map((r) => r.pin_code),
+  );
+
+  const params: string[] = [];
+  const tuples: string[] = [];
+  for (const memberId of memberIds) {
+    let pin: string | null = null;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const candidate = randomPin();
+      if (!taken.has(candidate)) {
+        taken.add(candidate);
+        pin = candidate;
+        break;
+      }
+    }
+    if (!pin) {
+      throw new Error("Could not generate unique PIN codes for the imported members.");
+    }
+    tuples.push(`($${params.length + 1}::uuid, $${params.length + 2}::text)`);
+    params.push(memberId, pin);
+  }
+
+  await c.query(
+    `update member m
+        set pin_code = v.pin, updated_at = now()
+       from (values ${tuples.join(", ")}) as v(id, pin)
+      where m.id = v.id`,
+    params,
+  );
+}
+
 export type CheckInResult =
-  | { ok: true; memberId: string; memberName: string }
+  | {
+      ok: true;
+      memberId: string;
+      memberName: string;
+      /**
+       * The member's avatar URL, or null when they have no photo. A PIN or a
+       * scanned token proves possession of a code, not identity — showing the
+       * face the code belongs to is what lets whoever is on the desk confirm the
+       * person in front of them is the person checking in. This is the placement
+       * the profile-photo feature exists for, so it is resolved in the SAME
+       * query as the lookup rather than costing a second round-trip per scan.
+       */
+      avatarSrc: string | null;
+    }
   | { ok: false; error: string };
+
+/** The member columns every check-in lookup needs (profile + avatar source). */
+const CHECKIN_MEMBER_COLUMNS = `m.id, m.full_name, m.photo_url,
+                                mp.updated_at as photo_updated_at
+                           from member m
+                           left join member_photo mp on mp.member_id = m.id`;
+
+type CheckInMemberRow = {
+  id: string;
+  full_name: string;
+  photo_url: string | null;
+  photo_updated_at: Date | string | null;
+};
 
 async function recordCheckIn(
   c: PoolClient,
   tenantId: string,
-  member: { id: string; full_name: string } | undefined,
+  member: CheckInMemberRow | undefined,
   method: "pin" | "qr",
 ): Promise<CheckInResult> {
   if (!member) {
@@ -68,15 +152,20 @@ async function recordCheckIn(
     `insert into check_ins (tenant_id, member_id, method) values ($1, $2, $3)`,
     [tenantId, member.id, method],
   );
-  return { ok: true, memberId: member.id, memberName: member.full_name };
+  return {
+    ok: true,
+    memberId: member.id,
+    memberName: member.full_name,
+    avatarSrc: memberAvatarSrc(member),
+  };
 }
 
 /** Look up a member by PIN (within the staff session's own tenant) and log a check-in. */
 export async function checkInByPin(identity: Identity, pin: string): Promise<CheckInResult> {
   return withTenantContext(identity, async (c) => {
     const member = (
-      await c.query<{ id: string; full_name: string }>(
-        "select id, full_name from member where pin_code = $1",
+      await c.query<CheckInMemberRow>(
+        `select ${CHECKIN_MEMBER_COLUMNS} where m.pin_code = $1`,
         [pin],
       )
     ).rows[0];
@@ -91,8 +180,8 @@ export async function checkInByQrToken(
 ): Promise<CheckInResult> {
   return withTenantContext(identity, async (c) => {
     const member = (
-      await c.query<{ id: string; full_name: string }>(
-        "select id, full_name from member where qr_token = $1",
+      await c.query<CheckInMemberRow>(
+        `select ${CHECKIN_MEMBER_COLUMNS} where m.qr_token = $1`,
         [qrToken],
       )
     ).rows[0];

@@ -1,119 +1,108 @@
-// Scheduled membership-expiry reminder (market gap #7).
+// Manual trigger for scheduled work (renewal reminders and everything else on
+// the queue).
 //
-// Finds every ACTIVE subscription (member_plans.status = 'active') whose
-// current billing period ends within the next 7 days and emails the member a
-// renewal reminder. Meant to run once a day via a scheduler (see
-// .github/workflows/membership-expiry.yml) — there is no in-process cron in
-// a serverless Next.js deployment, so this is a standalone script like
-// scripts/seed.mjs, run with its own DB connection and a direct Resend HTTP
-// call (it can't import the TypeScript lib/ modules without a build step, so
-// the email HTML is a small, deliberately duplicated copy of
-// lib/notifications.ts's sendMembershipExpiryEmail).
+// WHAT THIS USED TO DO, AND WHY IT CHANGED.
+//
+// This script used to query every active plan renewing within 7 days and email
+// each member directly, recording nothing. Its scheduler ran it daily, so a
+// membership expiring on the 8th was inside the window on the 1st, 2nd … 7th and
+// the member was emailed SEVEN times about one renewal. Nothing in the script
+// could detect that, because "already sent" was never written down. It also
+// carried a hand-duplicated copy of the email template from lib/notifications.ts
+// (a .mjs script cannot import our TypeScript), so the two could — and did —
+// drift.
+//
+// Both problems are gone because the work moved behind the task queue
+// (migration 0020): reminders are enqueued under a dedupe key pairing the plan
+// with its billing period, so any number of sweeps produce exactly one email,
+// and the handler calls the real `sendMembershipExpiryEmail` rather than a copy.
+//
+// So this file is now a thin trigger for /api/tasks/dispatch. It duplicates no
+// logic, which is the point: the sweep, the dedupe rules and the templates live
+// in one place and this just asks the app to run them.
+//
+// The scheduled trigger in production is Vercel Cron (`crons` in vercel.json),
+// not this script. Reach for this when you want to run the queue NOW — after
+// fixing a parked task, or to verify a deployment's scheduled work end to end.
 //
 // Usage:
 //   node scripts/notify-membership-expiry.mjs
+//   node scripts/notify-membership-expiry.mjs https://app.example.eu
 //
-// Requires: DATABASE_URL (or MIGRATE_DATABASE_URL), RESEND_API_KEY,
-// INVITE_FROM_EMAIL (reused as the sender for this reminder too).
+// Requires: CRON_SECRET, and APP_BASE_URL (or the URL as the first argument).
 
 import "dotenv/config";
-import pg from "pg";
 
-const DB_URL = process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL;
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.INVITE_FROM_EMAIL;
+const CRON_SECRET = process.env.CRON_SECRET;
+const BASE_URL =
+  process.argv[2] || process.env.APP_BASE_URL || "http://localhost:3000";
+
+/** Bound the wait: a silent server must not hang a scheduled trigger forever. */
+const TIMEOUT_MS = Number(process.env.DISPATCH_TIMEOUT_MS) || 60_000;
 
 function requireEnv() {
-  const missing = [];
-  if (!DB_URL) missing.push("DATABASE_URL");
-  if (!RESEND_API_KEY) missing.push("RESEND_API_KEY");
-  if (!FROM_EMAIL) missing.push("INVITE_FROM_EMAIL");
-  if (missing.length) {
-    console.error(`Missing required env: ${missing.join(", ")} (see .env.example).`);
+  if (!CRON_SECRET) {
+    console.error(
+      "Missing CRON_SECRET (see .env.example). The dispatch endpoint refuses " +
+        "unauthenticated requests, so nothing can be triggered without it.",
+    );
     process.exit(1);
-  }
-}
-
-function escapeHtml(s) {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-async function sendExpiryEmail({ to, memberName, planName, expiresAt }) {
-  const safeName = escapeHtml(memberName);
-  const safePlan = escapeHtml(planName);
-  const when = expiresAt.toLocaleDateString("en-GB", { dateStyle: "long" });
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-    },
-    body: JSON.stringify({
-      from: FROM_EMAIL,
-      to: [to],
-      subject: `Your ${planName} membership renews soon`,
-      html: `<!doctype html><html><body style="font-family:system-ui,Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5">
-        <p>Hi ${safeName},</p>
-        <p>Your <strong>${safePlan}</strong> membership is due to renew on ${when}. No action is needed if your payment details are current.</p>
-      </body></html>`,
-      text: `Hi ${memberName},\n\nYour ${planName} membership is due to renew on ${when}. No action is needed if your payment details are current.`,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(`Resend send failed (HTTP ${res.status}): ${body.message || "unknown error"}`);
   }
 }
 
 async function main() {
   requireEnv();
-  const client = new pg.Client({ connectionString: DB_URL });
-  await client.connect();
+
+  const url = `${BASE_URL.replace(/\/$/, "")}/api/tasks/dispatch`;
+  console.log(`Triggering scheduled work at ${url} …`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let res;
   try {
-    const { rows } = await client.query(`
-      select m.email, m.full_name, p.name as plan_name, mp.current_period_end
-        from member_plans mp
-        join member m on m.id = mp.member_id
-        join membership_plans p on p.id = mp.plan_id
-       where mp.status = 'active'
-         and mp.current_period_end is not null
-         and mp.current_period_end between now() and now() + interval '7 days'
-         and m.email is not null
-    `);
-
-    console.log(`Found ${rows.length} membership(s) renewing within 7 days.`);
-
-    let sent = 0;
-    let failed = 0;
-    for (const row of rows) {
-      try {
-        await sendExpiryEmail({
-          to: row.email,
-          memberName: row.full_name,
-          planName: row.plan_name,
-          expiresAt: new Date(row.current_period_end),
-        });
-        sent += 1;
-      } catch (err) {
-        failed += 1;
-        console.error(`! failed to email ${row.email}: ${err.message}`);
-      }
+    res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`No response within ${TIMEOUT_MS}ms.`);
     }
-
-    console.log(`Done: ${sent} sent, ${failed} failed.`);
-    if (failed > 0) process.exitCode = 1;
+    throw err;
   } finally {
-    await client.end();
+    clearTimeout(timer);
+  }
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    console.error(
+      `Dispatch failed (HTTP ${res.status}): ${body.error || "unknown error"}`,
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `Done: enqueued ${body.enqueued ?? 0}, claimed ${body.claimed ?? 0}, ` +
+      `succeeded ${body.succeeded ?? 0}, failed ${body.failed ?? 0} ` +
+      `(${body.duration_ms ?? "?"}ms).`,
+  );
+
+  // A task that failed is not a failure of the trigger — it is recorded, retried
+  // with backoff, and reported. Surface it in the exit code anyway so a CI or
+  // operator run does not read "succeeded" over a queue that is not draining.
+  if ((body.failed ?? 0) > 0) {
+    console.error(
+      `${body.failed} task(s) failed — check tasks.last_error, and /api/health ` +
+        "for a capability gap (an unconfigured mail provider parks every email task).",
+    );
+    process.exitCode = 1;
   }
 }
 
 main().catch((err) => {
-  console.error("Membership expiry notification run failed:", err.message || err);
+  console.error("Scheduled-work trigger failed:", err.message || err);
   process.exit(1);
 });

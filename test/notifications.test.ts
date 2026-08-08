@@ -3,6 +3,8 @@ import {
   sendBookingConfirmationEmail,
   sendMembershipExpiryEmail,
   sendPaymentFailedEmail,
+  sendWaitlistPromotionEmail,
+  notifyWaitlistPromotions,
 } from "../lib/notifications";
 
 /**
@@ -73,6 +75,96 @@ describe("sendBookingConfirmationEmail", () => {
         waitlisted: false,
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("sendWaitlistPromotionEmail", () => {
+  it("tells the member a spot opened up and names the class", async () => {
+    const fetchMock = mockFetchOk();
+    const ok = await sendWaitlistPromotionEmail({
+      to: "member@example.com",
+      memberName: "Jane",
+      className: "Morning CrossFit",
+      startsAt: new Date("2026-01-01T09:00:00Z"),
+    });
+    expect(ok).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.to).toEqual(["member@example.com"]);
+    expect(body.subject).toMatch(/spot opened up/i);
+    expect(body.html).toContain("Morning CrossFit");
+    expect(body.text).toContain("moved off the waitlist");
+  });
+
+  it("escapes HTML in member-supplied names", async () => {
+    const fetchMock = mockFetchOk();
+    await sendWaitlistPromotionEmail({
+      to: "member@example.com",
+      memberName: '<script>alert("x")</script>',
+      className: "Yoga",
+      startsAt: new Date("2026-01-01T09:00:00Z"),
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.html).not.toContain("<script>");
+    expect(body.html).toContain("&lt;script&gt;");
+  });
+
+  it("reports failure rather than throwing when the send fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    await expect(
+      sendWaitlistPromotionEmail({
+        to: "member@example.com",
+        memberName: "Jane",
+        className: "Class",
+        startsAt: new Date("2026-01-01T09:00:00Z"),
+      }),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("notifyWaitlistPromotions", () => {
+  const promotion = (over: Partial<Parameters<typeof notifyWaitlistPromotions>[0][0]> = {}) => ({
+    booking_id: "b1",
+    member_id: "m1",
+    member_name: "Jane",
+    member_email: "jane@example.com",
+    class_id: "c1",
+    class_name: "Morning CrossFit",
+    starts_at: "2026-01-01T09:00:00.000Z",
+    ...over,
+  });
+
+  it("emails each promoted member and returns their booking ids", async () => {
+    const fetchMock = mockFetchOk();
+    const notified = await notifyWaitlistPromotions([
+      promotion(),
+      promotion({ booking_id: "b2", member_email: "sam@example.com", member_name: "Sam" }),
+    ]);
+    expect(notified).toEqual(["b1", "b2"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does nothing for an empty batch", async () => {
+    const fetchMock = mockFetchOk();
+    await expect(notifyWaitlistPromotions([])).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // A member with no address can never be emailed, so treating them as
+  // "unnotified" would leave a row pending a retry that can never succeed.
+  it("marks a member with no email as handled without sending", async () => {
+    const fetchMock = mockFetchOk();
+    const notified = await notifyWaitlistPromotions([promotion({ member_email: null })]);
+    expect(notified).toEqual(["b1"]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // The promotion is already committed in the DB by this point — a mail outage
+  // must not bubble up and fail the member's cancellation.
+  it("never throws when a send fails, and omits that booking id", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    await expect(
+      notifyWaitlistPromotions([promotion(), promotion({ booking_id: "b2" })]),
+    ).resolves.toEqual([]);
   });
 });
 

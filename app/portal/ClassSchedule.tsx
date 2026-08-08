@@ -19,8 +19,6 @@ const cancelInitialState: CancelBookingState = {};
  * action state so one row's pending/error state never blocks another's.
  */
 export function ClassSchedule({ classes }: { classes: MemberClassView[] }) {
-  if (classes.length === 0) return null;
-
   return (
     <section className="mt-10 flex flex-col gap-3 border-t border-slate-200 pt-6">
       <div className="flex flex-col gap-1">
@@ -29,11 +27,25 @@ export function ClassSchedule({ classes }: { classes: MemberClassView[] }) {
           Book your spot — you&apos;ll be waitlisted automatically if a class is full.
         </p>
       </div>
-      <ul className="flex flex-col gap-2">
-        {classes.map((cl) => (
-          <ClassScheduleRow key={cl.id} cl={cl} />
-        ))}
-      </ul>
+      {/*
+       * The section renders even with nothing on the schedule. Returning null
+       * here (as this did) hides a shipped feature whenever the gym has not
+       * posted classes yet, so the portal looks like it has no class booking at
+       * all rather than no classes THIS week — which is exactly how an
+       * evaluation of this app concluded the feature was not live.
+       */}
+      {classes.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+          No classes are scheduled right now — new sessions will show up here as
+          soon as your gym posts them.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {classes.map((cl) => (
+            <ClassScheduleRow key={cl.id} cl={cl} />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -54,6 +66,10 @@ function ClassScheduleRow({ cl }: { cl: MemberClassView }) {
   });
   const full = cl.booked_count >= cl.capacity;
   const isBooked = cl.booking_status === "booked" || cl.booking_status === "waitlisted";
+  // Auto-promoted off the waitlist. The member is emailed when it happens, but
+  // the portal must say so too — otherwise someone who checks here instead of
+  // their inbox still believes they are waiting and skips the class.
+  const wasPromoted = cl.booking_status === "booked" && Boolean(cl.booking_promoted_at);
 
   return (
     <li className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -86,6 +102,11 @@ function ClassScheduleRow({ cl }: { cl: MemberClassView }) {
           >
             {cl.booking_status === "waitlisted" ? "Waitlisted" : "You're booked"}
           </span>
+          {wasPromoted ? (
+            <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand-dark">
+              A spot opened up
+            </span>
+          ) : null}
           <button
             type="submit"
             disabled={cancelPending}

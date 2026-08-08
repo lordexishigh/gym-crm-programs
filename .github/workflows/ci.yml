@@ -27,6 +27,19 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
+      # lib/db.ts defaults the pg pool to max: 3 — deliberately small because
+      # production talks to Supabase's SHARED session-mode pooler (global cap
+      # 15 across every warm instance). This job's Postgres has no such thing:
+      # it's a dedicated, single-tenant throwaway container this job's `next
+      # start` is the only client of, with Postgres's own default
+      # max_connections (100). A page can legitimately want more than 3
+      # connections at once (lib/db.ts's own comment: the member portal fans
+      # out 7 concurrent withTenantContext calls), so capping this job to 3
+      # makes ordinary concurrent renders and Server Actions queue for a pool
+      # slot that nothing is actually contending for. Raised well below the
+      # container's ceiling, which still leaves ample headroom for the
+      # migration/seed child processes and the test suite's own connections.
+      DB_POOL_MAX: "20"
       # Build-time auth endpoint. Next.js inlines NEXT_PUBLIC_* at build time,
       # so this points at the local GoTrue stand-in (e2e/auth-stub.mjs) that the
       # Playwright journey test starts — the SAME build is then used for both
@@ -35,6 +48,13 @@ jobs:
       # stubs that endpoint itself.
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_e2e_stub
+      # `npm ci` would otherwise build via `postinstall` (scripts/postinstall.mjs
+      # gives a fresh clone a production build so `npm start` never has to fall
+      # back to `next dev`). This job builds in its own named step below, so
+      # letting install build too would pay for the same ~67s twice and attribute
+      # a build failure to "Install dependencies". The two dedicated steps at the
+      # end of this job are what verify the install-time build still works.
+      ALPHA_SKIP_BUILD: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +63,45 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      - name: A production install still gets the render toolchain (.npmrc)
+        # THE DEFECT THIS GUARDS. tailwindcss, autoprefixer and typescript are
+        # devDependencies, but postcss.config.mjs names the first two and every
+        # route is TypeScript — so `npm ci --omit=dev` (or NODE_ENV=production,
+        # which npm treats identically) produces a tree that cannot compile a
+        # single page. Measured before the fix: 70 packages instead of 230, no
+        # install-time build, `next dev` unable to compile anything, the readiness
+        # gate waiting on routes that never answer, and `GET /` timing out at
+        # 45.0s with nothing in the output naming an install problem. That was the
+        # root cause behind the repeated "member portal completely unreachable"
+        # report.
+        #
+        # `.npmrc` sets include=dev, which beats --omit=dev wherever either is
+        # set. This asserts that contract in ~5s (resolution only, no install) so
+        # deleting the file, or moving a package to devDependencies that the build
+        # needs, fails here instead of in a reviewer's browser.
+        #
+        # MUST run before `npm ci` populates node_modules below. `--dry-run`
+        # diffs the desired tree against whatever is already on disk, so once a
+        # real install has already put tailwindcss/autoprefixer/typescript in
+        # place, there is nothing left to "add" and this step stops printing
+        # `add <pkg>` lines for them — not because they'd be omitted, but because
+        # they're already correctly there. That false negative is exactly what
+        # happened here: this step failed on every run from 2026-08-01 onward
+        # (confirmed by reproducing the same `npm ci` -> dry-run sequence
+        # locally) while production installs remained correct the whole time.
+        run: |
+          plan=$(npm ci --omit=dev --dry-run --ignore-scripts --no-audit --no-fund 2>&1)
+          fail=0
+          for pkg in tailwindcss autoprefixer typescript; do
+            if ! echo "$plan" | grep -qE "^add $pkg "; then
+              echo "::error::A production install would omit $pkg — without it no route can compile and every URL times out. Check that .npmrc still sets include=dev."
+              fail=1
+            else
+              echo "ok: --omit=dev still installs $pkg"
+            fi
+          done
+          exit $fail
 
       - name: Install dependencies
         run: npm ci
@@ -89,10 +148,30 @@ jobs:
           # The Playwright step then fails to start its own server with
           # "http://localhost:3000/login is already used". So kill the children
           # too, then block until the port is genuinely released.
+          #
+          # `kill "$SERVER_PID"` targets bash's `$!`, which is the `npm` process —
+          # NOT `node scripts/start.mjs`. npm does not forward SIGTERM to the
+          # script it runs (reproduced directly: a child with its own SIGTERM
+          # handler never saw the signal when only the parent `npm` PID was
+          # killed), so the wrapper's own shutdown/reap logic in
+          # scripts/lib/supervise.mjs never ran, and once `npm` exited the
+          # wrapper was reparented — breaking `pkill -P "$SERVER_PID"` too, since
+          # its PPID was no longer `$SERVER_PID` by the time that ran. Both of
+          # the old sweeps were therefore no-ops, which is what let `next start`
+          # keep holding port 3000 into the next step.
+          #
+          # Signal the wrapper directly by its stable script path instead —
+          # that reaches its real `process.on("SIGTERM", ...)` handler, which
+          # this project's own supervision code uses to gracefully kill and reap
+          # `next start` in turn. `pkill -f "next-server"` never matched the
+          # `next start` process either: Next.js only renames `process.title`
+          # (what `ps` shows), not the argv `pkill -f` actually matches, so it's
+          # kept below only as a last-resort net for a wrapper that already died
+          # some other way.
           stop_server() {
-            pkill -P "$SERVER_PID" 2>/dev/null || true
-            kill "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
             for _ in $(seq 1 30); do
               if ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
                 return 0
@@ -130,10 +209,16 @@ jobs:
       - name: Install Playwright browser (chromium)
         run: npx playwright install --with-deps chromium
 
-      - name: End-to-end journey test (invite → accept → login → portal)
+      - name: End-to-end journey tests (member onboarding + staff dashboard)
         # Playwright starts the GoTrue auth stand-in AND the built app itself
-        # (see playwright.config.ts webServer); the journey seeds its fixtures
-        # into the job's throwaway Postgres and cleans them up after.
+        # (see playwright.config.ts webServer); each journey seeds its own
+        # fixtures into the job's throwaway Postgres and cleans them up after.
+        #
+        # Two journeys, one per side of the product:
+        #   e2e/invite-flow.spec.ts    invite → accept → login → member portal
+        #   e2e/staff-journey.spec.ts  login → dashboard → member → program →
+        #                              assignment (the staff half, previously
+        #                              covered only by isolated unit tests)
         run: npm run test:e2e
 
       - name: Upload Playwright report on failure
@@ -147,8 +232,9 @@ jobs:
 
       - name: Upload rendered screenshots (every run)
         # e2e/capture.ts saves full-page PNGs of the landing page, both sign-in
-        # pages, the invite-accept form, and the authenticated member portal at
-        # desktop + mobile viewports. Published unconditionally so visual
+        # pages, the invite-accept form, the authenticated member portal, and
+        # the staff dashboard + an assigned program, at desktop + mobile
+        # viewports. Published unconditionally so visual
         # coherence can be reviewed from real renders on any commit.
         if: always()
         uses: actions/upload-artifact@v4
@@ -157,6 +243,165 @@ jobs:
           path: e2e-screenshots/
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Smoke test a FRESH CLONE (`npm start` with no prebuilt .next)
+        # The scenario every automated review harness actually runs, and the one
+        # the steps above cannot cover because they all build first.
+        #
+        # `.next/` is gitignored, so a harness that clones and runs `npm start`
+        # has no production build. `next start` used to exit, nothing bound the
+        # port, and an unbound port BLACK-HOLES the SYN instead of refusing the
+        # connection — so `/`, `/login` and `/portal/login` all "timed out" and
+        # the entire product was judged unreachable.
+        #
+        # HOW SOON it serves is therefore part of the contract, not a detail: a
+        # review harness gives a navigation 20-45s, and building the missing build
+        # first (~85s) leaves it timing out exactly as before. `npm start` falls
+        # back to `next dev`, and the budget below is what keeps that true — a
+        # regression to build-first fails this step instead of quietly restoring
+        # the original bug.
+        #
+        # Note the loop below is also the readiness contract the dev path now
+        # guarantees: the port stays SHUT until `/` has actually been served
+        # (scripts/lib/dev-server.mjs), so early curls get a fast connection
+        # refusal rather than a socket that hangs for the whole compile. The first
+        # curl that connects is therefore the first one that can succeed.
+        #
+        # Runs last because it deletes `.next`, and repopulates it as a side effect.
+        env:
+          APP_BASE_URL: http://localhost:3000
+          AUTO_MIGRATE: "0"
+          AUTO_SEED: "0"
+        run: |
+          rm -rf .next
+          npm run start > /tmp/fresh-start.log 2>&1 &
+          SERVER_PID=$!
+
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
+          stop_server() {
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
+            pkill -f "next-server" 2>/dev/null || true
+            pkill -f "next dev" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
+          }
+
+          # Deliberately far tighter than a full build: ~4x the measured cold dev
+          # start (~20s to a served `/` locally), to absorb a slow runner without
+          # admitting an 85s build.
+          BUDGET=90
+          started=$(date +%s)
+          up=0
+          for _ in $(seq 1 "$BUDGET"); do
+            if curl -sf -o /dev/null --max-time 30 http://localhost:3000/; then up=1; break; fi
+            sleep 1
+          done
+          elapsed=$(( $(date +%s) - started ))
+          if [ "$up" != "1" ]; then
+            echo "::error::A fresh clone was still not servable after ${elapsed}s (budget ${BUDGET} attempts): npm start must serve a missing build (via next dev), not leave the port unbound"
+            cat /tmp/fresh-start.log
+            stop_server
+            exit 1
+          fi
+          echo "Fresh clone answered / after ${elapsed}s (budget ${BUDGET}s)."
+
+          # The exact routes the review reported as dead.
+          fail=0
+          for path in / /login /portal/login; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000$path")
+            echo "GET $path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::Fresh-clone check failed: GET $path returned $code (expected 200)"
+              fail=1
+            fi
+          done
+          stop_server
+          if [ "$fail" != "0" ]; then cat /tmp/fresh-start.log; fi
+          exit $fail
+
+      - name: A fresh clone gets a production build at INSTALL time (`postinstall`)
+        # The primary defence against the reported failure, and the reason the
+        # step above is only a fallback.
+        #
+        # A review harness clones, installs, starts, then navigates with a fixed
+        # budget — 20s in the report that drove this. Measured on this project:
+        # `next start` serves `/` 720ms after launch, while the `next dev`
+        # fallback needs ~20s (the first webpack/Turbopack compile, which cannot
+        # be gated away). Landing ON the budget made the verdict a coin flip, and
+        # "goto '/' timed out" kept recurring while the app itself was fine.
+        #
+        # So scripts/postinstall.mjs builds during `npm install`, where waiting
+        # costs nothing because no port is open yet. This step proves that
+        # mechanism end to end: no build present -> install-time build produced ->
+        # `npm start` serves the real production build far inside a navigation
+        # budget. ALPHA_SKIP_BUILD is cleared for this step alone (the job sets it
+        # so `npm ci` does not build twice).
+        env:
+          APP_BASE_URL: http://localhost:3000
+          AUTO_MIGRATE: "0"
+          AUTO_SEED: "0"
+          ALPHA_SKIP_BUILD: ""
+        run: |
+          rm -rf .next
+          node scripts/postinstall.mjs
+
+          if [ ! -s .next/BUILD_ID ]; then
+            echo "::error::postinstall did not produce a production build; a fresh clone would fall back to \`next dev\` and risk the 20s navigation timeout this guards against"
+            exit 1
+          fi
+          echo "Install-time build produced: $(cat .next/BUILD_ID)"
+
+          npm run start > /tmp/postinstall-start.log 2>&1 &
+          SERVER_PID=$!
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
+          stop_server() {
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
+            pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
+          }
+
+          # Deliberately tight: `next start` on a built tree answers in well under
+          # a second locally. A regression to the dev fallback needs ~20s and fails
+          # here instead of silently restoring the original timeout.
+          BUDGET=15
+          started=$(date +%s)
+          up=0
+          for _ in $(seq 1 "$BUDGET"); do
+            if curl -sf -o /dev/null --max-time 5 http://localhost:3000/; then up=1; break; fi
+            sleep 1
+          done
+          elapsed=$(( $(date +%s) - started ))
+          if [ "$up" != "1" ]; then
+            echo "::error::A built tree did not serve / within ${BUDGET}s — 'next start' should answer in well under a second"
+            cat /tmp/postinstall-start.log
+            stop_server
+            exit 1
+          fi
+          # A dev server must NOT be what answered: that would mean the build was
+          # ignored and the slow path is back.
+          if grep -q "serving with .next dev." /tmp/postinstall-start.log; then
+            echo "::error::npm start fell back to \`next dev\` despite a production build being present"
+            cat /tmp/postinstall-start.log
+            stop_server
+            exit 1
+          fi
+          echo "Built tree answered / after ${elapsed}s via \`next start\`."
+
+          fail=0
+          for path in / /login /portal/login; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000$path")
+            echo "GET $path -> $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::Built-tree check failed: GET $path returned $code (expected 200)"
+              fail=1
+            fi
+          done
+          stop_server
+          if [ "$fail" != "0" ]; then cat /tmp/postinstall-start.log; fi
+          exit $fail
 
       - name: Verify committed tree (nothing untracked or modified)
         # CI checks out the committed tree, so every step above already ran

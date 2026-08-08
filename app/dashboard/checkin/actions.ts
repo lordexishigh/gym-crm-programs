@@ -14,7 +14,12 @@ import { reportHandledError } from "@/lib/observability/monitoring";
  * treated as a QR token.
  */
 
-export type CheckInState = { error?: string; success?: string };
+export type CheckInState = {
+  error?: string;
+  success?: string;
+  /** Who was just checked in — rendered with their photo for visual confirmation. */
+  member?: { name: string; avatarSrc: string | null };
+};
 
 const PIN_RE = /^\d{6}$/;
 
@@ -34,7 +39,10 @@ export async function kioskCheckInAction(
     if (!result.ok) return { error: result.error };
 
     revalidatePath("/dashboard/checkin");
-    return { success: `Checked in: ${result.memberName}` };
+    return {
+      success: `Checked in: ${result.memberName}`,
+      member: { name: result.memberName, avatarSrc: result.avatarSrc },
+    };
   } catch (err) {
     await reportHandledError(err, "kiosk-checkin", { tenantId: session.identity.tenantId });
     return { error: "Could not check in. Please try again." };

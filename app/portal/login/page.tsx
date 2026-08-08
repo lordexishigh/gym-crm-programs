@@ -1,8 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { Suspense, useActionState } from "react";
 import Link from "next/link";
 import { memberLoginAction, type LoginState } from "./actions";
+import { DemoSignInHint } from "../../DemoSignInHint";
+import { SessionNotice } from "../../SessionNotice";
 
 const initialState: LoginState = {};
 
@@ -37,6 +39,13 @@ export default function MemberLoginPage() {
           </p>
         </div>
       </div>
+
+      {/* Why the member is on this form — an expired session, or an invite they
+          never finished. Inside Suspense so the page still prerenders
+          statically (see SessionNotice). */}
+      <Suspense fallback={null}>
+        <SessionNotice />
+      </Suspense>
 
       <form
         action={formAction}
@@ -81,6 +90,11 @@ export default function MemberLoginPage() {
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      {/* A member usually arrives here from a link in an invite email rather
+          than from the landing page, so the demo credentials have to be on this
+          screen too — not one screen behind it. */}
+      <DemoSignInHint href="/portal/login" />
 
       <p className="text-center text-sm text-slate-500">
         Gym staff?{" "}
