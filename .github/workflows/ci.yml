@@ -27,6 +27,19 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/alpha_crm
+      # lib/db.ts defaults the pg pool to max: 3 — deliberately small because
+      # production talks to Supabase's SHARED session-mode pooler (global cap
+      # 15 across every warm instance). This job's Postgres has no such thing:
+      # it's a dedicated, single-tenant throwaway container this job's `next
+      # start` is the only client of, with Postgres's own default
+      # max_connections (100). A page can legitimately want more than 3
+      # connections at once (lib/db.ts's own comment: the member portal fans
+      # out 7 concurrent withTenantContext calls), so capping this job to 3
+      # makes ordinary concurrent renders and Server Actions queue for a pool
+      # slot that nothing is actually contending for. Raised well below the
+      # container's ceiling, which still leaves ample headroom for the
+      # migration/seed child processes and the test suite's own connections.
+      DB_POOL_MAX: "20"
       # Build-time auth endpoint. Next.js inlines NEXT_PUBLIC_* at build time,
       # so this points at the local GoTrue stand-in (e2e/auth-stub.mjs) that the
       # Playwright journey test starts — the SAME build is then used for both
@@ -51,9 +64,6 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: A production install still gets the render toolchain (.npmrc)
         # THE DEFECT THIS GUARDS. tailwindcss, autoprefixer and typescript are
         # devDependencies, but postcss.config.mjs names the first two and every
@@ -70,6 +80,16 @@ jobs:
         # set. This asserts that contract in ~5s (resolution only, no install) so
         # deleting the file, or moving a package to devDependencies that the build
         # needs, fails here instead of in a reviewer's browser.
+        #
+        # MUST run before `npm ci` populates node_modules below. `--dry-run`
+        # diffs the desired tree against whatever is already on disk, so once a
+        # real install has already put tailwindcss/autoprefixer/typescript in
+        # place, there is nothing left to "add" and this step stops printing
+        # `add <pkg>` lines for them — not because they'd be omitted, but because
+        # they're already correctly there. That false negative is exactly what
+        # happened here: this step failed on every run from 2026-08-01 onward
+        # (confirmed by reproducing the same `npm ci` -> dry-run sequence
+        # locally) while production installs remained correct the whole time.
         run: |
           plan=$(npm ci --omit=dev --dry-run --ignore-scripts --no-audit --no-fund 2>&1)
           fail=0
@@ -82,6 +102,9 @@ jobs:
             fi
           done
           exit $fail
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Type check
         run: npm run typecheck
@@ -126,19 +149,29 @@ jobs:
           # "http://localhost:3000/login is already used". So kill the children
           # too, then block until the port is genuinely released.
           #
-          # THE WRAPPER IS SIGNALLED FIRST, and that order is load-bearing now that
-          # it SUPERVISES the server (scripts/lib/supervise.mjs): killing the child
-          # first is indistinguishable from the crash supervision exists to recover
-          # from, so the wrapper would dutifully start a replacement and re-take
-          # port 3000. Signalling the wrapper latches its shutdown flag, which is
-          # what makes it reap its child instead of restarting it. The child sweep
-          # stays as a backstop for a wrapper that never got the signal.
+          # `kill "$SERVER_PID"` targets bash's `$!`, which is the `npm` process —
+          # NOT `node scripts/start.mjs`. npm does not forward SIGTERM to the
+          # script it runs (reproduced directly: a child with its own SIGTERM
+          # handler never saw the signal when only the parent `npm` PID was
+          # killed), so the wrapper's own shutdown/reap logic in
+          # scripts/lib/supervise.mjs never ran, and once `npm` exited the
+          # wrapper was reparented — breaking `pkill -P "$SERVER_PID"` too, since
+          # its PPID was no longer `$SERVER_PID` by the time that ran. Both of
+          # the old sweeps were therefore no-ops, which is what let `next start`
+          # keep holding port 3000 into the next step.
+          #
+          # Signal the wrapper directly by its stable script path instead —
+          # that reaches its real `process.on("SIGTERM", ...)` handler, which
+          # this project's own supervision code uses to gracefully kill and reap
+          # `next start` in turn. `pkill -f "next-server"` never matched the
+          # `next start` process either: Next.js only renames `process.title`
+          # (what `ps` shows), not the argv `pkill -f` actually matches, so it's
+          # kept below only as a last-resort net for a wrapper that already died
+          # some other way.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            # Give the wrapper a moment to reap its own child before sweeping.
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
             for _ in $(seq 1 30); do
               if ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
                 return 0
@@ -244,14 +277,14 @@ jobs:
           npm run start > /tmp/fresh-start.log 2>&1 &
           SERVER_PID=$!
 
-          # Wrapper first — it supervises and would restart a child killed under it.
-          # See the smoke-test step above for why that order matters.
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
             pkill -f "next dev" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
           }
 
           # Deliberately far tighter than a full build: ~4x the measured cold dev
@@ -321,12 +354,13 @@ jobs:
 
           npm run start > /tmp/postinstall-start.log 2>&1 &
           SERVER_PID=$!
-          # Wrapper first — it supervises and would restart a child killed under it.
+          # Signal the wrapper by its stable script path, not bash's `$!` (that's
+          # `npm`, which never forwards SIGTERM to the script it runs). See the
+          # smoke-test step above for the reproduction and full explanation.
           stop_server() {
-            kill "$SERVER_PID" 2>/dev/null || true
-            sleep 2
-            pkill -P "$SERVER_PID" 2>/dev/null || true
+            pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
+            kill "$SERVER_PID" 2>/dev/null || true
           }
 
           # Deliberately tight: `next start` on a built tree answers in well under

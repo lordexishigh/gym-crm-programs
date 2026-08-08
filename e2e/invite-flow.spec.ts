@@ -111,8 +111,11 @@ test.describe("member onboarding journey", () => {
     page,
   }) => {
     // 0. The portal is gated: unauthenticated visits bounce to the login page.
+    // middleware.ts always attaches ?reason=session-expired on this redirect
+    // (SIGN_IN_REASON_PARAM), even for a visitor who was never signed in, so
+    // the form can explain itself rather than appearing to reject for nothing.
     await page.goto("/portal");
-    await expect(page).toHaveURL(/\/portal\/login$/);
+    await expect(page).toHaveURL(/\/portal\/login\?reason=session-expired$/);
 
     // 1. Open the invite link — the token resolves to the seeded member.
     await page.goto(`/invite/accept?token=${encodeURIComponent(rawInviteToken)}`);
