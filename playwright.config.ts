@@ -48,12 +48,27 @@ export default defineConfig({
       url: `${AUTH_STUB_URL}/auth/v1/.well-known/jwks.json`,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
+      // See the app server below — same reason, and the stub is a suspect too:
+      // a journey step that hangs on a token exchange looks identical from the
+      // browser side to one hanging in the app.
+      stdout: "pipe",
+      stderr: "pipe",
     },
     {
       command: "npm run start",
       url: `http://localhost:${APP_PORT}/login`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      // `webServer.stdout` defaults to "ignore", so everything these servers
+      // print during the run is DISCARDED — including on the run that fails.
+      // The staff journey stalls for >30s at a rotating point (issue #26), and
+      // because two of the three observed stalls were plain navigations rather
+      // than Server Actions, the question is what the server itself was doing,
+      // which is exactly the output that was being thrown away. The smoke-test
+      // step redirects its own server to /tmp/next-start.log; Playwright's
+      // webServer had no equivalent.
+      stdout: "pipe",
+      stderr: "pipe",
       env: {
         // Migrations/seed are applied out-of-band (CI does it before building).
         AUTO_MIGRATE: "0",
