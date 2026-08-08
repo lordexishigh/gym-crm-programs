@@ -109,8 +109,14 @@ export function MemberForm({
         </select>
       </label>
 
+      {/* Kept alongside the uploader (MemberPhotoPanel) for rosters imported
+          from another system, where the picture is already hosted elsewhere. An
+          uploaded photo takes precedence — see `memberAvatarSrc`. */}
       <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-        Photo URL <span className="font-normal text-slate-400">(optional)</span>
+        Photo URL{" "}
+        <span className="font-normal text-slate-400">
+          (optional — only if the photo is hosted elsewhere; uploading one wins)
+        </span>
         <input
           type="url"
           name="photoUrl"

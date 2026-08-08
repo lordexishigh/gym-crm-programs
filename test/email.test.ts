@@ -64,6 +64,7 @@ describe("sendEmail", () => {
     const res = await sendEmail({ to: "x", subject: "s", html: "h" });
     expect(res).toEqual({
       ok: false,
+      reason: "unreachable",
       error: "Could not reach the email service.",
     });
   });
@@ -72,5 +73,62 @@ describe("sendEmail", () => {
     delete process.env.RESEND_API_KEY;
     const res = await sendEmail({ to: "x", subject: "s", html: "h" });
     expect(res.ok).toBe(false);
+  });
+
+  /**
+   * The reason code is what lets `sendInviteAction` keep an invite alive and
+   * fall back to a copyable link when this deployment simply has no mail
+   * provider — as opposed to escalating a genuine provider failure. Pinned
+   * because collapsing these back into one opaque error is what previously made
+   * onboarding impossible without email.
+   */
+  it("reports a missing provider as not_configured, without calling fetch", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    delete process.env.RESEND_API_KEY;
+
+    const res = await sendEmail({ to: "x", subject: "s", html: "h" });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("not_configured");
+      expect(res.error).toMatch(/RESEND_API_KEY/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a blank-but-present credential as unconfigured", async () => {
+    process.env.RESEND_API_KEY = "   ";
+    const res = await sendEmail({ to: "x", subject: "s", html: "h" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("not_configured");
+  });
+
+  it("reports a provider rejection as rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        json: async () => ({ message: "Invalid `to` field" }),
+      }),
+    );
+    const res = await sendEmail({ to: "x", subject: "s", html: "h" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("rejected");
+  });
+});
+
+describe("isEmailConfigured", () => {
+  it("is true only when both credentials are present and non-blank", async () => {
+    const { isEmailConfigured } = await import("../lib/email/resend");
+
+    expect(isEmailConfigured()).toBe(true);
+
+    delete process.env.INVITE_FROM_EMAIL;
+    expect(isEmailConfigured()).toBe(false);
+
+    process.env.INVITE_FROM_EMAIL = "  ";
+    expect(isEmailConfigured()).toBe(false);
   });
 });

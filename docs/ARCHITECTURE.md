@@ -54,6 +54,13 @@ A single multi-tenant Next.js (App Router) application hosts both the staff/trai
 
 ## Data models
 
+The seven core v1 models. Note that this list has NOT been kept current — the
+schema has since grown well past it (workout logs, the exercise library and
+program templates, membership plans, class scheduling and bookings, check-ins,
+payment events, GDPR subjects, and the two tables in the next section).
+`migrations/` is the authoritative record; treat this list as the original v1
+scope rather than the current schema.
+
 - Gym (Tenant)
 - User (Staff/Trainer)
 - Member
@@ -61,6 +68,16 @@ A single multi-tenant Next.js (App Router) application hosts both the staff/trai
 - Program
 - Exercise
 - ProgramAssignment
+
+### Cross-cutting infrastructure tables
+
+- **tasks** (migration 0020) — durable leased work queue. Uniqueness on
+  `(tenant_id, kind, dedupe_key)` makes enqueueing idempotent, `due_at` replaces
+  cron, and `leased_until` + `FOR UPDATE SKIP LOCKED` make concurrent dispatch
+  and crash recovery safe. Drained by `/api/tasks/dispatch`.
+- **suggestions** (migration 0021) — ledger of derived, non-authoritative claims
+  about a member or program, each carrying the observations it was derived from,
+  awaiting a trainer's decision.
 
 ## API design
 
@@ -75,6 +92,9 @@ Next.js Route Handlers and Server Actions over HTTPS, organized by resource and 
 - Resend for transactional invite email — simple, well-documented API for the only outbound email the v1 invite flow requires.
 - EU-region hosting/data (Vercel EU + Supabase Frankfurt) — required for GDPR expectations in the Cyprus launch market.
 - Build order honors the inverted plan — program authoring/assignment and the thin RLS+auth foundation are the first deliverables; generic CRM breadth is deferred.
+- Scheduled work runs on a database-backed queue, not a scheduler — periodic jobs enqueue idempotent tasks keyed by the occasion they represent, and one endpoint drains them. Adopted after the renewal reminder, which queried and emailed directly with no record, sent one member seven emails for one renewal; the dedupe key makes at-most-once a property of the schema rather than of every caller remembering to check. It also decouples scheduled work from any one scheduler, which mattered because the only one wired up (GitHub Actions) has been billing-blocked since 2026-07-30.
+- Derived claims are never written straight onto a record — anything inferred about a member (at-risk status, progression, drafted programs) lands in the `suggestions` ledger with the observations behind it and waits for a named human. Two reasons: the records drive what a member is told to lift, so a wrong inference silently overwriting a trainer's judgement is a safety problem; and under GDPR "the system inferred it" is not an audit trail, whereas `reviewed_by`/`reviewed_at` are. Evidence strength is priced from what was observed, never self-reported by the generator, so no generator can widen what gets applied without review.
+- Optional integrations are enumerated and reported, not discovered — `lib/capabilities.ts` states what a deployment can do and what silently stops working when it cannot, surfaced at `/api/health` and on the dashboard. Adopted because production has no mail provider, so every send degraded politely and invisibly: a trainer invited a member, saw a success message, and waited for an email that was never attempted.
 
 ## Assumptions
 

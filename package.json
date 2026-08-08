@@ -5,16 +5,22 @@
   "license": "UNLICENSED",
   "description": "Multi-tenant web CRM for Cyprus gyms — member-facing training programs.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev",
     "build": "next build",
-    "start": "next start",
+    "postinstall": "node scripts/postinstall.mjs",
+    "start": "node scripts/start.mjs",
+    "start:next": "next start",
     "typecheck": "tsc --noEmit",
+    "deploy": "node scripts/deploy.mjs",
+    "smoke:portal": "node scripts/smoke-portal.mjs",
     "migrate": "node scripts/migrate.mjs",
     "seed": "node scripts/seed.mjs",
     "notify:expiry": "node scripts/notify-membership-expiry.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "verify:live": "playwright test --config playwright.live.config.ts"
   },
   "dependencies": {
     "jose": "^5.9.6",

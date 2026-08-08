@@ -111,8 +111,11 @@ test.describe("member onboarding journey", () => {
     page,
   }) => {
     // 0. The portal is gated: unauthenticated visits bounce to the login page.
+    // middleware.ts always attaches ?reason=session-expired on this redirect
+    // (SIGN_IN_REASON_PARAM), even for a visitor who was never signed in, so
+    // the form can explain itself rather than appearing to reject for nothing.
     await page.goto("/portal");
-    await expect(page).toHaveURL(/\/portal\/login$/);
+    await expect(page).toHaveURL(/\/portal\/login\?reason=session-expired$/);
 
     // 1. Open the invite link — the token resolves to the seeded member.
     await page.goto(`/invite/accept?token=${encodeURIComponent(rawInviteToken)}`);
@@ -130,9 +133,33 @@ test.describe("member onboarding journey", () => {
 
     await expect(page).toHaveURL(/\/portal$/, { timeout: 30_000 });
 
-    // 3. The RLS-scoped portal shows the member's OWN assigned program.
+    // 3. The RLS-scoped portal shows the member's OWN assigned program — with
+    //    its FULL exercise detail, not just a program title. The unit view test
+    //    (test/member-portal-view.test.ts) pins the same four fields against
+    //    `ProgramView` in isolation; this proves they survive the real
+    //    session + RLS read path against a real database.
     await expect(page.getByText(programName)).toBeVisible();
     await expect(page.getByText("Back Squat")).toBeVisible();
+    for (const label of ["Sets", "Reps", "Rest"]) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+    // "180s" rather than the sets/reps values, which are both "5" and would
+    // match ambiguously; the notes are free text and unique on the page.
+    await expect(page.getByText("180s")).toBeVisible();
+    await expect(page.getByText("Bar over mid-foot")).toBeVisible();
+
+    // The portal's primary form factor is a phone. At a 375px-wide viewport
+    // (iPhone SE/mini class — the narrowest we support) the exercise detail
+    // must still be readable and the page must not scroll sideways, which is
+    // what a fixed-width or multi-column layout here would cause.
+    await page.setViewportSize({ width: 375, height: 667 });
+    await expect(page.getByText("Back Squat")).toBeVisible();
+    await expect(page.getByText("Bar over mid-foot")).toBeVisible();
+    const overflows = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
+    expect(overflows, "portal scrolls horizontally at 375px").toBe(false);
+
     // Rendered evidence of the authenticated member portal — the surface the
     // public visual-capture spec can't reach without a session.
     await captureResponsive(page, "05-member-portal");

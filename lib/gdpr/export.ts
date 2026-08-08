@@ -392,6 +392,13 @@ export async function anonymiseMember(
       [memberId, ERASED_MEMBER_NAME],
     );
 
+    // A face is the most identifying data the record holds, and it lives in its
+    // own table (0019) — so nulling `photo_url` above does NOT remove it. The
+    // row is DELETED rather than tombstoned: unlike the member row nothing
+    // references it, so there is no referential integrity to preserve, and an
+    // erasure that leaves the photograph behind is not an erasure.
+    await c.query("delete from member_photo where member_id = $1", [memberId]);
+
     // Scrub PII held on the member's invites and invalidate any pending one.
     await c.query(
       `update invite

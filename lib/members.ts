@@ -258,6 +258,12 @@ export type RosterMemberRow = MemberRow & {
   last_completed_at: string | null;
   /** Sessions logged inside the adherence window (0 when none / never). */
   recent_sessions: number;
+  /**
+   * When the member's uploaded photo last changed, or null when they have none.
+   * Presence-and-version only — the bytes are served separately (see
+   * `memberAvatarSrc` in lib/member-photo.ts).
+   */
+  photo_updated_at: string | null;
 };
 
 /**
@@ -267,13 +273,15 @@ export type RosterMemberRow = MemberRow & {
  * binds the adherence window, page limit and offset as the next three params
  * ($paramCount+1, +2, +3) in that order.
  *
- * No tenant predicate is added: RLS scopes both sides — `member_staff_all` for
- * the member rows and `workout_log_staff_select` for the aggregate — to the
- * current gym, so the engagement counts can only ever reflect this tenant's logs.
+ * No tenant predicate is added: RLS scopes every side — `member_staff_all` for
+ * the member rows, `workout_log_staff_select` for the aggregate, and
+ * `member_photo_staff_all` for the avatar join — to the current gym, so the
+ * engagement counts can only ever reflect this tenant's logs.
  *
  * The WHERE columns (`full_name`, `status`) stay unqualified: only `member` (the
  * aliased `m`) exposes them, so they remain unambiguous against the `wl`
- * aggregate, which exposes only member_id / last_completed_at / recent_sessions.
+ * aggregate (member_id / last_completed_at / recent_sessions) and the `mp` photo
+ * join (member_id / tenant_id / content_type / bytes / byte_size / updated_at).
  */
 export function rosterListSql(clause: string, paramCount: number): string {
   const win = paramCount + 1;
@@ -284,8 +292,13 @@ export function rosterListSql(clause: string, paramCount: number): string {
                 m.emergency_contact_phone, m.membership_status,
                 m.created_at, m.updated_at,
                 wl.last_completed_at,
-                coalesce(wl.recent_sessions, 0)::int as recent_sessions
+                coalesce(wl.recent_sessions, 0)::int as recent_sessions,
+                mp.updated_at as photo_updated_at
            from member m
+           -- Photo PRESENCE + version only. The bytea column is deliberately
+           -- never selected here: the roster renders <img> tags pointing at the
+           -- authenticated photo route, so a 20-row page stays a few kilobytes.
+           left join member_photo mp on mp.member_id = m.id
            left join (
              select member_id,
                     max(completed_at) as last_completed_at,

@@ -97,7 +97,8 @@ export function InviteList({
 
       {view.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No invites yet. Invite a member from their detail page to get started.
+          No invites yet. Use &ldquo;Invite a member&rdquo; above to send the
+          first one.
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">

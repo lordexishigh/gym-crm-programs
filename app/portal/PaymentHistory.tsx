@@ -4,10 +4,26 @@ import type { PaymentEventRow } from "../../lib/billing";
  * Read-only "Payment history" list for the member portal (market gap #8),
  * sourced from `payment_events` (written by the Stripe webhook — see
  * lib/stripe-events.ts). Pure presentation, same pattern as `WorkoutHistory`.
- * Renders nothing when the member has no payment history yet.
+ *
+ * The section renders even with no payments. An earlier version returned null
+ * on an empty list, which made a shipped feature indistinguishable from a
+ * missing one — a member with no recorded payments never saw that the portal
+ * HAS a payment history, and an evaluation of this app duly reported the
+ * feature as not live. "Nothing has been charged yet" is a real, meaningful
+ * state for a member to read, so it is shown rather than hidden.
  */
 export function PaymentHistory({ events }: { events: PaymentEventRow[] }) {
-  if (events.length === 0) return null;
+  if (events.length === 0) {
+    return (
+      <section className="mt-10 flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h2 className="text-lg font-bold text-slate-900">Payment history</h2>
+        <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+          No payments have been recorded yet. Receipts appear here once your
+          first payment goes through.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="mt-10 flex flex-col gap-3 border-t border-slate-200 pt-6">

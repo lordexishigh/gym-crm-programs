@@ -280,3 +280,9 @@ h3 {
 .border-rose-200 {
   border-color: rgb(239 68 68 / 0.4) !important;
 }
+/* Warning outline (`border-amber-200` — the sign-in session notice). The pale
+ * authored value is a bright yellow hairline on dark; tint it like the fills
+ * above so the banner reads as a warning without shouting. */
+.border-amber-200 {
+  border-color: rgb(245 158 11 / 0.4) !important;
+}

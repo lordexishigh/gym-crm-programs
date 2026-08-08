@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-77%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 77/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 84 | `█████████████████░░░` |
-| Code quality | 81 | `████████████████░░░░` |
-| Robustness & error handling | 72 | `██████████████░░░░░░` |
-| Builds & tests | 69 | `██████████████░░░░░░` |
-| UX & design | 71 | `██████████████░░░░░░` |
+| Spec coverage | 73 | `███████████████░░░░░` |
+| Code quality | 86 | `█████████████████░░░` |
+| Robustness & error handling | 79 | `████████████████░░░░` |
+| Builds & tests | 84 | `█████████████████░░░` |
+| UX & design | 77 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -22,15 +22,16 @@
 - ✅ No hardcoded secrets — no secret-shaped literals found
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
-- ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
-- ⚠️ Rate limiting — auth endpoints have no rate limiting — credential brute-force and abuse are unprotected
+- ✅ Dependency vulnerabilities — no critical/high vulnerabilities in the last audit
+- ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
 - ✅ Automated tests — test files present
+- ✅ No stub/placeholder code — no stub markers found
 - ✅ Dependencies pinned — lockfile/requirements present
 - ✅ License declared — license present
 - ✅ Builds & tests pass — final smoke test passed
-- ⚠️ Accessibility basics — 1 <img> without alt text
+- ⚠️ Accessibility basics — 2 <img> without alt text
 
 **Compliance**
 - ✅ Dependency licenses — no copyleft conflicts found
@@ -42,21 +43,21 @@
 
 ## Strengths
 
-- Adversarial cross-tenant isolation is genuinely tested: test/isolation-comprehensive.test.ts seeds two fully-populated conflicting tenants and asserts SELECT, UPDATE, DELETE, and forged-INSERT are all blocked for a gym-B session reading gym-A rows through the real withTenantContext/app_user role path — not mocked.
-- The feature surface substantially exceeds the spec: Stripe billing with webhook handling (lib/stripe.ts, lib/stripe-events.ts, migrations/0014–0017), class scheduling with waitlist auto-promotion (lib/classes.ts, migration 0015), QR/PIN check-in (lib/checkin.ts, migration 0016), GDPR export and erasure (lib/gdpr/export.ts, migrations/0004/0006/0018), and automated email notifications are all present with proper schema backing.
-- Privilege minimisation is precise: migration 0018 grants UPDATE on only the note column of workout_log (not the whole row) and adds a staff-scoped UPDATE RLS policy, so GDPR erasure works without breaking the immutability invariant that every other column remains non-updatable at the privilege level.
-- 239 unit and integration tests across 26 files with DB-dependent suites cleanly skipping when DATABASE_URL is absent, plus E2E Playwright invite-flow and visual-capture specs and a dedicated a11y test suite — all green.
+- Security and isolation architecture is production-grade: RLS policies in migrations/0002_rls_policies.sql, withTenantContext wrapping every query, JWT verified server-side in lib/identity.ts with no trust placed on browser-supplied identity, and login throttling in lib/auth/login-throttle.ts.
+- Test suite is substantive and explains its invariants: 239 tests covering health-probe timeout contracts, deploy-gate policy, dev-server readiness races, and start-wrapper fallback — each test file documents the specific production defect it prevents.
+- Implementation is complete and unstubbed across all 8 spec features, with real domain logic in lib/programs.ts, lib/assignments.ts, lib/invites.ts, lib/members.ts, and full UI in app/dashboard/programs/ and app/portal/.
+- Codebase has well-separated module boundaries with clear responsibilities: lib/ owns domain logic and DB access, app/dashboard/ owns staff UI, app/portal/ owns member UI, and lib/auth/ owns all identity concerns — no cross-cutting leakage visible in the sample.
 
 ## To improve
 
-- Auth routes (/login, /portal/login) hang indefinitely rather than failing fast when the database is unreachable — in lib/auth/session.ts add a pool.connect() timeout (e.g. connectionTimeoutMillis on the Pool constructor in lib/db.ts) and have requireStaff/requireMember return a redirect to an error page or throw a Next.js notFound() within 2–3 seconds so the browser never hangs on a blank tab.
-- Auth Server Actions (app/login/actions.ts, app/portal/login/actions.ts) have no rate limiting — add an upstash/ratelimit sliding-window check keyed on IP before the credential query so brute-force and credential-stuffing are blocked at the application layer, closing the automated readiness WARN.
-- Two high-severity dependency vulnerabilities (next, sharp) remain unresolved from Round 3 — run npm audit fix targeting those two packages, update the pinned versions in package.json, and regenerate package-lock.json so the CI vulnerability scan goes green.
-- One img element is missing an alt attribute (automated readiness WARN) — locate it (likely in a portal or dashboard page component) and add a descriptive alt string, then add rendering coverage for that component in test/a11y.test.ts to prevent recurrence.
+- The E2E suite (e2e/staff-journey.spec.ts and e2e/invite-flow.spec.ts) is not wired into the CI gate that produces the green result — add a ci.yml step that runs `npx playwright test` against a seeded database so authenticated flows (dashboard load, program creation, member portal render) are machine-verified on every push rather than left to manual crawl.
+- The automated check warns 'no error tracking or global error handler' despite app/global-error.tsx existing — wire a real error-reporting sink (e.g. Sentry DSN) into instrumentation.ts so production runtime exceptions are visible; the current observability stack in lib/observability/monitoring.ts captures metrics but not unhandled exceptions.
+- Two img elements lack alt text (automated WARN) — audit app/page.tsx and app/dashboard/ for bare <img> tags and add descriptive alt attributes, which is also a WCAG 2.1 AA failure blocking accessibility compliance.
+- The server readiness race has caused /portal/login and /login to time out in every evaluation round since Round 3 — scripts/dev.mjs should poll /api/health until it returns HTTP 200 before yielding to the caller, mirroring the contract already tested in test/dev-server.test.ts but not enforced in the dev entry point.
 
 ## Summary
 
-A well-engineered, feature-rich codebase that goes substantially beyond the spec — RLS isolation with adversarial tests, Stripe billing, class scheduling, check-in, and GDPR are all genuinely implemented — but a critical runtime defect causes auth routes to hang in the deployed app, making the product unreachable to real users despite static tests passing, which is the single most important fix before any further evaluation.
+All 8 spec features are genuinely implemented with production-quality code, strong RLS isolation, and a substantive 239-test suite — but the running app has failed to serve any authenticated page across 8 consecutive evaluation rounds, leaving the product's core wedge (program authoring, assignment, and the member portal) completely unverifiable at runtime; resolving the server readiness race and wiring E2E tests into CI are the two changes that would most close this gap.
 
 ---
-_Scored 2026-07-27 13:25 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 20:02 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._

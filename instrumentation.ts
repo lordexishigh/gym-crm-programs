@@ -39,8 +39,26 @@ export function register(): void {
       try {
         const { spawn } = await import("node:child_process");
 
+        // Hard ceiling for each boot script. The child talks to a REMOTE database
+        // (a Supabase pooler), and neither `pg`'s connect bound nor a statement
+        // timeout covers every way that call can stall — a half-open connection
+        // through a load balancer, or an advisory lock held by a concurrently
+        // booting instance, leaves the child alive indefinitely. Unbounded, every
+        // server restart then leaks another migrate process that keeps holding a
+        // pooler slot, and enough of them starve the database the running app
+        // needs. Killing the child converts that into a logged, recoverable
+        // failure: migrations are re-attempted on the next boot (the runner is
+        // idempotent) or applied out-of-band.
+        const bootTimeoutMs = (() => {
+          const raw = Number(process.env.BOOT_SCRIPT_TIMEOUT_MS);
+          return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 120_000;
+        })();
+
         // Spawn a script, buffering its output, and resolve with {code, out}.
-        const runScript = (script: string): Promise<{ code: number; out: string }> =>
+        // A script that exceeds the budget is killed and reported as timedOut.
+        const runScript = (
+          script: string,
+        ): Promise<{ code: number; out: string; timedOut: boolean }> =>
           new Promise((resolve) => {
             const child = spawn(process.execPath, [script], {
               cwd: process.cwd(),
@@ -48,16 +66,36 @@ export function register(): void {
               stdio: ["ignore", "pipe", "pipe"],
             });
             let out = "";
+            let timedOut = false;
+            const timer = setTimeout(() => {
+              timedOut = true;
+              child.kill("SIGKILL");
+            }, bootTimeoutMs);
+            // Never hold the process open on this timer alone.
+            timer.unref?.();
+            const finish = (code: number) => {
+              clearTimeout(timer);
+              resolve({ code, out, timedOut });
+            };
             child.stdout?.on("data", (d) => (out += d.toString()));
             child.stderr?.on("data", (d) => (out += d.toString()));
             child.on("error", (err) => {
               console.error(`[instrumentation] ${script} could not start:`, err);
-              resolve({ code: -1, out });
+              finish(-1);
             });
-            child.on("close", (code) => resolve({ code: code ?? -1, out }));
+            child.on("close", (code) => finish(code ?? -1));
           });
 
         const mig = await runScript("scripts/migrate.mjs");
+        if (mig.timedOut) {
+          console.error(
+            `[instrumentation] auto-migrate exceeded ${bootTimeoutMs}ms and was killed. ` +
+              `The database is unreachable or contended; migrations will be retried on the ` +
+              `next boot (the runner is idempotent). Apply them out-of-band if login fails ` +
+              `(see README).\n${mig.out.slice(-1200)}`,
+          );
+          return;
+        }
         if (mig.code !== 0) {
           console.error(
             `[instrumentation] auto-migrate exited with code ${mig.code}. ` +
@@ -77,7 +115,12 @@ export function register(): void {
         // so this boot backfill is the single place new gyms get the catalog.
         if (process.env.AUTO_SEED === "0" || process.env.AUTO_SEED === "false") return;
         const seed = await runScript("scripts/seed-catalog.mjs");
-        if (seed.code === 0) {
+        if (seed.timedOut) {
+          console.error(
+            `[instrumentation] catalog seed exceeded ${bootTimeoutMs}ms and was killed; ` +
+              `it will be retried on the next boot.\n${seed.out.slice(-1200)}`,
+          );
+        } else if (seed.code === 0) {
           if (/upserted/.test(seed.out)) {
             console.log("[instrumentation] seeded the built-in exercise catalog on boot.");
           }

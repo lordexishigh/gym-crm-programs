@@ -17,9 +17,14 @@ source. See [`.env.example`](../.env.example) for the full list.
 | `RESEND_API_KEY` / `INVITE_FROM_EMAIL` | Vercel (server-only) | Invite email send. `INVITE_FROM_EMAIL` must use the verified sending domain (below). |
 | `RESEND_WEBHOOK_SECRET` | Vercel (server-only) | Verifies inbound Resend bounce/complaint webhooks (`whsec_...`). |
 | `MONITORING_WEBHOOK_URL` / `ALERT_WEBHOOK_URL` | Vercel (server-only) | Optional. Error-monitoring sink + critical-alert sink (see Observability). |
+| `LOGIN_THROTTLE_WINDOW_MS` / `LOGIN_THROTTLE_IP_ATTEMPTS` / `LOGIN_THROTTLE_ACCOUNT_ATTEMPTS` | Vercel (server-only) | Optional. Sign-in brute-force limits (see Sign-in throttle). |
 
-In CI/CD these live in GitHub repository **secrets** (`PRODUCTION_DATABASE_URL`,
-`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`).
+In CI/CD these live in GitHub repository **secrets**. The Deploy workflow needs
+`DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the daily
+membership-expiry job additionally needs `RESEND_API_KEY` and `INVITE_FROM_EMAIL`.
+Keep the secret names identical to the variable names above — the provisioner
+mirrors `.env.local` into Actions secrets by name, so a CI-only alias (there was a
+`PRODUCTION_DATABASE_URL` here) is a secret nothing can ever populate.
 
 ## Database migrations
 
@@ -50,11 +55,153 @@ On every push/PR, CI spins up a `postgres:16` service and:
 4. `npm test` — the RLS isolation smoke tests gate the build; if tenant/member
    isolation regresses, CI fails.
 
-## Deploy (`.github/workflows/deploy.yml`)
+## Deploy — `npm run deploy`
 
-On push to `main`: install deps → **run migrations against the production
-database** → deploy to Vercel production. Migrations therefore always run before
-the new build serves traffic.
+**`npm run deploy` ([`scripts/deploy.mjs`](../scripts/deploy.mjs)) is the deploy
+path. `git push` does not deploy anything.** That is not a preference, it is the
+current state of the two automated paths — both verified, not assumed:
+
+- **GitHub Actions cannot run.** Every workflow on this repo (Deploy, CI, the
+  scheduled expiry job) fails in 4–13s with the annotation *"The job was not
+  started because recent account payments have failed or your spending limit needs
+  to be increased."* All four deploy secrets (`DATABASE_URL`, `VERCEL_TOKEN`,
+  `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`) are present and correct — the jobs simply
+  never start. A red Deploy run currently tells you nothing about the code.
+- **Vercel's Git integration cannot cover for it.** The Vercel project has no Git
+  link at all (`GET /v9/projects/gym-crm-programs` → `link: undefined`), so a push
+  to GitHub reaches Vercel by no route. `vercel.json` also sets
+  `git.deploymentEnabled.master/main = false`, which is belt-and-braces rather
+  than the cause.
+
+Consequence, and the reason this section is emphatic: pushing to `master` moves
+nothing live, silently. A correct, pushed, reviewed fix stays invisible until
+somebody runs the CLI, which is how "built but not live" was reported round after
+round against features that were already implemented.
+
+```bash
+export VERCEL_TOKEN=...        # or `npx vercel login` once
+npm run deploy
+```
+
+What it does, in order:
+
+1. **Refuses to deploy an unpushed or dirty checkout.** "Push and redeploy" is two
+   steps and the first is the one that gets skipped; a production build made from
+   local-only commits cannot be reviewed or reverted, and leaves the live app
+   *ahead* of `master`. Override with `DEPLOY_ALLOW_DIRTY=1` for a hotfix.
+2. **Runs migrations before the new build serves traffic** when
+   `MIGRATE_DATABASE_URL`/`DATABASE_URL` is set locally. When it is not, the
+   deploy still proceeds: `instrumentation.ts` applies pending migrations in the
+   deployed process before its first request and `DATABASE_URL` is configured on
+   the Vercel project, so the ordering holds either way. Requiring production DB
+   credentials on a laptop would make the only working path unusable.
+3. `npx vercel@latest deploy --prod` — the same command `deploy.yml` uses, so the
+   two paths cannot drift.
+4. **Verifies the live URL, and fails the deploy if it is not serving the new
+   code.** This is the step that closes the defect. It waits for
+   `/api/health`'s `instance.build_id` to change (proving the production alias
+   actually moved onto the new build — a successful build that nothing was
+   aliased to is the exact failure mode), then requires `/`, `/login` and
+   `/portal/login` to each return 200 **and contain their rendered heading**. A
+   status alone is not evidence: Next.js serves error boundaries and `not-found`
+   shells with cheerful statuses, so a bare 200 check would sign off on an
+   unreachable product. A degraded `/api/health` warns but does not fail a deploy
+   whose pages all render — including `auth: "unconfigured"`, which is worth
+   reading carefully when it appears: the login pages are static, so a deployment
+   missing `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+   renders them perfectly and then rejects every credential, leaving the whole
+   dashboard and portal unreachable behind a page that looks fine. It warns
+   rather than fails because a missing project env var cannot be fixed *by* a
+   deploy, so blocking on it would only block the deploy carrying the fix.
+5. **Signs in for real, and fails the deploy if nobody can.** Step 4 proves the
+   pages are *there*; this proves there is a way *past* them. It runs
+   [`e2e/live/staff-login.spec.ts`](../e2e/live/staff-login.spec.ts) in a real
+   browser against the production URL: `/login` → submit the seeded staff
+   credentials → land on `/dashboard` with both session cookies set → follow a
+   second guarded route → log out. That closes the one shape of "built but not
+   live" a route check cannot see, because `auth: "configured"` above only means
+   two variables are *non-empty* — it cannot tell a working key from a rotated
+   one, or a seeded database from an empty one. Skipped with a warning (never
+   failed) when Playwright is not installed, so `deploy.mjs` stays runnable from a
+   production install. Override with `DEPLOY_SKIP_SIGNIN_CHECK=1` when the deploy
+   *is* the fix for a broken environment.
+6. **Verifies the authenticated member portal** by running `npm run smoke:portal`
+   (see below). Step 5 signs in as *staff*; this is the members' half, which no
+   static route check can see at all — a deployment whose portal is broken renders
+   every page in step 4 flawlessly. Both checks run: a deployment can pass either
+   one and fail the other.
+
+Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
+`https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
+`DEPLOY_SKIP_MIGRATE`, `DEPLOY_SKIP_SIGNIN_CHECK`, `DEPLOY_VERCEL_PKG`.
+
+### Verifying a running deployment on its own — `npm run verify:live`
+
+The same sign-in journey, runnable any time without deploying — the quickest way
+to answer "is staff login actually working in production?" with evidence:
+
+```bash
+npm run verify:live                                   # production
+VERIFY_BASE_URL=https://preview-xyz.vercel.app npm run verify:live
+```
+
+It starts no servers and needs no database or secrets — it drives the public
+sign-in path exactly as a visitor does. Credentials come from
+[`lib/demo-accounts.ts`](../lib/demo-accounts.ts) (the list the forms themselves
+advertise, pinned against `scripts/seed.mjs` by `test/demo-accounts.test.ts`);
+override with `VERIFY_STAFF_EMAIL`/`VERIFY_STAFF_PASSWORD` where the `SEED_*`
+defaults were changed. It deliberately has **no wrong-password case** — sign-in is
+throttled at 6 attempts per account per 5 minutes, so a negative control would
+park the demo account in a lockout for the next visitor; that path is covered
+locally in `e2e/invite-flow.spec.ts` instead.
+
+## Verifying the member portal — `npm run smoke:portal`
+
+```bash
+npm run smoke:portal                          # defaults to production
+npm run smoke:portal -- --base http://localhost:3000
+```
+
+[`scripts/smoke-portal.mjs`](../scripts/smoke-portal.mjs) signs a demo member in
+at `/portal/login` with a real browser and asserts the portal actually renders
+**upcoming bookings/classes, membership status and payment history**.
+
+**Why it exists.** The member portal was reported as *"built but not live — the
+code implements this but the running app doesn't serve it"* round after round,
+every time incorrectly. Nothing could cheaply disprove it, because every
+automated check stopped at the front door: `/`, `/login` and `/portal/login` are
+static, prerendered, database-free pages that render perfectly on a deployment
+whose portal is broken, whose database is unreachable, or that was never seeded.
+`e2e/invite-flow.spec.ts` *does* cover the authenticated portal, but it needs a
+local throwaway Postgres plus the GoTrue stub, so it skips outside CI — and CI
+cannot run at all (see the billing block above). Answering "does a member
+actually see their bookings?" therefore meant hand-driving a browser. Now it is
+one command, and step 5 of every deploy.
+
+It needs no database and no Supabase keys: the credentials are the seed's public
+demo member, read from the same `SEED_MEMBER_EMAIL`/`SEED_MEMBER_PASSWORD` that
+`scripts/seed.mjs` uses, so a deployment seeded with overridden credentials is
+verifiable with no extra configuration. Exit codes are meaningful, and
+`deploy.mjs` relies on the distinction:
+
+| Exit | Meaning | Effect on a deploy |
+| --- | --- | --- |
+| 0 | The portal is live and every section rendered. | passes |
+| 1 | Signed in, but the portal did not serve — a defect in the shipped code. | **fails** |
+| 2 | Cannot run: no Playwright/browser, or no seeded demo member on that deployment. | warns |
+
+Exit 2 only warns for the same reason `auth: "unconfigured"` does — neither cause
+is created or fixable *by* the deploy, so failing would just block the deploy
+carrying the fix. Requires dev dependencies and `npx playwright install chromium`.
+
+### `.github/workflows/deploy.yml`
+
+Kept and correct — install deps → migrate the production database → deploy to
+Vercel production, so migrations always precede live traffic. It triggers on push
+to `master`/`main` and will resume working the moment the Actions billing block is
+lifted, at which point it becomes the primary path again and `npm run deploy`
+stays available for manual releases. **Until then it never starts**, so do not
+read its status as a deploy gate.
 
 ## Local development
 
@@ -143,11 +290,35 @@ In each inbox, open **Show original / View source** and confirm `SPF=pass`,
   `ALERT_WEBHOOK_URL` (e.g. a Slack/PagerDuty webhook), falling back to the
   monitoring URL flagged `alert: true`. Invite send failures and email
   bounces/complaints are raised at this level.
+- **Sign-in failures are reported too** — the two login Server Actions used to
+  turn *every* failure into the same friendly string and tell nobody, so a
+  deployment where authentication was completely broken looked exactly like one
+  where someone mistyped a password. They now classify the failure
+  (`AuthFailureKind` in `lib/auth/supabase.ts`) and report the ones that mean
+  nobody can sign in: an unusable auth service (unreachable / timing out /
+  unconfigured / not returning a session), and — as `critical` — an access token
+  this deployment cannot verify, which is a 100% login failure even with the
+  correct password. A rejected password is deliberately *not* reported.
 - Users only ever see a friendly message plus a correlation id; stack traces stay
   server-side.
 
+## Sign-in throttle (beta-hardening-002)
+
+`/login` and `/portal/login` rate-limit password submissions before any call to
+the auth service (`lib/auth/login-throttle.ts` over `lib/rate-limit.ts`). Two
+buckets must both pass, because they stop different attacks: **per IP** (one host
+walking a password list) and **per account** (credential stuffing for one address
+from many hosts, which a per-IP counter cannot see). Defaults are 10 attempts per
+IP and 6 per account per 5-minute rolling window; a successful sign-in clears both.
+Refusals are logged as `sign-in attempt throttled` with the scope and rate — but
+never the address or IP, both of which are personal data.
+
+Tuning and the single-instance caveat (counters are per server instance, so the
+effective global limit is instances × the value) are documented on the
+`LOGIN_THROTTLE_*` variables in [`.env.example`](../.env.example).
+
 Health check: `GET /api/health` returns
-`{ ok, status, db, db_latency_ms, email, time }` — plus `db_error` when the
+`{ ok, status, db, db_latency_ms, email, auth, time }` — plus `db_error` when the
 database is down — and **HTTP 503 when the database is unreachable** (200 when
 healthy) so uptime monitors alert on a real outage. Point an uptime monitor at it.
 

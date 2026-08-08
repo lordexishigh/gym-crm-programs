@@ -14,7 +14,10 @@ import {
 } from "@/lib/member-records";
 import { memberAdherence, recentWorkoutLogs } from "@/lib/workout-logs";
 import type { MembershipPlanRow, MemberPlanWithPlan } from "@/lib/plans";
+import { memberAvatarSrc } from "@/lib/member-photo";
+import { Avatar } from "@/app/components/Avatar";
 import { MemberForm } from "../MemberForm";
+import { MemberPhotoPanel } from "../MemberPhotoPanel";
 import { StatusHistory } from "../StatusHistory";
 import { WorkoutAdherence } from "../WorkoutAdherence";
 import { updateMemberAction, regeneratePinAction } from "../actions";
@@ -52,6 +55,16 @@ export default async function MemberDetailPage({
     ).rows[0];
     if (!member) return null;
 
+    // Photo PRESENCE only — the bytes live in their own table (0019) and are
+    // streamed by /api/members/[id]/photo, never pulled into a page render.
+    const photoUpdatedAt =
+      (
+        await c.query<{ updated_at: Date }>(
+          "select updated_at from member_photo where member_id = $1",
+          [id],
+        )
+      ).rows[0]?.updated_at ?? null;
+
     // Keep stored statuses honest before reading the latest invite.
     await expireStalePendingInvites(c);
 
@@ -70,11 +83,17 @@ export default async function MemberDetailPage({
       await c.query<MemberStatusEvent>(MEMBER_STATUS_HISTORY_SQL, [id])
     ).rows;
 
-    return { member, lastInvite, statusHistory };
+    return { member, lastInvite, statusHistory, photoUpdatedAt };
   });
 
   if (!data) notFound();
-  const { member, lastInvite, statusHistory } = data;
+  const { member, lastInvite, statusHistory, photoUpdatedAt } = data;
+
+  const avatarSrc = memberAvatarSrc({
+    id: member.id,
+    photo_updated_at: photoUpdatedAt,
+    photo_url: member.photo_url,
+  });
 
   // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
   // tenant-scoped by the `workout_log_staff_select` RLS policy.
@@ -121,21 +140,7 @@ export default async function MemberDetailPage({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-4">
-        {member.photo_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={member.photo_url}
-            alt={`${member.full_name} profile photo`}
-            className="h-14 w-14 shrink-0 rounded-full object-cover ring-1 ring-slate-200"
-          />
-        ) : (
-          <span
-            aria-hidden
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-slate-100 text-lg font-semibold text-slate-500 ring-1 ring-slate-200"
-          >
-            {member.full_name.charAt(0).toUpperCase()}
-          </span>
-        )}
+        <Avatar name={member.full_name} src={avatarSrc} size="md" />
         <div className="flex flex-col gap-1">
           <Link
             href="/dashboard/members"
@@ -203,6 +208,13 @@ export default async function MemberDetailPage({
           </dd>
         </div>
       </dl>
+
+      <MemberPhotoPanel
+        memberId={member.id}
+        memberName={member.full_name}
+        photoSrc={avatarSrc}
+        hasUpload={photoUpdatedAt !== null}
+      />
 
       <MemberForm
         action={updateMemberAction}

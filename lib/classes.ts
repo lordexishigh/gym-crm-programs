@@ -37,12 +37,15 @@ export type ClassBookingRow = {
   status: BookingStatus;
   booked_at: string;
   cancelled_at: string | null;
+  /** Set when this row was auto-promoted off the waitlist (see `promoteFromWaitlist`). */
+  promoted_at: string | null;
 };
 
 /** A class from the member's point of view, with their own booking (if any). */
 export type MemberClassView = ClassRow & {
   booking_id: string | null;
   booking_status: BookingStatus | null;
+  booking_promoted_at: string | null;
   booked_count: number;
 };
 
@@ -141,6 +144,7 @@ export async function listUpcomingClassesForMember(
       `select cl.id, cl.tenant_id, cl.name, cl.instructor_name, cl.starts_at,
               cl.duration_minutes, cl.capacity, cl.created_at, cl.updated_at,
               mine.id as booking_id, mine.status as booking_status,
+              mine.promoted_at as booking_promoted_at,
               coalesce(b.booked_count, 0)::int as booked_count
          from classes cl
          left join class_bookings mine
@@ -199,7 +203,7 @@ export async function classRoster(
     const bookings = (
       await c.query<ClassBookingRow & { member_name: string }>(
         `select cb.id, cb.tenant_id, cb.class_id, cb.member_id, cb.status,
-                cb.booked_at, cb.cancelled_at, m.full_name as member_name
+                cb.booked_at, cb.cancelled_at, cb.promoted_at, m.full_name as member_name
            from class_bookings cb
            join member m on m.id = cb.member_id
           where cb.class_id = $1 and cb.status <> 'cancelled'
@@ -296,21 +300,193 @@ export async function bookClass(
   });
 }
 
+/**
+ * A booking that was just moved off the waitlist onto a confirmed spot, with
+ * everything the caller needs to email the member — so the notify step never
+ * has to re-query per promotion.
+ */
+export type PromotedBooking = {
+  booking_id: string;
+  member_id: string;
+  member_name: string;
+  member_email: string | null;
+  class_id: string;
+  class_name: string;
+  starts_at: string;
+};
+
+/**
+ * Fill every currently-free spot in a class from the head of its waitlist,
+ * oldest waiting first, and return who was promoted.
+ *
+ * This is the auto-promotion handler. It is driven by `cancelBooking` (the
+ * common case: a member or the front desk frees a confirmed spot) and can also
+ * be invoked directly by staff — see `promoteFromWaitlistAction` in
+ * app/dashboard/classes/actions.ts — to reconcile a class whose vacancies were
+ * created some other way.
+ *
+ * Design notes:
+ *
+ * - **Admin context.** Promotion writes ANOTHER member's booking row. No RLS
+ *   policy permits that from a member session, and rightly so, so this uses
+ *   `withAdminContext` — the same narrowly-scoped admin-path pattern as invite
+ *   acceptance. Because that bypasses RLS, `tenant_id` is matched EXPLICITLY in
+ *   every clause below; a caller cannot reach across gyms by passing a foreign
+ *   class id.
+ * - **Capacity-driven, not delta-driven.** It promotes `capacity - booked`
+ *   members rather than assuming exactly one spot just opened. That makes it
+ *   idempotent (nothing free ⇒ nothing promoted ⇒ safe to call twice) and
+ *   self-healing if a booking race ever left a class under-filled with people
+ *   still waiting.
+ * - **Past classes are skipped.** `starts_at >= now()` means cancelling out of
+ *   a class that already happened never promotes someone into it — which would
+ *   otherwise email a member "a spot opened up" for a session that is over.
+ * - **Concurrency.** `for update skip locked` on the waitlist selection means
+ *   two simultaneous cancellations promote two DIFFERENT members instead of
+ *   racing over one row. The whole thing is a single statement, so the
+ *   count-free-spots and take-the-waitlist-head steps cannot interleave.
+ * - **LIMIT guard.** `coalesce(..., 0)` matters: a bare `limit (select …)` that
+ *   yields NULL means "no limit" in Postgres, which would promote the entire
+ *   waitlist whenever the class is missing or already started.
+ */
+export async function promoteFromWaitlist(
+  tenantId: string,
+  classId: string,
+): Promise<PromotedBooking[]> {
+  return withAdminContext(async (c) => {
+    const { rows } = await c.query<PromotedBooking>(
+      `with target as (
+         select cl.id, cl.capacity, cl.name, cl.starts_at
+           from classes cl
+          where cl.id = $1 and cl.tenant_id = $2 and cl.starts_at >= now()
+       ),
+       free as (
+         select t.capacity - count(cb.id) as slots
+           from target t
+           left join class_bookings cb
+             on cb.class_id = t.id and cb.tenant_id = $2 and cb.status = 'booked'
+          group by t.capacity
+       ),
+       next_up as (
+         select cb.id
+           from class_bookings cb
+          where cb.class_id = $1
+            and cb.tenant_id = $2
+            and cb.status = 'waitlisted'
+          order by cb.booked_at asc
+          limit coalesce((select greatest(slots, 0) from free), 0)
+          for update skip locked
+       ),
+       promoted as (
+         update class_bookings cb
+            set status = 'booked', promoted_at = now()
+          where cb.id in (select id from next_up)
+          returning cb.id, cb.member_id
+       )
+       select p.id as booking_id, p.member_id,
+              m.full_name as member_name, m.email as member_email,
+              t.id as class_id, t.name as class_name, t.starts_at
+         from promoted p
+         join member m on m.id = p.member_id and m.tenant_id = $2
+         cross join target t`,
+      [classId, tenantId],
+    );
+    return rows;
+  });
+}
+
+/**
+ * Promotions that happened but were never successfully emailed.
+ *
+ * Migration 0019 created `idx_class_bookings_promotion_unnotified` for exactly
+ * this query — "the notify sweep looks for promoted-but-not-yet-notified rows" —
+ * but no sweep existed to run it. Notification happened only inline, on the
+ * `cancelBooking` path that caused the promotion, so any send that failed there
+ * (a provider blip, or simply a deployment with no `RESEND_API_KEY` — which is
+ * production today) left `promotion_notified_at` null forever with nothing to
+ * retry it. The member keeps their spot and is never told, which is the precise
+ * failure 0019 was written to prevent.
+ *
+ * `waitlist_promotion_notify` (lib/task-handlers.ts) is that sweep. Admin
+ * context, `tenant_id` matched explicitly, for the same reason as the promotion
+ * itself: these rows belong to other members.
+ *
+ * Past classes are excluded — emailing "a spot opened up" for a session that has
+ * already happened is worse than saying nothing, and those rows would otherwise
+ * be retried forever.
+ */
+export async function unnotifiedPromotions(
+  tenantId: string,
+  limit = 100,
+): Promise<PromotedBooking[]> {
+  const capped = Math.min(Math.max(1, Math.floor(limit)), 500);
+  return withAdminContext(async (c) => {
+    const { rows } = await c.query<PromotedBooking>(
+      `select cb.id as booking_id, cb.member_id,
+              m.full_name as member_name, m.email as member_email,
+              cl.id as class_id, cl.name as class_name, cl.starts_at
+         from class_bookings cb
+         join member  m  on m.id  = cb.member_id and m.tenant_id  = $1
+         join classes cl on cl.id = cb.class_id  and cl.tenant_id = $1
+        where cb.tenant_id = $1
+          and cb.promoted_at is not null
+          and cb.promotion_notified_at is null
+          and cb.status = 'booked'
+          and cl.starts_at >= now()
+        order by cb.promoted_at asc
+        limit $2`,
+      [tenantId, capped],
+    );
+    return rows;
+  });
+}
+
+/**
+ * Stamp `promotion_notified_at` on bookings whose promoted member was
+ * successfully emailed, so a later sweep or retry never double-sends. Runs in
+ * admin context for the same reason the promotion itself does: the rows belong
+ * to other members. A no-op for an empty list.
+ */
+export async function markPromotionNotified(
+  tenantId: string,
+  bookingIds: string[],
+): Promise<void> {
+  if (bookingIds.length === 0) return;
+  await withAdminContext(async (c) => {
+    await c.query(
+      `update class_bookings
+          set promotion_notified_at = now()
+        where id = any($1::uuid[])
+          and tenant_id = $2
+          and promotion_notified_at is null`,
+      [bookingIds, tenantId],
+    );
+  });
+}
+
 export type CancelResult =
-  | { ok: true; promotedMemberId: string | null }
+  | { ok: true; promoted: PromotedBooking[] }
   | { ok: false; error: string };
 
 /**
- * Cancel a booking. If it was a confirmed ('booked') spot, promotes the
- * longest-waiting waitlisted booking for the same class to 'booked'.
+ * Cancel a booking, then backfill the vacancy it left from the waitlist.
  *
  * The cancel itself runs under the caller's own RLS session (member
- * self-update or staff-all policy). The promotion, though, is a write to
- * ANOTHER member's row — no RLS policy permits that for a member session, and
- * rightly so — so it runs via `withAdminContext`, the same narrowly-scoped
- * admin-path pattern used for invite acceptance. `for update skip locked`
- * ensures two concurrent cancellations for the same class each promote a
- * DIFFERENT waitlisted booking rather than racing on one row.
+ * self-update or staff-all policy); the promotion runs through
+ * `promoteFromWaitlist`, which explains the admin-context and concurrency
+ * reasoning.
+ *
+ * Promotion is attempted after ANY successful cancellation, not only after a
+ * confirmed one. Cancelling a waitlist place does not itself free a spot, so in
+ * that case the capacity check inside `promoteFromWaitlist` almost always finds
+ * nothing to do and returns an empty list — but if a booking race ever left the
+ * class under capacity with members still waiting, this repairs it instead of
+ * silently preserving the gap.
+ *
+ * Notifying the promoted members is the CALLER's job: this module is DB-only
+ * and must not pull the email stack into every importer. Callers pass the
+ * returned rows to `notifyWaitlistPromotions` (lib/notifications.ts) and then
+ * `markPromotionNotified`.
  */
 export async function cancelBooking(
   identity: Identity,
@@ -328,26 +504,6 @@ export async function cancelBooking(
 
   if (!cancelled) return { ok: false, error: "Booking not found or already cancelled." };
 
-  // Only a freed CONFIRMED spot triggers a promotion — cancelling a waitlist
-  // place changes nothing for anyone else.
-  const wasBooked = cancelled.status === "booked";
-  if (!wasBooked) return { ok: true, promotedMemberId: null };
-
-  const promoted = await withAdminContext(async (c) => {
-    const { rows } = await c.query<{ member_id: string }>(
-      `update class_bookings set status = 'booked'
-        where id = (
-          select id from class_bookings
-           where class_id = $1 and status = 'waitlisted' and tenant_id = $2
-           order by booked_at asc
-           for update skip locked
-           limit 1
-        )
-        returning member_id`,
-      [cancelled.class_id, identity.tenantId],
-    );
-    return rows[0] ?? null;
-  });
-
-  return { ok: true, promotedMemberId: promoted?.member_id ?? null };
+  const promoted = await promoteFromWaitlist(identity.tenantId, cancelled.class_id);
+  return { ok: true, promoted };
 }
