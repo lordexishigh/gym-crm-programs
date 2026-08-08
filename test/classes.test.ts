@@ -5,7 +5,7 @@ import { validateClassInput } from "../lib/classes";
 
 const CLASSES_SRC = readFileSync(path.join(process.cwd(), "lib", "classes.ts"), "utf8");
 const MIGRATION_WAITLIST_PROMOTION = readFileSync(
-  path.join(process.cwd(), "migrations", "0020_waitlist_promotion.sql"),
+  path.join(process.cwd(), "migrations", "0022_waitlist_promotion.sql"),
   "utf8",
 );
 
@@ -116,7 +116,7 @@ describe("cancelBooking", () => {
   });
 });
 
-describe("migration 0020_waitlist_promotion", () => {
+describe("migration 0022_waitlist_promotion", () => {
   it("adds the promotion columns idempotently", () => {
     expect(MIGRATION_WAITLIST_PROMOTION).toContain(
       "add column if not exists promoted_at timestamptz",

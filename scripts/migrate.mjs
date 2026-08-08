@@ -38,12 +38,18 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
  * harmless in practice, but ambiguous by construction — see
  * test/migration-filenames.test.ts, which now fails the build on any future
  * duplicate). `0019_member_photo.sql` KEEPS its number; only the other file
- * of the colliding pair moves.
+ * of the colliding pair moves. It then collided AGAIN, this time with
+ * 0020_task_queue.sql added independently on master while this rename sat in
+ * an unmerged branch — moved once more, to 0022_waitlist_promotion.sql
+ * (0021 already taken by 0021_suggestions.sql). Neither this migration nor
+ * its 0020 name was ever deployed anywhere (branch never merged), but the
+ * alias still maps back to its original 0019 name for consistency with the
+ * rest of this table and in case any throwaway environment recorded it there.
  */
 const RENAMED = {
   "0011_assignment_lifecycle.sql": "0003_assignment_lifecycle.sql",
   "0012_member_extended_fields.sql": "0003_member_extended_fields.sql",
-  "0020_waitlist_promotion.sql": "0019_waitlist_promotion.sql",
+  "0022_waitlist_promotion.sql": "0019_waitlist_promotion.sql",
 };
 
 /**
