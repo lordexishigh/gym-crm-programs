@@ -17,6 +17,7 @@ import {
   supersedePending,
   type Observation,
 } from "../lib/suggestions";
+import { sweepScheduledWork, TASK_KINDS } from "../lib/task-handlers";
 
 /**
  * Task-queue and suggestion-ledger behaviour against a real Postgres
@@ -276,6 +277,60 @@ describe.skipIf(!hasDb)("task queue and suggestion ledger", () => {
       );
       expect(deleted).toBe(0);
       expect(after).toBe(before);
+    });
+  });
+
+  // --- The sweep -----------------------------------------------------------
+
+  describe("sweepScheduledWork", () => {
+    it("does not enqueue per-tenant work for a gym with no active members", async () => {
+      // Not an optimisation — a correctness property under real conditions. The
+      // production database carries ~154 junk tenants left by the RLS suites,
+      // which seed conflicting gyms and never clean up. Enqueueing per-tenant
+      // sweeps for all of them would file ~310 tasks a day against a dispatcher
+      // that claims 25 per run on a daily cron, so the queue would never drain
+      // and the one real gym's reminders would queue behind work for phantoms.
+      const emptyGym = await withAdminContext(
+        async (c) =>
+          (
+            await c.query(
+              "insert into gym (name) values ('TQ Empty Gym') returning id",
+            )
+          ).rows[0].id as string,
+      );
+
+      await sweepScheduledWork(new Date());
+
+      const kinds = await withAdminContext(async (c) =>
+        (
+          await c.query("select kind from tasks where tenant_id = $1", [
+            emptyGym,
+          ])
+        ).rows.map((r) => r.kind as string),
+      );
+      expect(kinds).not.toContain(TASK_KINDS.atRiskBriefs);
+      expect(kinds).not.toContain(TASK_KINDS.waitlistPromotionNotify);
+    });
+
+    it("does enqueue an at-risk sweep for a gym that has active members", async () => {
+      await sweepScheduledWork(new Date());
+
+      const kinds = await withAdminContext(async (c) =>
+        (
+          await c.query("select kind from tasks where tenant_id = $1", [
+            seed.gymA,
+          ])
+        ).rows.map((r) => r.kind as string),
+      );
+      expect(kinds).toContain(TASK_KINDS.atRiskBriefs);
+    });
+
+    it("is idempotent — a second sweep in the same week enqueues nothing new", async () => {
+      await sweepScheduledWork(new Date());
+      const { enqueued } = await sweepScheduledWork(new Date());
+      // The whole point of the dedupe key: the cron may fire as often as it
+      // likes, and a backup trigger may fire alongside it.
+      expect(enqueued).toBe(0);
     });
   });
 
