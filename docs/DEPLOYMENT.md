@@ -113,10 +113,86 @@ What it does, in order:
    dashboard and portal unreachable behind a page that looks fine. It warns
    rather than fails because a missing project env var cannot be fixed *by* a
    deploy, so blocking on it would only block the deploy carrying the fix.
+5. **Signs in for real, and fails the deploy if nobody can.** Step 4 proves the
+   pages are *there*; this proves there is a way *past* them. It runs
+   [`e2e/live/staff-login.spec.ts`](../e2e/live/staff-login.spec.ts) in a real
+   browser against the production URL: `/login` → submit the seeded staff
+   credentials → land on `/dashboard` with both session cookies set → follow a
+   second guarded route → log out. That closes the one shape of "built but not
+   live" a route check cannot see, because `auth: "configured"` above only means
+   two variables are *non-empty* — it cannot tell a working key from a rotated
+   one, or a seeded database from an empty one. Skipped with a warning (never
+   failed) when Playwright is not installed, so `deploy.mjs` stays runnable from a
+   production install. Override with `DEPLOY_SKIP_SIGNIN_CHECK=1` when the deploy
+   *is* the fix for a broken environment.
+6. **Verifies the authenticated member portal** by running `npm run smoke:portal`
+   (see below). Step 5 signs in as *staff*; this is the members' half, which no
+   static route check can see at all — a deployment whose portal is broken renders
+   every page in step 4 flawlessly. Both checks run: a deployment can pass either
+   one and fail the other.
 
 Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 `https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
-`DEPLOY_SKIP_MIGRATE`, `DEPLOY_VERCEL_PKG`.
+`DEPLOY_SKIP_MIGRATE`, `DEPLOY_SKIP_SIGNIN_CHECK`, `DEPLOY_VERCEL_PKG`.
+
+### Verifying a running deployment on its own — `npm run verify:live`
+
+The same sign-in journey, runnable any time without deploying — the quickest way
+to answer "is staff login actually working in production?" with evidence:
+
+```bash
+npm run verify:live                                   # production
+VERIFY_BASE_URL=https://preview-xyz.vercel.app npm run verify:live
+```
+
+It starts no servers and needs no database or secrets — it drives the public
+sign-in path exactly as a visitor does. Credentials come from
+[`lib/demo-accounts.ts`](../lib/demo-accounts.ts) (the list the forms themselves
+advertise, pinned against `scripts/seed.mjs` by `test/demo-accounts.test.ts`);
+override with `VERIFY_STAFF_EMAIL`/`VERIFY_STAFF_PASSWORD` where the `SEED_*`
+defaults were changed. It deliberately has **no wrong-password case** — sign-in is
+throttled at 6 attempts per account per 5 minutes, so a negative control would
+park the demo account in a lockout for the next visitor; that path is covered
+locally in `e2e/invite-flow.spec.ts` instead.
+
+## Verifying the member portal — `npm run smoke:portal`
+
+```bash
+npm run smoke:portal                          # defaults to production
+npm run smoke:portal -- --base http://localhost:3000
+```
+
+[`scripts/smoke-portal.mjs`](../scripts/smoke-portal.mjs) signs a demo member in
+at `/portal/login` with a real browser and asserts the portal actually renders
+**upcoming bookings/classes, membership status and payment history**.
+
+**Why it exists.** The member portal was reported as *"built but not live — the
+code implements this but the running app doesn't serve it"* round after round,
+every time incorrectly. Nothing could cheaply disprove it, because every
+automated check stopped at the front door: `/`, `/login` and `/portal/login` are
+static, prerendered, database-free pages that render perfectly on a deployment
+whose portal is broken, whose database is unreachable, or that was never seeded.
+`e2e/invite-flow.spec.ts` *does* cover the authenticated portal, but it needs a
+local throwaway Postgres plus the GoTrue stub, so it skips outside CI — and CI
+cannot run at all (see the billing block above). Answering "does a member
+actually see their bookings?" therefore meant hand-driving a browser. Now it is
+one command, and step 5 of every deploy.
+
+It needs no database and no Supabase keys: the credentials are the seed's public
+demo member, read from the same `SEED_MEMBER_EMAIL`/`SEED_MEMBER_PASSWORD` that
+`scripts/seed.mjs` uses, so a deployment seeded with overridden credentials is
+verifiable with no extra configuration. Exit codes are meaningful, and
+`deploy.mjs` relies on the distinction:
+
+| Exit | Meaning | Effect on a deploy |
+| --- | --- | --- |
+| 0 | The portal is live and every section rendered. | passes |
+| 1 | Signed in, but the portal did not serve — a defect in the shipped code. | **fails** |
+| 2 | Cannot run: no Playwright/browser, or no seeded demo member on that deployment. | warns |
+
+Exit 2 only warns for the same reason `auth: "unconfigured"` does — neither cause
+is created or fixable *by* the deploy, so failing would just block the deploy
+carrying the fix. Requires dev dependencies and `npx playwright install chromium`.
 
 ### `.github/workflows/deploy.yml`
 

@@ -17,6 +17,11 @@ export const dynamic = "force-dynamic";
  */
 const BASE_NAV = [
   { href: "/dashboard", label: "Overview" },
+  // Sits second, beside the roster it draws from: the review queue is only ever
+  // read in reference to a member, and burying it behind Templates would make a
+  // time-sensitive list (a member who stopped training three weeks ago) the
+  // least discoverable thing in the nav.
+  { href: "/dashboard/suggestions", label: "Needs review" },
   { href: "/dashboard/members", label: "Members" },
   { href: "/dashboard/invites", label: "Invites" },
   { href: "/dashboard/classes", label: "Classes" },

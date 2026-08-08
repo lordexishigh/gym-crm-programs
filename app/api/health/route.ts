@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { authConfigured } from "@/lib/auth/supabase";
+import { capabilityGaps, capabilitySummary } from "@/lib/capabilities";
 
 // Always evaluated at request time so deploy smoke checks reflect live state.
 export const dynamic = "force-dynamic";
@@ -125,6 +126,19 @@ export async function GET() {
       ...(db.error ? { db_error: db.error } : {}),
       email,
       auth,
+      // The full capability picture (lib/capabilities.ts). `email` and `auth`
+      // above are kept as top-level fields because deploy smoke checks and
+      // monitors already read them; this is the superset, and the only place a
+      // gap like "no CRON_SECRET, so nothing drains the task queue" is visible
+      // from outside the process. Gaps carry their consequence so an operator
+      // reading a probe response does not have to know what each key does.
+      capabilities: capabilitySummary(),
+      capability_gaps: capabilityGaps().map((c) => ({
+        id: c.id,
+        severity: c.severity,
+        missing: c.missing,
+        consequence: c.consequence,
+      })),
       time: new Date().toISOString(),
       // Which process/build is actually answering — see BUILD_ID above.
       instance: {

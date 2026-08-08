@@ -2,6 +2,15 @@
 
 What each autonomous improvement session did, what it cost, and what it changed — written by nous after every session.
 
+## 2026-07-31 20:03 — deep session
+
+- Rounds: 1 (1 approved, 0 rejected) · 48.2 min · subscription (unmetered)
+- Score: 75 → 80
+- Product gaps: 5 → 6
+- Effort mix: product ×5, judge ×3
+- Churn: "Blueprint item built but not live — the code implements 'Member authentication — email and password login' but the running app doesn't serve it (push and redeploy, don't rebuild)." was attacked in multiple rounds without being resolved — it needs a different approach (or a human).
+- 56% of the session's 141.5 min of agent work went to one stage: implement (79.5 min). That ran inside 48.2 min of wall clock (2.9x overlap). The agent's first pass at the change. The dominant cost of a round; the lever is fewer/smaller items, not a shorter clock.
+
 ## 2026-07-30 21:39 — manual session
 
 - Rounds: 1 (1 approved, 0 rejected) · 72.7 min · subscription (unmetered)

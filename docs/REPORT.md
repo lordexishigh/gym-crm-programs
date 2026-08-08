@@ -1,8 +1,8 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-78%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
+[![nous score](https://img.shields.io/badge/nous%20score-79%2F100-yellow)](#) ![readiness](https://img.shields.io/badge/readiness-caution-yellow)
 
-**Overall: 78/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
+**Overall: 79/100** · readiness: **caution** · **launch-ready** 🚀 · build verified ✓
 
 **Live:** https://gym-crm-programs.vercel.app
 
@@ -11,10 +11,10 @@
 | Dimension | Score | |
 |---|---:|---|
 | Spec coverage | 73 | `███████████████░░░░░` |
-| Code quality | 83 | `█████████████████░░░` |
-| Robustness & error handling | 77 | `███████████████░░░░░` |
-| Builds & tests | 87 | `█████████████████░░░` |
-| UX & design | 74 | `███████████████░░░░░` |
+| Code quality | 86 | `█████████████████░░░` |
+| Robustness & error handling | 79 | `████████████████░░░░` |
+| Builds & tests | 84 | `█████████████████░░░` |
+| UX & design | 77 | `███████████████░░░░░` |
 
 ## Readiness checks
 
@@ -22,7 +22,7 @@
 - ✅ No hardcoded secrets — no secret-shaped literals found
 - ✅ Secrets file ignored — .env present but gitignored
 - ✅ Row-Level Security — RLS enabled on the schema
-- ⚠️ Dependency vulnerabilities — 2 high-severity vulnerability(ies) in dependencies
+- ✅ Dependency vulnerabilities — no critical/high vulnerabilities in the last audit
 - ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
@@ -43,22 +43,21 @@
 
 ## Strengths
 
-- RLS isolation is enforced at the database layer and guarded by a CI test (test/isolation-coverage.test.ts) that auto-discovers every tenant-carrying table from the live pg_class catalog, making it structurally impossible for a new table to ship without RLS without breaking CI.
-- Pure/impure module discipline is consistent: lib/member-photo.ts and lib/members.ts carry no database or environment imports and are fully unit-testable in isolation, while DB queries are confined to actions.ts and lib/db.ts withTenantContext calls.
-- The test suite is substantively non-trivial — 239 tests including infrastructure regression guards (dev server startup race, missing-build fallback, RLS auto-discovery) that pin real, previously-observed failure modes with measured evidence.
-- Feature scope significantly exceeds the spec: exercise library per tenant, class scheduling with waitlist, billing/membership plans, GDPR export and erasure, member photo upload with magic-byte sniffing, bulk CSV import, and workout logging are all wired up beyond what was promised.
+- Security and isolation architecture is production-grade: RLS policies in migrations/0002_rls_policies.sql, withTenantContext wrapping every query, JWT verified server-side in lib/identity.ts with no trust placed on browser-supplied identity, and login throttling in lib/auth/login-throttle.ts.
+- Test suite is substantive and explains its invariants: 239 tests covering health-probe timeout contracts, deploy-gate policy, dev-server readiness races, and start-wrapper fallback — each test file documents the specific production defect it prevents.
+- Implementation is complete and unstubbed across all 8 spec features, with real domain logic in lib/programs.ts, lib/assignments.ts, lib/invites.ts, lib/members.ts, and full UI in app/dashboard/programs/ and app/portal/.
+- Codebase has well-separated module boundaries with clear responsibilities: lib/ owns domain logic and DB access, app/dashboard/ owns staff UI, app/portal/ owns member UI, and lib/auth/ owns all identity concerns — no cross-cutting leakage visible in the sample.
 
 ## To improve
 
-- Two high-severity dependency vulnerabilities are unaddressed (automated WARN) — run `npm audit` to identify the affected packages and pin safe versions or apply `npm audit fix` so the dependency risk does not reach production.
-- The crawl has failed to authenticate past /login or /portal/login across every evaluation round — verify the demo credential flow (trainer@demo.local / DemoTrainer!2026 and member@demo.local / DemoMember!2026) works end-to-end in the deployed environment by running a headed Playwright script against the live URL and confirming the staff dashboard, member list, program builder, and member portal each render with seeded data.
-- Error tracking has no external sink (automated WARN) — wire lib/observability/monitoring.ts captureException to a real DSN (Sentry, BetterStack, or equivalent) so production exceptions are visible; currently the global-error.tsx boundary catches errors but nothing surfaces them outside the process.
-- Two `<img>` elements are missing alt attributes (automated WARN) — locate them (likely in app/components/Avatar.tsx or member photo surfaces) and add descriptive alt text or alt="" for decorative images to clear the accessibility warning.
-- No reporting dashboard exists (/dashboard/reports is absent from the file tree and market fit check flags it as missing) — add a reports page backed by aggregation queries over payment_events (MRR), members (active count), and class_bookings (attendance per class) so gym owners have a baseline business view.
+- The E2E suite (e2e/staff-journey.spec.ts and e2e/invite-flow.spec.ts) is not wired into the CI gate that produces the green result — add a ci.yml step that runs `npx playwright test` against a seeded database so authenticated flows (dashboard load, program creation, member portal render) are machine-verified on every push rather than left to manual crawl.
+- The automated check warns 'no error tracking or global error handler' despite app/global-error.tsx existing — wire a real error-reporting sink (e.g. Sentry DSN) into instrumentation.ts so production runtime exceptions are visible; the current observability stack in lib/observability/monitoring.ts captures metrics but not unhandled exceptions.
+- Two img elements lack alt text (automated WARN) — audit app/page.tsx and app/dashboard/ for bare <img> tags and add descriptive alt attributes, which is also a WCAG 2.1 AA failure blocking accessibility compliance.
+- The server readiness race has caused /portal/login and /login to time out in every evaluation round since Round 3 — scripts/dev.mjs should poll /api/health until it returns HTTP 200 before yielding to the caller, mirroring the contract already tested in test/dev-server.test.ts but not enforced in the dev entry point.
 
 ## Summary
 
-The codebase is genuinely complete against the spec — all eight promised features are implemented without stubs, the test suite is sophisticated and passes at 239 tests, and the scope far exceeds the pitch. The dominant risk remains that the crawl cannot authenticate in the running app across multiple evaluation rounds, leaving every post-login feature runtime-unverified; resolving the deployed demo credential flow is the single highest-leverage action before this build can be called production-ready.
+All 8 spec features are genuinely implemented with production-quality code, strong RLS isolation, and a substantive 239-test suite — but the running app has failed to serve any authenticated page across 8 consecutive evaluation rounds, leaving the product's core wedge (program authoring, assignment, and the member portal) completely unverifiable at runtime; resolving the server readiness race and wiring E2E tests into CI are the two changes that would most close this gap.
 
 ---
-_Scored 2026-07-30 21:39 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-07-31 20:02 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._

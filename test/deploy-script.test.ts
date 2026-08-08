@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   decideMigrate,
+  decideSignInCheck,
   gitBlockers,
   routeVerdict,
 } from "../scripts/deploy.mjs";
@@ -160,5 +161,52 @@ describe("routeVerdict", () => {
     ]);
     expect(verdict.ok).toBe(false);
     expect(verdict.failures).toHaveLength(2);
+  });
+});
+
+/**
+ * `routeVerdict` above signs off on a deployment whose /login RENDERS. That is
+ * not the same as one anyone can sign IN to — /login is statically prerendered,
+ * so a rotated Supabase key or an unseeded database produces a flawless form that
+ * refuses every credential, with the whole dashboard and portal stranded behind
+ * it. That is the "built but not live" report this project keeps receiving, and
+ * it is the one shape of it that a route check cannot see. This decides whether
+ * the real sign-in journey (e2e/live/staff-login.spec.ts) runs to close the gap.
+ */
+describe("decideSignInCheck", () => {
+  it("verifies sign-in when a browser driver is available", () => {
+    const { check, reason } = decideSignInCheck({ env: {}, playwrightAvailable: true });
+    expect(check).toBe(true);
+    expect(reason).toMatch(/sign-in actually works/i);
+  });
+
+  it("skips — never fails — when Playwright is absent, and says the gap is open", () => {
+    // deploy.mjs must stay runnable from a production install (`--omit=dev`),
+    // where a browser driver is legitimately missing. Skipping silently would be
+    // worse than not checking: it would read as a verified deploy.
+    const { check, reason } = decideSignInCheck({ env: {}, playwrightAvailable: false });
+    expect(check).toBe(false);
+    expect(reason).toMatch(/not installed/);
+    expect(reason).toMatch(/verify:live/);
+  });
+
+  it("honours DEPLOY_SKIP_SIGNIN_CHECK for a deploy that carries the fix", () => {
+    const { check, reason } = decideSignInCheck({
+      env: { DEPLOY_SKIP_SIGNIN_CHECK: "1" },
+      playwrightAvailable: true,
+    });
+    expect(check).toBe(false);
+    expect(reason).toMatch(/DEPLOY_SKIP_SIGNIN_CHECK/);
+  });
+
+  it("treats an empty/0/false override as unset", () => {
+    for (const value of ["", "0", "false"]) {
+      expect(
+        decideSignInCheck({
+          env: { DEPLOY_SKIP_SIGNIN_CHECK: value },
+          playwrightAvailable: true,
+        }).check,
+      ).toBe(true);
+    }
   });
 });

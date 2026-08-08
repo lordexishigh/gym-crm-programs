@@ -7,5 +7,11 @@
       "master": false,
       "main": false
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/tasks/dispatch",
+      "schedule": "0 8 * * *"
+    }
+  ]
 }
