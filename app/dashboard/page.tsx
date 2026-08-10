@@ -1,21 +1,10 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
-import { withTenantContext } from "@/lib/db";
+import { dashboardOverviewStats } from "@/lib/dashboard";
 import { currentOccupancy } from "@/lib/checkin";
 import { CapabilityNotice } from "@/app/components/CapabilityNotice";
 
 export const dynamic = "force-dynamic";
-
-/** Live tenant-scoped overview counts. Every count runs as the RLS-bound
- *  `app_user` role inside `withTenantContext`, so the numbers are the staff
- *  member's own gym by construction — no query carries a tenant predicate. */
-type OverviewStats = {
-  members: number;
-  activeMembers: number;
-  programs: number;
-  activeAssignments: number;
-  pendingSuggestions: number;
-};
 
 /**
  * Dashboard overview (review-hardening-dashboard-001).
@@ -27,34 +16,7 @@ type OverviewStats = {
 export default async function DashboardPage() {
   const session = await requireStaff();
 
-  const stats = await withTenantContext<OverviewStats>(
-    session.identity,
-    async (c) => {
-      // One round trip; sub-selects are all RLS-scoped to this tenant.
-      const { rows } = await c.query<{
-        members: string;
-        active_members: string;
-        programs: string;
-        active_assignments: string;
-        pending_suggestions: string;
-      }>(
-        `select
-           (select count(*) from member) as members,
-           (select count(*) from member where status = 'active') as active_members,
-           (select count(*) from program) as programs,
-           (select count(*) from program_assignment where status = 'active') as active_assignments,
-           (select count(*) from suggestions where status = 'pending') as pending_suggestions`,
-      );
-      const r = rows[0];
-      return {
-        members: Number(r?.members ?? 0),
-        activeMembers: Number(r?.active_members ?? 0),
-        programs: Number(r?.programs ?? 0),
-        activeAssignments: Number(r?.active_assignments ?? 0),
-        pendingSuggestions: Number(r?.pending_suggestions ?? 0),
-      };
-    },
-  );
+  const stats = await dashboardOverviewStats(session.identity);
 
   // Live occupancy is its own read (a different table, and a rolling time
   // window rather than a tenant count), so it stays out of the KPI round trip.
