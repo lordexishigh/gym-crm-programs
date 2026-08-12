@@ -280,11 +280,40 @@ jobs:
           # Signal the wrapper by its stable script path, not bash's `$!` (that's
           # `npm`, which never forwards SIGTERM to the script it runs). See the
           # smoke-test step above for the reproduction and full explanation.
+          #
+          # …and then WAIT for them to actually die. `pkill` sends SIGTERM and
+          # returns immediately, so without this the step exits while a signalled
+          # `next dev` is still running, and the NEXT step's first command is
+          # `rm -rf .next`. A dev server writes into `.next` continuously, so `rm`
+          # walks a directory that is still gaining files and fails with
+          # "Directory not empty" — which is exactly how the postinstall step
+          # died the first time it ever got to run, having been skipped behind a
+          # failing journey on every previous build.
+          #
+          # Waiting on the PORT alone (what the smoke-test step does) is not
+          # enough here: this step's server is `next dev`, and the writes that
+          # break `rm` continue until the PROCESS exits, which is strictly later
+          # than the listener closing. So poll the process table, and fall back
+          # to the port check for a wrapper that died some other way.
           stop_server() {
             pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
             pkill -f "next dev" 2>/dev/null || true
             kill "$SERVER_PID" 2>/dev/null || true
+
+            for _ in $(seq 1 30); do
+              if ! pgrep -f "node scripts/start\.mjs" >/dev/null 2>&1 \
+                 && ! pgrep -f "next dev" >/dev/null 2>&1 \
+                 && ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            # Escalate rather than hand the next step a directory being written.
+            pkill -9 -f "node scripts/start\.mjs" 2>/dev/null || true
+            pkill -9 -f "next dev" 2>/dev/null || true
+            sleep 2
+            echo "::warning::fresh-clone teardown needed SIGKILL; a dev server outlived SIGTERM by 30s"
           }
 
           # Deliberately far tighter than a full build: ~4x the measured cold dev
