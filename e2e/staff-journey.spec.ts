@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
+import { recordServerActionResponses } from "./action-trace";
 
 /**
  * Journey test: staff sign-in → dashboard → add a member → author a program →
@@ -118,6 +119,12 @@ async function signInAsStaff(page: Page): Promise<void> {
 
 test.describe("staff journey", () => {
   test.skip(!dbUsable, "DATABASE_URL must point at a local throwaway Postgres");
+
+  // Attaches each Server Action's flight payload — the one input issue #26's
+  // retained trace cannot show, since traces store GET bodies but no POST ones.
+  test.beforeEach(({ page }) => {
+    recordServerActionResponses(page);
+  });
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: DATABASE_URL });

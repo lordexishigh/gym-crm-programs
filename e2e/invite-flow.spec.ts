@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
+import { recordServerActionResponses } from "./action-trace";
 
 /**
  * Journey test: invite → accept → login → portal view (the complete member
@@ -54,6 +55,12 @@ let gymId: string;
 
 test.describe("member onboarding journey", () => {
   test.skip(!dbUsable, "DATABASE_URL must point at a local throwaway Postgres");
+
+  // Recorded on the member end too: #26's victim rotates between staff and
+  // member journeys, so whichever one hangs, its payload is already captured.
+  test.beforeEach(({ page }) => {
+    recordServerActionResponses(page);
+  });
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: DATABASE_URL });
