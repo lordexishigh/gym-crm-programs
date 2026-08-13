@@ -6,6 +6,21 @@ on:
     branches: [master, main]
   pull_request:
 
+# One in-flight run per branch. This job is expensive — a Postgres service, a
+# full build and a Playwright e2e pass, several minutes of billable time — and
+# without this, every push to a PR left its predecessor running to completion.
+# Rebasing the open PRs in one go therefore started ~11 simultaneous full runs
+# and exhausted the account's Actions spending limit, after which GitHub refused
+# to start ANY job for hours. Superseded PR runs prove nothing, so cancel them.
+#
+# Only for pull_request: pushes to master are cancel-in-progress: false by
+# omission from this expression, because master's run is what deploy.yml's
+# gating and the branch's own history depend on — losing it to a rapid second
+# merge would leave a commit with no verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
