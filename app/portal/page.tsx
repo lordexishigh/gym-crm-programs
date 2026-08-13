@@ -2,7 +2,7 @@ import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
-import { recentWorkoutLogs } from "@/lib/workout-logs";
+import { recentWorkoutLogs, workoutStreakDays } from "@/lib/workout-logs";
 import { listUpcomingClassesForMember } from "@/lib/classes";
 import { memberMembershipStatus, memberPlansFor, paymentHistoryForMember } from "@/lib/billing";
 import { ProgramView } from "./ProgramView";
@@ -12,6 +12,7 @@ import { WorkoutHistory } from "./WorkoutHistory";
 import { ClassSchedule } from "./ClassSchedule";
 import { MembershipStatus } from "./MembershipStatus";
 import { PaymentHistory } from "./PaymentHistory";
+import { StreakBadge } from "./StreakBadge";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -38,19 +39,29 @@ export default async function PortalPage() {
   const session = await requireMember();
   const memberId = session.identity.memberId as string;
   // Active program (shown by default), the read-only history of past programs,
-  // the member's recent logged workout sessions (Phase GA), the bookable class
-  // schedule, and the billing/membership data (market gap #8: bookings,
-  // membership status, payment history).
-  const [programs, history, workouts, classes, membershipStatus, plans, paymentHistory] =
-    await Promise.all([
-      loadMemberPortal(session.identity, memberId),
-      archivedPrograms(session.identity, memberId),
-      recentWorkoutLogs(session.identity, memberId),
-      listUpcomingClassesForMember(session.identity, memberId),
-      memberMembershipStatus(session.identity, memberId),
-      memberPlansFor(session.identity, memberId),
-      paymentHistoryForMember(session.identity, memberId),
-    ]);
+  // the member's recent logged workout sessions (Phase GA), their current
+  // logging streak (engagement layer), the bookable class schedule, and the
+  // billing/membership data (market gap #8: bookings, membership status,
+  // payment history).
+  const [
+    programs,
+    history,
+    workouts,
+    streakDays,
+    classes,
+    membershipStatus,
+    plans,
+    paymentHistory,
+  ] = await Promise.all([
+    loadMemberPortal(session.identity, memberId),
+    archivedPrograms(session.identity, memberId),
+    recentWorkoutLogs(session.identity, memberId),
+    workoutStreakDays(session.identity, memberId),
+    listUpcomingClassesForMember(session.identity, memberId),
+    memberMembershipStatus(session.identity, memberId),
+    memberPlansFor(session.identity, memberId),
+    paymentHistoryForMember(session.identity, memberId),
+  ]);
 
   // The active programs a member can log a session against (id + name only).
   const activePrograms = programs.map(({ program }) => ({
@@ -100,6 +111,7 @@ export default async function PortalPage() {
         className="flex-1 px-4 py-6 focus:outline-none sm:px-6 sm:py-8"
       >
         <ProgramView programs={programs} />
+        <StreakBadge days={streakDays} />
         <LogWorkout programs={activePrograms} />
         <WorkoutHistory logs={workouts} />
         <ProgramHistory programs={history} />
