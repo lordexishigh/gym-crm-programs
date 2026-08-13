@@ -222,6 +222,37 @@ export async function recordServerActionResponses(page: Page): Promise<void> {
       watchdogMs: WATCHDOG_MS,
     },
   );
+
+  // The page-side sentinel reports through the binding, so if the binding is
+  // what is missing, the sentinel goes missing with it — which is exactly what
+  // happened: the journeys produced no records AND no install sentinel, leaving
+  // the two indistinguishable again. This probe runs in NODE, reads the flag
+  // directly, and attaches whatever it finds including `false`. It cannot be
+  // silent, which is the whole requirement.
+  let probed = false;
+  page.on("load", () => {
+    if (probed) return; // one probe per page is enough to answer the question
+    probed = true;
+    void (async () => {
+      let installed: unknown = "probe failed";
+      try {
+        installed = await page.evaluate(
+          () => (window as unknown as { __flightRecorderInstalled?: boolean })
+            .__flightRecorderInstalled ?? false,
+        );
+      } catch (err) {
+        installed = `probe threw: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      try {
+        await test.info().attach("server-action-recorder-probe.txt", {
+          body: `__flightRecorderInstalled = ${String(installed)}\nurl = ${page.url()}\n`,
+          contentType: "text/plain",
+        });
+      } catch {
+        /* test already finished; nothing left to attach to */
+      }
+    })();
+  });
 }
 
 async function attach(record: FlightRecord): Promise<void> {

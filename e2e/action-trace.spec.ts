@@ -77,11 +77,15 @@ const post = ({ url, path, actionHeader }: {
     .catch(() => "");
 
 const names = () => test.info().attachments.map((a) => a.name);
-const flightNames = () => names().filter((n) => !n.includes("recorder-installed"));
-/** Always skips the install sentinel — its name also starts "server-action-". */
+/** Records of actual Server Action traffic — not the two bookkeeping attachments. */
+const BOOKKEEPING = ["recorder-installed", "recorder-probe"];
+const flightNames = () =>
+  names().filter((n) => !BOOKKEEPING.some((b) => n.includes(b)));
+/** Always skips bookkeeping — their names also start "server-action-". */
 const bodyOf = (needle: string) =>
   test.info().attachments
-    .find((a) => a.name.includes(needle) && !a.name.includes("recorder-installed"))
+    .find((a) => a.name.includes(needle)
+                 && !BOOKKEEPING.some((b) => a.name.includes(b)))
     ?.body?.toString("utf8") ?? "";
 
 test("records that the init script installed, so silence is never ambiguous", async ({
