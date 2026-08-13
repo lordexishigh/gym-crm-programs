@@ -29,8 +29,10 @@ export const ERASED_INVITE_EMAIL = "[erased]";
  *
  * Scope by role:
  *   - staff (DSAR fulfilment): the complete record — profile, status history,
- *     invites, and all assigned programs with exercises.
- *   - member (self-service): profile + assigned programs/exercises. The
+ *     invites, all assigned programs with exercises, workout logs, check-in
+ *     (attendance) history, and class bookings.
+ *   - member (self-service): profile + assigned programs/exercises + workout
+ *     logs + check-ins + class bookings (all the member's own data). The
  *     staff-internal tables (status history, invite tokens) are controller
  *     records the member RLS policies do not expose; they are omitted rather
  *     than relied upon to return empty.
@@ -85,6 +87,24 @@ export type ExportedWorkoutLog = {
   note: string | null;
 };
 
+/** One recorded gym visit, as exported (market gap #5 — check-in). */
+export type ExportedCheckIn = {
+  id: string;
+  method: "pin" | "qr";
+  checked_in_at: string;
+};
+
+/** One class booking, as exported (market gap #4 — class scheduling). */
+export type ExportedClassBooking = {
+  booking_id: string;
+  class_id: string;
+  class_name: string;
+  starts_at: string;
+  status: string;
+  booked_at: string;
+  cancelled_at: string | null;
+};
+
 /** The full export document handed to the data subject. */
 export type MemberDataExport = {
   format: "alpha-crm.member-export";
@@ -95,6 +115,8 @@ export type MemberDataExport = {
   invites: ExportedInvite[];
   programs: ExportedProgram[];
   workout_logs: ExportedWorkoutLog[];
+  check_ins: ExportedCheckIn[];
+  class_bookings: ExportedClassBooking[];
 };
 
 /** Result of an export: the document (null if the subject was not found). */
@@ -203,6 +225,32 @@ export async function exportMemberData(
       )
     ).rows;
 
+    // Check-in (attendance) history and class bookings are the member's OWN
+    // data too — included for both staff DSAR and member self-export, same as
+    // workout logs above (the member RLS policies expose only their own rows:
+    // check_ins_self_select, class_bookings_self_select).
+    const checkIns = (
+      await c.query<ExportedCheckIn>(
+        `select id, method, checked_in_at
+           from check_ins
+          where member_id = $1
+          order by checked_in_at desc`,
+        [memberId],
+      )
+    ).rows;
+
+    const classBookings = (
+      await c.query<ExportedClassBooking>(
+        `select cb.id as booking_id, cb.class_id, cl.name as class_name,
+                cl.starts_at, cb.status, cb.booked_at, cb.cancelled_at
+           from class_bookings cb
+           join classes cl on cl.id = cb.class_id
+          where cb.member_id = $1
+          order by cb.booked_at desc`,
+        [memberId],
+      )
+    ).rows;
+
     // Audit the export in the SAME transaction as the reads.
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
@@ -217,6 +265,8 @@ export async function exportMemberData(
         invites: invites.length,
         status_events: statusHistory.length,
         workout_logs: workoutLogs.length,
+        check_ins: checkIns.length,
+        class_bookings: classBookings.length,
       },
     });
 
@@ -229,6 +279,8 @@ export async function exportMemberData(
       invites,
       programs,
       workout_logs: workoutLogs,
+      check_ins: checkIns,
+      class_bookings: classBookings,
     };
     return { data };
   });
