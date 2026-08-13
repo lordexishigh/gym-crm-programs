@@ -173,10 +173,19 @@ whether the member had any logs. Right-to-erasure has been broken since the
 GDPR feature shipped; DB-backed tests skip on developer machines by design
 (production `DATABASE_URL` guard, see `test/setup/db-safety.ts`), so this
 only surfaces where a real Postgres runs the suite. Fixed by
-`migrations/0014_workout_log_erasure_grant.sql`: a narrow
+`migrations/0018_workout_log_erasure_grant.sql`: a narrow
 `grant update (note) on workout_log to app_user` plus a staff-only,
 tenant-scoped RLS policy — logs stay immutable in every other respect.
 Regression coverage added in `test/workout-logs-rls.test.ts`.
+
+> Numbering note (2026-08-13): this branch originally carried the fix as
+> `0014_workout_log_erasure_grant.sql`. While it sat open the same fix landed on
+> master as **0018**, and `0014` was taken by `0014_membership_plans.sql`. The
+> duplicate migration was therefore dropped when rebasing — re-adding it would
+> have collided with an applied prefix and re-run DDL (see
+> `test/migration-filenames.test.ts`). **The tests below are what this branch
+> still contributes**: 0018 shipped with no RLS coverage proving the note-only
+> grant is actually column- and tenant-scoped.
 
 Since local DB-backed tests are normally skipped (the production `.env` guard
 above), it's worth periodically running the suite against a real throwaway
