@@ -340,6 +340,62 @@ describe("dev readiness gate — a broken route cannot hide a working app", () =
     const res = await fetch(`http://127.0.0.1:${port}/`);
     expect(res.status).toBe(200);
   }, 30_000);
+
+  /**
+   * The gate must never be worse than a direct bind. If not one entry route
+   * can be confirmed, withholding the port forever would hide a real failure
+   * behind an unreachable host; past the gate budget it opens anyway and says
+   * so, letting the app's own response — even an error page — be seen.
+   *
+   * Regression coverage for #34: this used to drive the *whole* `scripts/dev.mjs`
+   * wrapper against a real `next dev` with no `app/` directory, racing its ~2s
+   * startup-failure-then-webpack-retry lifetime against a 1s gate budget. That
+   * assumption held on a quiet machine and broke on a loaded CI runner, where
+   * spawning `next dev` twice took long enough to blow the test's own timeout —
+   * a false failure in the test's plumbing, not the gate's behaviour. Driving
+   * `warmUp` directly against an upstream port nothing listens on (so every
+   * request is refused immediately, every time) asserts the same behaviour —
+   * the gate opens and names what never answered — without depending on how
+   * long a real dev server takes to fail to start.
+   */
+  it("opens the port anyway once the gate budget expires, so it is never worse than a direct bind", async () => {
+    const port = await freePort();
+
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    const realLog = console.log;
+    console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
+    console.log = (...a: unknown[]) => void warned.push(a.join(" "));
+    cleanups.push(() => {
+      console.warn = realWarn;
+      console.log = realLog;
+    });
+
+    const savedGate = process.env.DEV_GATE_MAX_MS;
+    process.env.DEV_GATE_MAX_MS = "1000";
+    cleanups.push(() => {
+      if (savedGate === undefined) delete process.env.DEV_GATE_MAX_MS;
+      else process.env.DEV_GATE_MAX_MS = savedGate;
+    });
+
+    // Port 1 requires privileges this process does not have, so every request
+    // is refused deterministically instead of racing a real server's startup.
+    await warmUp({
+      port,
+      host: "127.0.0.1",
+      upstreamHost: "127.0.0.1",
+      upstreamPort: 1,
+      gated: true,
+    });
+    cleanups.push(async () => {
+      const gate = activeForwarder();
+      if (gate) await closeServer(gate);
+    });
+
+    const out = warned.join("\n");
+    expect(out).toMatch(/did not answer within 1s/);
+    expect(out).toMatch(/opening the port anyway/);
+  }, 15_000);
 });
 
 describe("dev readiness gate — port and host resolution", () => {
@@ -457,26 +513,6 @@ describe("scripts/dev.mjs", () => {
     expect(out).toMatch(/Retrying without Turbopack/);
     expect(out.match(/Couldn't find any `pages` or `app` directory/g)?.length).toBe(2);
   }, 60_000);
-
-  it("opens the port anyway once the gate budget expires, so it is never worse than a direct bind", async () => {
-    // The gate is bounded on purpose. If `/` cannot be confirmed, withholding
-    // the port forever would hide a real failure behind an unreachable host —
-    // strictly worse than `next dev`'s own behaviour. Past that budget it opens
-    // and says so, letting the app's own response (even an error page) be seen.
-    const dir = makeProjectDir();
-    const port = await freePort();
-
-    // The budget must expire well inside the wrapper's own lifetime, or the run
-    // ends first and the timeout path is never reached. `next dev` fails here
-    // after ~2s and is then retried on webpack, so ~5s of life against a 1s
-    // budget leaves no race.
-    const { out } = await runDev(dir, ["-p", String(port)], {
-      DEV_GATE_MAX_MS: "1000",
-    });
-
-    expect(out).toMatch(/did not answer within 1s/);
-    expect(out).toMatch(/opening the port anyway/);
-  }, 45_000);
 
   /**
    * The gate's bounds must stay smaller than a caller's patience.
