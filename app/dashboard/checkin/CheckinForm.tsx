@@ -42,7 +42,9 @@ export function CheckinForm() {
         disabled={pending}
         className="inline-flex items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark disabled:opacity-60"
       >
-        {pending ? "Checking in…" : "Check in"}
+        {/* One button for both directions — the server decides which, from
+            whether the member has an open visit. See lib/checkin.ts. */}
+        {pending ? "Recording…" : "Check in / out"}
       </button>
       {state.error ? (
         <p role="alert" className="text-sm text-red-600">
@@ -53,9 +55,23 @@ export function CheckinForm() {
         // The photo is the point of the confirmation: a PIN or scan proves
         // possession of a code, not identity, so the desk sees the face the
         // code belongs to. Falls back to initials for a member with no photo.
+        //
+        // Arrival and departure must not look the same — the desk is glancing,
+        // not reading, so direction carries a colour as well as a word.
+        //
+        // Tinted with brand/slate tokens rather than the literal `emerald-50` /
+        // `emerald-200` pair. `bg-emerald-50` was already remapped for dark
+        // (globals.css) so its contrast was fine, but `border-emerald-200` was
+        // NOT in that remap and rendered as a pale hairline. Tokens that resolve
+        // per theme avoid needing a remap entry at all, which matters now that
+        // there are two themes to keep correct.
         <div
           role="status"
-          className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3"
+          className={
+            state.direction === "out"
+              ? "flex items-center gap-3 rounded-xl border border-slate-300 bg-slate-100 p-3"
+              : "flex items-center gap-3 rounded-xl border border-brand/40 bg-brand/10 p-3"
+          }
         >
           <Avatar
             name={state.member?.name ?? ""}
@@ -66,8 +82,8 @@ export function CheckinForm() {
             <span className="truncate text-base font-semibold text-slate-900">
               {state.member?.name ?? state.success}
             </span>
-            <span className="text-sm font-medium text-emerald-700">
-              Checked in
+            <span className="text-sm font-medium text-slate-600">
+              {state.direction === "out" ? "Checked out" : "Checked in"}
             </span>
           </span>
         </div>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { currentOccupancy } from "@/lib/checkin";
 import { CapabilityNotice } from "@/app/components/CapabilityNotice";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,10 @@ export default async function DashboardPage() {
     },
   );
 
+  // Live occupancy is its own read (a different table, and a rolling time
+  // window rather than a tenant count), so it stays out of the KPI round trip.
+  const occupancy = await currentOccupancy(session.identity);
+
   const kpis = [
     {
       label: "Members",
@@ -77,11 +82,16 @@ export default async function DashboardPage() {
       href: "/dashboard/programs",
       icon: IconSparkles,
     },
+    // Replaces the old "Active members" tile, which restated the two numbers
+    // the "Members" tile already shows (total, with "N active" as its hint) and
+    // read as live presence when it meant membership STATUS — the exact
+    // misreading this feedback round reported. This tile is the real live
+    // number: who is physically in the building, from check-in/check-out.
     {
-      label: "Active members",
-      value: stats.activeMembers,
-      hint: `of ${stats.members} total`,
-      href: "/dashboard/members?status=active",
+      label: "In the gym now",
+      value: occupancy,
+      hint: "Checked in, not yet out",
+      href: "/dashboard/checkin",
       icon: IconPulse,
     },
   ];

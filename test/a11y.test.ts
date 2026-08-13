@@ -19,6 +19,12 @@ vi.mock("../app/login/actions", () => ({
 vi.mock("../app/invite/accept/actions", () => ({
   acceptInviteAction: async () => ({}),
 }));
+vi.mock("../app/dashboard/exercises/actions", () => ({
+  createLibraryExerciseAction: async () => ({}),
+}));
+vi.mock("../app/dashboard/classes/actions", () => ({
+  createClassAction: async () => ({}),
+}));
 
 import { ProgramView } from "../app/portal/ProgramView";
 import { MemberForm } from "../app/dashboard/members/MemberForm";
@@ -26,6 +32,9 @@ import { ProgramBuilder } from "../app/dashboard/programs/ProgramBuilder";
 import { LibraryPicker } from "../app/dashboard/programs/LibraryPicker";
 import { ExerciseDraftList } from "../app/dashboard/programs/ExerciseDraftList";
 import { ExerciseLibraryGrid } from "../app/dashboard/exercises/ExerciseLibraryGrid";
+import { ExerciseLibraryForm } from "../app/dashboard/exercises/ExerciseLibraryForm";
+import { ClassForm } from "../app/dashboard/classes/ClassForm";
+import { Modal } from "../app/components/Modal";
 import MemberLoginPage from "../app/portal/login/page";
 import StaffLoginPage from "../app/login/page";
 import { AcceptForm } from "../app/invite/accept/AcceptForm";
@@ -50,8 +59,10 @@ import { AcceptForm } from "../app/invite/accept/AcceptForm";
  * is verified rather than assumed.
  *
  * `color-contrast` is reported by axe as "incomplete" (not a violation) under
- * jsdom because Tailwind's stylesheet isn't applied, so contrast is enforced
- * centrally in app/globals.css and verified by manual ratio review, not here.
+ * jsdom because Tailwind's stylesheet isn't applied — axe has no computed
+ * colours to measure here and checks nothing. Contrast is therefore gated
+ * separately, and for real, by test/contrast.test.ts, which parses the theme
+ * token tables out of app/globals.css and computes WCAG ratios for both themes.
  */
 
 // Render `next/link` as a plain anchor so the App Router context isn't required
@@ -268,6 +279,38 @@ describe("automated a11y (WCAG A/AA)", () => {
         ],
       }),
     );
+    expect(violations).toEqual([]);
+  });
+
+  /*
+   * The create-flow dialogs (feedback-2026-08). Rendered with `open` so axe
+   * evaluates the CONTENT: a closed <dialog> is display:none and every rule
+   * inside it would be skipped, which would make this a test that always
+   * passes. Note the component never emits the `open` ATTRIBUTE — visibility
+   * comes from the inline style, because letting SSR mark the dialog open
+   * would make the subsequent showModal() a no-op and silently downgrade it to
+   * a non-modal dialog with no focus trap. See app/components/Modal.tsx.
+   */
+  it("modal dialog (open, with a form inside) has no violations", async () => {
+    const violations = await violationsFor(
+      createElement(Modal, {
+        open: true,
+        onClose: () => {},
+        title: "Add an exercise",
+        description: "Add it once and reuse it in any program you build.",
+        children: createElement(ExerciseLibraryForm),
+      }),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("exercise library form (standalone) has no violations", async () => {
+    const violations = await violationsFor(createElement(ExerciseLibraryForm));
+    expect(violations).toEqual([]);
+  });
+
+  it("class scheduling form (standalone) has no violations", async () => {
+    const violations = await violationsFor(createElement(ClassForm));
     expect(violations).toEqual([]);
   });
 

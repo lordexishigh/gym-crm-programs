@@ -216,17 +216,30 @@ test.describe("staff journey", () => {
     //    inputs, and finding the values persisted afterwards.
     await page.getByRole("link", { name: "Programs", exact: true }).click();
     await expect(page).toHaveURL(/\/dashboard\/programs$/);
-    await page.getByRole("link", { name: "New program" }).click();
-    await expect(page).toHaveURL(/\/dashboard\/programs\/new$/);
 
-    await page.getByLabel("Program name").fill(programName);
-    await page.getByLabel("Description").fill("Authored by the staff journey.");
-    await page.getByRole("button", { name: "+ Add exercise" }).click();
-    await page.getByLabel("Name", { exact: true }).fill(exerciseName);
-    await page.getByLabel("Sets").fill("4");
-    await page.getByLabel("Reps").fill("6");
-    await page.getByLabel("Rest").fill("150s");
-    await page.getByRole("button", { name: "Create program" }).click();
+    // Authoring now opens in a dialog on the list page rather than navigating to
+    // /dashboard/programs/new (feedback-2026-08: "make all the create X pages
+    // into a popup, so the user never leaves the main data"). The route still
+    // exists and still renders the same builder — it is just no longer the way
+    // the CTA gets there, so this drives the dialog instead.
+    await page.getByRole("button", { name: "New program" }).click();
+    const builder = page.getByRole("dialog", { name: "New program" });
+    await expect(builder).toBeVisible();
+    // Still on the list — that is the point of the change.
+    await expect(page).toHaveURL(/\/dashboard\/programs$/);
+
+    // Scoped to the dialog so these can never accidentally resolve against the
+    // list behind it.
+    await builder.getByLabel("Program name").fill(programName);
+    await builder
+      .getByLabel("Description")
+      .fill("Authored by the staff journey.");
+    await builder.getByRole("button", { name: "+ Add exercise" }).click();
+    await builder.getByLabel("Name", { exact: true }).fill(exerciseName);
+    await builder.getByLabel("Sets").fill("4");
+    await builder.getByLabel("Reps").fill("6");
+    await builder.getByLabel("Rest").fill("150s");
+    await builder.getByRole("button", { name: "Create program" }).click();
 
     // Redirects to the new program's detail page, which re-reads it from the DB.
     await expect(page).toHaveURL(/\/dashboard\/programs\/[0-9a-f-]{36}$/, {

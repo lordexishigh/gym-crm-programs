@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { listUpcomingClasses } from "@/lib/classes";
-import { ClassForm } from "./ClassForm";
+import { ScheduleClassButton } from "./ScheduleClassButton";
 
 export const dynamic = "force-dynamic";
 
@@ -15,18 +15,19 @@ export default async function ClassesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">Classes</h1>
-        <p className="text-sm text-slate-600">
-          Schedule sessions and track capacity. Members book from the portal.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Classes</h1>
+          <p className="text-sm text-slate-600">
+            Schedule sessions and track capacity. Members book from the portal.
+          </p>
+        </div>
+        <ScheduleClassButton />
       </div>
-
-      <ClassForm />
 
       {classes.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No upcoming classes yet. Schedule your first one above.
+          No upcoming classes yet. Use “Schedule a class” to add your first.
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">

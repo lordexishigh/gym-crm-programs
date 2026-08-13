@@ -34,18 +34,27 @@ type Defaults = {
  * `exercises` field on submit (the row sub-inputs are intentionally unnamed so
  * only the JSON reaches the Server Action, which re-validates it).
  * `useActionState` surfaces validation errors inline without losing input.
+ *
+ * Rendered both as a full page (`/programs/new`, `/programs/[id]`) and inside a
+ * `<Modal>` (AddProgramButton). `onCancel` distinguishes the two: on a page,
+ * "Cancel" navigates back to the program list; in a dialog opened FROM that list
+ * the same link is a no-op that leaves the dialog open, so the host passes a
+ * handler and gets a real dismiss button. Same contract as MemberForm.
  */
 export function ProgramBuilder({
   action,
   defaults = {},
   submitLabel,
   library = [],
+  onCancel,
 }: {
   action: Action;
   defaults?: Defaults;
   submitLabel: string;
   /** The gym's exercise library, selectable to insert into the program. */
   library?: LibraryItem[];
+  /** Dismiss handler. When set, Cancel closes the host instead of navigating. */
+  onCancel?: () => void;
 }) {
   const [state, formAction, pending] = useActionState<
     ProgramFormState,
@@ -126,7 +135,9 @@ export function ProgramBuilder({
       ) : null}
       <input type="hidden" name="exercises" value={serialized} />
 
-      <div className="flex max-w-lg flex-col gap-4">
+      {/* The dialog already constrains width; the page does not, so it keeps
+          the readable measure for these two fields. */}
+      <div className={`flex flex-col gap-4 ${onCancel ? "" : "max-w-lg"}`}>
         <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
           Program name
           <input
@@ -189,12 +200,22 @@ export function ProgramBuilder({
         >
           {pending ? "Saving…" : submitLabel}
         </button>
-        <Link
-          href="/dashboard/programs"
-          className="text-sm font-medium text-slate-600 hover:text-slate-900"
-        >
-          Cancel
-        </Link>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            Cancel
+          </button>
+        ) : (
+          <Link
+            href="/dashboard/programs"
+            className="text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            Cancel
+          </Link>
+        )}
       </div>
     </form>
   );

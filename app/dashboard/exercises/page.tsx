@@ -1,7 +1,7 @@
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { LibraryExerciseDetail } from "@/lib/exercise-library";
-import { ExerciseLibraryForm } from "./ExerciseLibraryForm";
+import { AddExerciseButton } from "./AddExerciseButton";
 import { ExerciseLibraryGrid } from "./ExerciseLibraryGrid";
 import { deleteLibraryExerciseAction } from "./actions";
 
@@ -63,16 +63,17 @@ export default async function ExerciseLibraryPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">Exercise library</h1>
-        <p className="text-sm text-slate-600">
-          A searchable catalog for your gym — built-in exercises with images,
-          instructions, guidelines, and tips, plus any you add. Insert them when
-          building a program.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Exercise library</h1>
+          <p className="text-sm text-slate-600">
+            A searchable catalog for your gym — built-in exercises with images,
+            instructions, guidelines, and tips, plus any you add. Insert them
+            when building a program.
+          </p>
+        </div>
+        <AddExerciseButton />
       </div>
-
-      <ExerciseLibraryForm />
 
       {/* Search + category filter (GET form → ?q=…&category=…; server-rendered,
           shareable, back-button friendly, no client JS needed). */}
@@ -125,7 +126,7 @@ export default async function ExerciseLibraryPage({
           <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
             {filtering
               ? "No exercises match your search. Try a different term or category."
-              : "No exercises yet. Add your first exercise above to start your gym’s library."}
+              : "No exercises yet. Use “Add exercise” to start your gym’s library."}
           </div>
         ) : (
           <ExerciseLibraryGrid
