@@ -63,7 +63,7 @@ const FLIGHT_CONTENT_TYPE = "text/x-component";
 const WATCHDOG_MS = 5_000;
 
 type FlightRecord = {
-  kind: "installed" | "flight";
+  kind: "installed" | "flight" | "probe";
   url?: string;
   status?: number;
   responseType?: string;
@@ -87,9 +87,16 @@ type FlightRecord = {
  * from a synchronous hook — one of two candidate causes of it recording nothing.
  */
 export async function recordServerActionResponses(page: Page): Promise<void> {
+  // Records belong to the test that registered this recorder. Without the
+  // reset they leak forward: a stream still open when its own test ends
+  // reports on close — during the NEXT test — and gets attached to it. Caught
+  // by the suite failing in sequence while passing in isolation, and it would
+  // have mis-attributed a journey's evidence exactly the same way.
+  collected.length = 0;
+
   await page.exposeBinding(
     "__recordFlight",
-    (_source, record: FlightRecord) => void attach(record),
+    (_source, record: FlightRecord) => void collected.push(record),
   );
   await page.addInitScript(
     ({ actionHeader, contentType, watchdogMs }) => {
@@ -255,8 +262,52 @@ export async function recordServerActionResponses(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Records are COLLECTED here and attached later, never attached from inside the
+ * callback that produced them.
+ *
+ * The reason is the third silent failure this file has had. `exposeBinding`
+ * callbacks and `page.on("load")` handlers run outside the test's own call
+ * stack, and `test.info().attach()` from there does not reach the report — the
+ * trace proves `exposeBinding` and `addInitScript` were both called in the
+ * journeys, yet not one attachment (not even the Node-side probe) survived.
+ * Worse, that failure was wrapped in `catch {}`, so the recorder swallowed the
+ * evidence of its own breakage.
+ *
+ * `flushFlightRecords()` runs in `afterEach`, where `test.info()` is valid and
+ * which Playwright still runs after a failure or timeout — the two cases that
+ * matter most here.
+ */
+const collected: FlightRecord[] = [];
+
+/** How many records are waiting. Lets a test wait for arrival before flushing. */
+export function recordedFlightCount(): number {
+  return collected.length;
+}
+
+/** Attach everything recorded for the current test. Call from `afterEach`. */
+export async function flushFlightRecords(): Promise<void> {
+  const records = collected.splice(0, collected.length);
+  if (records.length === 0) {
+    // Silence is a finding, so it is stated rather than left blank.
+    await test.info().attach("server-action-NONE-RECORDED.txt", {
+      body: "The recorder collected nothing for this test.\n",
+      contentType: "text/plain",
+    });
+    return;
+  }
+  for (const record of records) await attach(record);
+}
+
 async function attach(record: FlightRecord): Promise<void> {
   const info = test.info();
+
+  if (record.kind === "probe") {
+    await info.attach(`server-action-recorder-probe-${collected.length}.txt`, {
+      body: `${record.error}\n`, contentType: "text/plain",
+    });
+    return;
+  }
 
   if (record.kind === "installed") {
     // One per navigation; cheap, and its ABSENCE is the finding.

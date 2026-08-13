@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { recordServerActionResponses } from "./action-trace";
+import {
+  flushFlightRecords,
+  recordedFlightCount,
+  recordServerActionResponses,
+} from "./action-trace";
 
 /**
  * Covers the #26 diagnostic recorder itself.
@@ -94,10 +98,9 @@ test("records that the init script installed, so silence is never ambiguous", as
   await recordServerActionResponses(page);
   await page.goto(base);
 
-  await expect
-    .poll(() => names().some((n) => n.includes("recorder-installed")),
-          { timeout: 10_000 })
-    .toBe(true);
+  await expect.poll(recordedFlightCount, { timeout: 10_000 }).toBeGreaterThan(0);
+  await flushFlightRecords();
+  expect(names().some((n) => n.includes("recorder-installed"))).toBe(true);
   expect(
     await page.evaluate(() => (window as unknown as {
       __flightRecorderInstalled?: boolean }).__flightRecorderInstalled),
@@ -109,10 +112,8 @@ test("attaches a completed flight payload verbatim", async ({ page }) => {
   await page.goto(base);
   await page.evaluate(post, { url: base, path: "/ok", actionHeader: true });
 
-  await expect
-    .poll(() => names().some((n) => n.includes("server-action-closed")),
-          { timeout: 10_000 })
-    .toBe(true);
+  await expect.poll(recordedFlightCount, { timeout: 10_000 }).toBeGreaterThan(1);
+  await flushFlightRecords();
 
   const body = bodyOf("server-action-closed");
   expect(body).toContain("status: 303");
@@ -132,9 +133,9 @@ test("matches on the REQUEST header, not the response shape", async ({ page }) =
   await page.goto(base);
   await page.evaluate(post, { url: base, path: "/no-ct", actionHeader: true });
 
-  await expect
-    .poll(() => flightNames().length > 0, { timeout: 10_000 })
-    .toBe(true);
+  await expect.poll(recordedFlightCount, { timeout: 10_000 }).toBeGreaterThan(1);
+  await flushFlightRecords();
+  expect(flightNames().length).toBeGreaterThan(0);
   expect(bodyOf("server-action-")).toContain("matched on: request:next-action");
 });
 
@@ -144,9 +145,9 @@ test("reports a stream that never ends, while it is still open", async ({ page }
   // Not awaited: this request never settles, which is the point.
   void page.evaluate(post, { url: base, path: "/hang", actionHeader: true });
 
-  await expect
-    .poll(() => names().some((n) => n.includes("still-open")), { timeout: 15_000 })
-    .toBe(true);
+  await expect.poll(recordedFlightCount, { timeout: 15_000 }).toBeGreaterThan(1);
+  await flushFlightRecords();
+  expect(names().some((n) => n.includes("still-open"))).toBe(true);
 
   const body = bodyOf("still-open");
   expect(body).toContain("outcome: still-open");
@@ -159,6 +160,7 @@ test("leaves non-action traffic unrecorded", async ({ page }) => {
   await recordServerActionResponses(page);
   await page.goto(base);
   await page.waitForTimeout(500);
-  // The install sentinel is expected; nothing else is.
+  await flushFlightRecords();
+  // The install sentinel and the probe are expected; no flight records are.
   expect(flightNames()).toHaveLength(0);
 });

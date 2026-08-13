@@ -2,7 +2,10 @@ import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
-import { recordServerActionResponses } from "./action-trace";
+import {
+  flushFlightRecords,
+  recordServerActionResponses,
+} from "./action-trace";
 
 /**
  * Journey test: invite → accept → login → portal view (the complete member
@@ -63,6 +66,14 @@ test.describe("member onboarding journey", () => {
     // navigation. Firing them with `void` was one of two candidate reasons the
     // recorder attached nothing on the run where #26 reproduced.
     await recordServerActionResponses(page);
+  });
+
+  // Flushed here, not from the callbacks that produce the records: attaching
+  // from an exposeBinding callback or a page event does not reach the report,
+  // which is why three earlier runs produced nothing at all. afterEach still
+  // runs after a failure or timeout — the cases that matter for #26.
+  test.afterEach(async () => {
+    await flushFlightRecords();
   });
 
   test.beforeAll(async () => {
