@@ -289,8 +289,14 @@ test.describe("staff journey", () => {
     await expect(page).toHaveURL(/\/dashboard$/);
     const kpis = page.locator('section[aria-label="Gym at a glance"]');
     await expect(kpis).toContainText("1 active");
-    await expect(kpis).toContainText("of 1 total");
     await expect(kpis).toContainText("Programs in members' hands");
+
+    // The old "Active members" tile (hint: "of 1 total") is gone — it restated
+    // the two numbers the Members tile already shows and read as live presence
+    // while meaning membership status. Its slot now holds real occupancy, which
+    // is 0 here because this journey never checks anyone in at the kiosk.
+    const occupancy = kpis.getByRole("link", { name: /In the gym now/ });
+    await expect(occupancy).toContainText("0");
 
     // 7. Log out — the session ends and the dashboard is gated again.
     await page.getByRole("button", { name: "Log out" }).click();
