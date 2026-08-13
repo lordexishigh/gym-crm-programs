@@ -9,16 +9,21 @@ import {
   expireStalePendingInvites,
 } from "@/lib/invite-status";
 import {
+  MEMBER_ASSIGNMENT_HISTORY_SQL,
+  MEMBER_INVITE_HISTORY_SQL,
   MEMBER_STATUS_HISTORY_SQL,
+  type MemberAssignmentEvent,
+  type MemberInviteEvent,
   type MemberStatusEvent,
 } from "@/lib/member-records";
+import { buildMemberTimeline } from "@/lib/timeline";
 import { memberAdherence, recentWorkoutLogs } from "@/lib/workout-logs";
 import type { MembershipPlanRow, MemberPlanWithPlan } from "@/lib/plans";
 import { memberAvatarSrc } from "@/lib/member-photo";
 import { Avatar } from "@/app/components/Avatar";
 import { MemberForm } from "../MemberForm";
 import { MemberPhotoPanel } from "../MemberPhotoPanel";
-import { StatusHistory } from "../StatusHistory";
+import { Timeline } from "../Timeline";
 import { WorkoutAdherence } from "../WorkoutAdherence";
 import { updateMemberAction, regeneratePinAction } from "../actions";
 import { InvitePanel } from "../InvitePanel";
@@ -82,12 +87,32 @@ export default async function MemberDetailPage({
     const statusHistory = (
       await c.query<MemberStatusEvent>(MEMBER_STATUS_HISTORY_SQL, [id])
     ).rows;
+    const assignmentHistory = (
+      await c.query<MemberAssignmentEvent>(MEMBER_ASSIGNMENT_HISTORY_SQL, [id])
+    ).rows;
+    const inviteHistory = (
+      await c.query<MemberInviteEvent>(MEMBER_INVITE_HISTORY_SQL, [id])
+    ).rows;
 
-    return { member, lastInvite, statusHistory, photoUpdatedAt };
+    return {
+      member,
+      lastInvite,
+      statusHistory,
+      assignmentHistory,
+      inviteHistory,
+      photoUpdatedAt,
+    };
   });
 
   if (!data) notFound();
-  const { member, lastInvite, statusHistory, photoUpdatedAt } = data;
+  const {
+    member,
+    lastInvite,
+    statusHistory,
+    assignmentHistory,
+    inviteHistory,
+    photoUpdatedAt,
+  } = data;
 
   const avatarSrc = memberAvatarSrc({
     id: member.id,
@@ -136,6 +161,13 @@ export default async function MemberDetailPage({
           return { plans, subscriptions };
         })
       : null;
+
+  const timeline = buildMemberTimeline({
+    statusEvents: statusHistory,
+    assignmentEvents: assignmentHistory,
+    inviteEvents: inviteHistory,
+    workoutLogs: workouts,
+  });
 
   return (
     <div className="flex flex-col gap-6">
@@ -263,7 +295,10 @@ export default async function MemberDetailPage({
         />
       ) : null}
 
-      <StatusHistory events={statusHistory} />
+      {/* Replaces the standalone StatusHistory panel: status changes,
+          assignments, invites and workouts are one chronology, and reading
+          them as four separate lists made the order between them invisible. */}
+      <Timeline entries={timeline} />
 
       <InvitePanel
         memberId={member.id}

@@ -48,3 +48,62 @@ export async function memberStatusHistory(
         .rows,
   );
 }
+
+/**
+ * One "program assigned" row for the member timeline. `status` reflects the
+ * row's CURRENT state (active/archived), not a point-in-time snapshot — a
+ * program later archived still shows one "assigned" event with today's status.
+ */
+export type MemberAssignmentEvent = {
+  program_name: string;
+  status: "active" | "archived";
+  assigned_at: string;
+};
+
+/** Staff-scoped by RLS (`assignment_staff_all`, migration 0002) via `member_id`. */
+export const MEMBER_ASSIGNMENT_HISTORY_SQL = `select p.name as program_name, pa.status, pa.assigned_at
+   from program_assignment pa
+   join program p on p.id = pa.program_id
+  where pa.member_id = $1
+  order by pa.assigned_at desc`;
+
+export async function memberAssignmentHistory(
+  identity: Identity,
+  memberId: string,
+): Promise<MemberAssignmentEvent[]> {
+  return withTenantContext(
+    identity,
+    async (c) =>
+      (
+        await c.query<MemberAssignmentEvent>(MEMBER_ASSIGNMENT_HISTORY_SQL, [
+          memberId,
+        ])
+      ).rows,
+  );
+}
+
+/** One invite row for the member timeline; may yield a "sent" and an "accepted" event. */
+export type MemberInviteEvent = {
+  email: string;
+  status: string;
+  created_at: string;
+  accepted_at: string | null;
+};
+
+/** Staff-scoped by RLS (`invite_staff_all`, migration 0002) via `member_id`. */
+export const MEMBER_INVITE_HISTORY_SQL = `select email, status, created_at, accepted_at
+   from invite
+  where member_id = $1
+  order by created_at desc`;
+
+export async function memberInviteHistory(
+  identity: Identity,
+  memberId: string,
+): Promise<MemberInviteEvent[]> {
+  return withTenantContext(
+    identity,
+    async (c) =>
+      (await c.query<MemberInviteEvent>(MEMBER_INVITE_HISTORY_SQL, [memberId]))
+        .rows,
+  );
+}
