@@ -122,8 +122,11 @@ test.describe("staff journey", () => {
 
   // Attaches each Server Action's flight payload — the one input issue #26's
   // retained trace cannot show, since traces store GET bodies but no POST ones.
-  test.beforeEach(({ page }) => {
-    recordServerActionResponses(page);
+  test.beforeEach(async ({ page }) => {
+    // Awaited: the binding and init script must be registered before the first
+    // navigation. Firing them with `void` was one of two candidate reasons the
+    // recorder attached nothing on the run where #26 reproduced.
+    await recordServerActionResponses(page);
   });
 
   test.beforeAll(async () => {

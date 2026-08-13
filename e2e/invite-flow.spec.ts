@@ -58,8 +58,11 @@ test.describe("member onboarding journey", () => {
 
   // Recorded on the member end too: #26's victim rotates between staff and
   // member journeys, so whichever one hangs, its payload is already captured.
-  test.beforeEach(({ page }) => {
-    recordServerActionResponses(page);
+  test.beforeEach(async ({ page }) => {
+    // Awaited: the binding and init script must be registered before the first
+    // navigation. Firing them with `void` was one of two candidate reasons the
+    // recorder attached nothing on the run where #26 reproduced.
+    await recordServerActionResponses(page);
   });
 
   test.beforeAll(async () => {
