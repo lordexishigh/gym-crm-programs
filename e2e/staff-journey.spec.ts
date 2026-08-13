@@ -2,6 +2,10 @@ import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
+import {
+  flushFlightRecords,
+  recordServerActionResponses,
+} from "./action-trace";
 
 /**
  * Journey test: staff sign-in → dashboard → add a member → author a program →
@@ -118,6 +122,23 @@ async function signInAsStaff(page: Page): Promise<void> {
 
 test.describe("staff journey", () => {
   test.skip(!dbUsable, "DATABASE_URL must point at a local throwaway Postgres");
+
+  // Attaches each Server Action's flight payload — the one input issue #26's
+  // retained trace cannot show, since traces store GET bodies but no POST ones.
+  test.beforeEach(async ({ page }) => {
+    // Awaited: the binding and init script must be registered before the first
+    // navigation. Firing them with `void` was one of two candidate reasons the
+    // recorder attached nothing on the run where #26 reproduced.
+    await recordServerActionResponses(page);
+  });
+
+  // Flushed here, not from the callbacks that produce the records: attaching
+  // from an exposeBinding callback or a page event does not reach the report,
+  // which is why three earlier runs produced nothing at all. afterEach still
+  // runs after a failure or timeout — the cases that matter for #26.
+  test.afterEach(async () => {
+    await flushFlightRecords();
+  });
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: DATABASE_URL });

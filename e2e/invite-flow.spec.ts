@@ -2,6 +2,10 @@ import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
+import {
+  flushFlightRecords,
+  recordServerActionResponses,
+} from "./action-trace";
 
 /**
  * Journey test: invite → accept → login → portal view (the complete member
@@ -54,6 +58,23 @@ let gymId: string;
 
 test.describe("member onboarding journey", () => {
   test.skip(!dbUsable, "DATABASE_URL must point at a local throwaway Postgres");
+
+  // Recorded on the member end too: #26's victim rotates between staff and
+  // member journeys, so whichever one hangs, its payload is already captured.
+  test.beforeEach(async ({ page }) => {
+    // Awaited: the binding and init script must be registered before the first
+    // navigation. Firing them with `void` was one of two candidate reasons the
+    // recorder attached nothing on the run where #26 reproduced.
+    await recordServerActionResponses(page);
+  });
+
+  // Flushed here, not from the callbacks that produce the records: attaching
+  // from an exposeBinding callback or a page event does not reach the report,
+  // which is why three earlier runs produced nothing at all. afterEach still
+  // runs after a failure or timeout — the cases that matter for #26.
+  test.afterEach(async () => {
+    await flushFlightRecords();
+  });
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: DATABASE_URL });
