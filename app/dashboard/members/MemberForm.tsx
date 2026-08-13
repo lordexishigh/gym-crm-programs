@@ -28,15 +28,24 @@ type Defaults = {
  * Wraps a Server Action via `useActionState` so server-side validation errors
  * are surfaced inline without losing the entered values. `required` on the name
  * input gives a fast client-side guard; the action re-validates authoritatively.
+ *
+ * Rendered both as a full page (`/members/new`, `/members/[id]`) and inside a
+ * `<Modal>` (AddMemberButton). `onCancel` is what distinguishes the two: on a
+ * page, "Cancel" means navigate back to the roster; in a dialog opened FROM the
+ * roster that same link would be a no-op that leaves the dialog sitting open,
+ * so the host passes a handler and gets a real dismiss button instead.
  */
 export function MemberForm({
   action,
   defaults = {},
   submitLabel,
+  onCancel,
 }: {
   action: Action;
   defaults?: Defaults;
   submitLabel: string;
+  /** Dismiss handler. When set, Cancel closes the host instead of navigating. */
+  onCancel?: () => void;
 }) {
   const [state, formAction, pending] = useActionState<MemberFormState, FormData>(
     action,
@@ -44,7 +53,12 @@ export function MemberForm({
   );
 
   return (
-    <form action={formAction} className="flex max-w-lg flex-col gap-4">
+    <form
+      action={formAction}
+      // The dialog already constrains width; the page does not, so it keeps the
+      // readable measure.
+      className={`flex flex-col gap-4 ${onCancel ? "" : "max-w-lg"}`}
+    >
       {defaults.id ? (
         <input type="hidden" name="id" value={defaults.id} />
       ) : null}
@@ -177,12 +191,22 @@ export function MemberForm({
         >
           {pending ? "Saving…" : submitLabel}
         </button>
-        <Link
-          href="/dashboard/members"
-          className="text-sm font-medium text-slate-600 hover:text-slate-900"
-        >
-          Cancel
-        </Link>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            Cancel
+          </button>
+        ) : (
+          <Link
+            href="/dashboard/members"
+            className="text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            Cancel
+          </Link>
+        )}
       </div>
     </form>
   );

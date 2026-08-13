@@ -17,6 +17,8 @@ import { reportHandledError } from "@/lib/observability/monitoring";
 export type CheckInState = {
   error?: string;
   success?: string;
+  /** Which half of the visit the last scan recorded (feedback-2026-08). */
+  direction?: "in" | "out";
   /** Who was just checked in — rendered with their photo for visual confirmation. */
   member?: { name: string; avatarSrc: string | null };
 };
@@ -39,8 +41,15 @@ export async function kioskCheckInAction(
     if (!result.ok) return { error: result.error };
 
     revalidatePath("/dashboard/checkin");
+    // The occupancy KPI reads from the same table, so the Overview has to be
+    // revalidated too or it keeps serving a stale "in the gym now" count.
+    revalidatePath("/dashboard");
     return {
-      success: `Checked in: ${result.memberName}`,
+      success:
+        result.direction === "out"
+          ? `Checked out: ${result.memberName}`
+          : `Checked in: ${result.memberName}`,
+      direction: result.direction,
       member: { name: result.memberName, avatarSrc: result.avatarSrc },
     };
   } catch (err) {

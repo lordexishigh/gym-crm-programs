@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import type { LibraryExerciseRow } from "@/lib/exercise-library";
+import { AddProgramButton } from "./AddProgramButton";
+import { createProgramAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +24,13 @@ type ProgramListRow = {
 export default async function ProgramsPage() {
   const session = await requireStaff();
 
-  const programs = await withTenantContext(session.identity, async (c) => {
-    const { rows } = await c.query<ProgramListRow>(
-      `select
+  // The list and the library the "New program" dialog builds from, in one
+  // transaction — both are RLS-scoped to this gym.
+  const { programs, library } = await withTenantContext(
+    session.identity,
+    async (c) => {
+      const { rows } = await c.query<ProgramListRow>(
+        `select
          p.id,
          p.name,
          p.description,
@@ -34,9 +41,14 @@ export default async function ProgramsPage() {
            as assignment_count
        from program p
        order by p.name asc`,
-    );
-    return rows;
-  });
+      );
+      const { rows: libraryRows } = await c.query<LibraryExerciseRow>(
+        `select id, name, sets, reps, rest, notes
+           from exercise_library order by name asc`,
+      );
+      return { programs: rows, library: libraryRows };
+    },
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -47,12 +59,7 @@ export default async function ProgramsPage() {
             Training programs you build and assign to members.
           </p>
         </div>
-        <Link
-          href="/dashboard/programs/new"
-          className="inline-flex shrink-0 items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
-        >
-          New program
-        </Link>
+        <AddProgramButton action={createProgramAction} library={library} />
       </div>
 
       {programs.length === 0 ? (

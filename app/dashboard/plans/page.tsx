@@ -5,7 +5,7 @@ import {
   PLAN_TIER_LABELS,
   type MembershipPlanRow,
 } from "@/lib/plans";
-import { PlanForm } from "./PlanForm";
+import { AddPlanButton } from "./AddPlanButton";
 import { togglePlanActiveAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -30,19 +30,20 @@ export default async function PlansPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">Membership plans</h1>
-        <p className="text-sm text-slate-600">
-          Pricing tiers members can be billed against. Owner-only — trainers do
-          not see revenue data.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Membership plans</h1>
+          <p className="text-sm text-slate-600">
+            Pricing tiers members can be billed against. Owner-only — trainers
+            do not see revenue data.
+          </p>
+        </div>
+        <AddPlanButton />
       </div>
-
-      <PlanForm />
 
       {plans.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No plans yet. Add your first pricing tier above.
+          No plans yet. Use “Add plan” to create your first pricing tier.
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">

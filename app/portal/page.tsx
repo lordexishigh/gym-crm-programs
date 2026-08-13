@@ -1,5 +1,6 @@
 import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
+import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
 import { recentWorkoutLogs } from "@/lib/workout-logs";
 import { listUpcomingClassesForMember } from "@/lib/classes";
@@ -79,15 +80,18 @@ export default async function PortalPage() {
             Alpha CRM
           </span>
         </span>
-        <form action={logoutAction}>
-          <input type="hidden" name="redirectTo" value="/portal/login" />
-          <button
-            type="submit"
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-          >
-            Log out
-          </button>
-        </form>
+        <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
+          <form action={logoutAction}>
+            <input type="hidden" name="redirectTo" value="/portal/login" />
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Log out
+            </button>
+          </form>
+        </div>
       </header>
 
       <main

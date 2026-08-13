@@ -2,6 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===========================================================================
+ * THEMING (feedback-2026-08: "light modeeeee")
+ *
+ * How this works, because it is not the usual arrangement.
+ *
+ * The app's markup is authored LIGHT — components say `bg-white`,
+ * `text-slate-900`, `border-slate-200`. The dark theme is produced by the
+ * "bright-class remap" further down, which overrides those exact utilities.
+ * Rather than duplicate that remap per theme (two blocks that drift apart the
+ * first time someone edits one), EVERY value in it resolves to a custom
+ * property, and a theme is just a different table of properties.
+ *
+ * So: one remap, two token tables. Adding a third theme means adding a third
+ * `:root[data-theme=…]` block and touching nothing else.
+ *
+ * DARK IS THE DEFAULT and lives on bare `:root`, deliberately — an
+ * unattributed document (JS disabled, the theme script failing, a server
+ * render before hydration) keeps exactly the appearance the app shipped with.
+ * Light is opt-in via `data-theme="light"`, set by ThemeToggle.
+ *
+ * Contrast for both tables is enforced by test/contrast.test.ts, which parses
+ * THIS FILE and computes WCAG ratios. Change a colour here and that test is
+ * what tells you whether it is still readable.
+ * ======================================================================== */
+
 :root {
   color-scheme: dark;
 
@@ -31,19 +56,52 @@
    * Neutral dark palette — layered surfaces for depth (the visual single source
    * of truth, restyle-2026). Authored as a deliberate elevation ladder so the UI
    * reads as stacked planes rather than one flat slab:
-   *   --page          deepest plane, the app background
-   *   --surface       cards / panels / the header bar
-   *   --surface-muted table rows, chips, hover fills (one step lifted)
-   *   --border        hairline dividers; --border-strong for interactive edges
-   * The dark-surface remap and component polish below all resolve to these, so
+   *   --page           deepest plane, the app background
+   *   --surface        cards / panels / the header bar
+   *   --surface-subtle `bg-slate-50` / `hover:bg-white` — on dark this is the
+   *                    same as --surface (those hovers are intentionally inert
+   *                    here); on light it is the faint tint they were authored as
+   *   --surface-muted  table rows, chips, hover fills (one step lifted)
+   *   --border         hairline dividers; --border-strong for interactive edges
+   * The bright-class remap and component polish below all resolve to these, so
    * the whole app re-tones from this block. Tuned cooler/deeper than a flat
    * slate-900 to feel like a modern SaaS console.
    */
   --page: #0a0e17;
   --surface: #151c2b;
+  --surface-subtle: #151c2b;
   --surface-muted: #1f293c;
   --border: #29344c;
   --border-strong: #38455f;
+
+  /*
+   * Text ramp. These are the targets of the `text-slate-*` remap:
+   *   --text-strong  headings and primary copy (slate-900/800/black)
+   *   --text-body    secondary copy (slate-700/600)
+   *   --text-muted   hints and labels (slate-500/400)
+   */
+  --text-strong: #f1f5f9;
+  --text-body: #cbd5e1;
+  --text-muted: #94a3b8;
+
+  /* Status text. On dark the authored -600/-700 shades are unreadable, so they
+   * resolve to the -400 shades — still semantically red/green/amber. */
+  --danger-text: #f87171;
+  --success-text: #34d399;
+  --warning-text: #fbbf24;
+
+  /* Status fills + edges. Pale authored fills (`bg-emerald-50`) vanish on dark,
+   * so they become low-alpha tints of the same hue. */
+  --tint-success: rgb(16 185 129 / 0.14);
+  --tint-warning: rgb(245 158 11 / 0.16);
+  --tint-danger: rgb(239 68 68 / 0.14);
+  --border-danger: rgb(239 68 68 / 0.4);
+  --border-warning: rgb(245 158 11 / 0.4);
+
+  /* Form controls: a faint inset fill so a bare bordered input still reads as
+   * a field against the page. */
+  --field-fill: rgb(255 255 255 / 0.03);
+  --placeholder: #94a3b8;
 
   /*
    * Premium font stack. "Inter" is used when present (most modern OSes / the
@@ -63,6 +121,72 @@
    */
   --shadow-card: inset 0 1px 0 0 rgb(255 255 255 / 0.04),
     0 1px 2px 0 rgb(0 0 0 / 0.4), 0 12px 28px -16px rgb(0 0 0 / 0.7);
+
+  /* Top-down sheen on cards, part of the same "raised plane" effect. */
+  --surface-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.025),
+    transparent 140px
+  );
+
+  /* The faint brand glow bleeding down from the top of the page. */
+  --page-glow: rgb(16 185 129 / 0.08);
+}
+
+/*
+ * LIGHT THEME.
+ *
+ * Mostly a return to the values the components were originally authored with
+ * (white cards on a slate-50 page), which is why the remap can stay switched on
+ * in both themes: here it resolves each utility back to roughly its own Tailwind
+ * colour, and the override is a no-op in appearance.
+ *
+ * The status text shades are the notable exception — they are DARKER than the
+ * authored -600 in a couple of places, because these sit on pale tinted chips
+ * (`bg-red-50`) rather than on plain white, and the tint costs a little ratio.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Solid brand fill is unchanged: white-on-emerald-700 is ~5.5:1 either way.
+   * Accent TEXT flips to the solid emerald, since emerald-400 on white is ~1.7:1. */
+  --brand: 4 120 87;
+  --brand-dark: 6 95 70;
+  --brand-text: 4 120 87;
+
+  --page: #f1f5f9;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --surface-muted: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --text-strong: #0f172a;
+  --text-body: #334155;
+  /* Slate-500 (#64748b) is the authored muted tone but lands at ~4.4:1 on the
+   * muted surface — just under AA. Nudged one step darker to clear it on every
+   * surface in the ladder rather than only on white. */
+  --text-muted: #576375;
+
+  --danger-text: #b91c1c;
+  --success-text: #047857;
+  --warning-text: #b45309;
+
+  --tint-success: #ecfdf5;
+  --tint-warning: #fffbeb;
+  --tint-danger: #fef2f2;
+  --border-danger: #fecaca;
+  --border-warning: #fde68a;
+
+  --field-fill: rgb(15 23 42 / 0.02);
+  --placeholder: #64748b;
+
+  /* No inset highlight on light — a white top edge on a white card is invisible
+   * and only muddies the shadow. Plain contact + ambient shadow instead. */
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.05),
+    0 8px 24px -12px rgb(15 23 42 / 0.12);
+  --surface-sheen: none;
+  --page-glow: rgb(16 185 129 / 0.06);
 }
 
 html,
@@ -71,20 +195,21 @@ body {
 }
 
 body {
-  @apply text-slate-100 antialiased;
+  @apply antialiased;
+  color: var(--text-body);
   font-family: var(--font-sans);
   /* Slightly tighter tracking on the dense SaaS UI reads cleaner. */
   letter-spacing: -0.011em;
   /*
-   * Deep base plane with a faint emerald glow bleeding down from the top — gives
-   * the page subtle depth and ties the neutral palette to the brand without
+   * Base plane with a faint emerald glow bleeding down from the top — gives the
+   * page subtle depth and ties the neutral palette to the brand without
    * lowering text contrast (the glow is <8% opacity and fixed, so it never sits
    * brightly behind body copy).
    */
   background-color: var(--page);
   background-image: radial-gradient(
     1100px 560px at 50% -12%,
-    rgb(16 185 129 / 0.08),
+    var(--page-glow),
     transparent 62%
   );
   background-attachment: fixed;
@@ -140,59 +265,61 @@ h3 {
   input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
   select,
   textarea {
-    background-color: rgb(255 255 255 / 0.03);
+    background-color: var(--field-fill);
     transition: border-color 150ms ease, box-shadow 150ms ease,
       background-color 150ms ease;
   }
   ::placeholder {
-    color: #64748b; /* slate-500 — visible but clearly secondary on dark fields */
+    color: var(--placeholder);
   }
 }
 
 /*
- * Dark surfaces (user request: no white/bright backgrounds on any page).
+ * ---------------------------------------------------------------------------
+ * THE BRIGHT-CLASS REMAP.
+ *
  * The app was authored light — white cards on a slate-50 page. Rather than touch
- * every component, remap the bright NEUTRAL surfaces to the dark elevation ladder
- * and flip the dark text/borders that sat on them to light so contrast is
+ * every component, the bright NEUTRAL surfaces are remapped to the token ladder
+ * and the dark text/borders that sat on them are flipped to match, so contrast is
  * preserved. Brand (emerald) accents and `text-white` on accent buttons are
- * intentionally left untouched. This is the one place to tune the dark palette.
- */
+ * intentionally left untouched.
+ *
+ * Every declaration below resolves to a custom property, so this block is
+ * theme-agnostic: it runs in BOTH themes and simply produces different colours.
+ * Tune the palette in the token tables at the top of this file, not here.
+ * ------------------------------------------------------------------------- */
 .bg-white {
   background-color: var(--surface) !important;
   /* Faint top-down sheen + layered shadow so every card/panel reads as raised. */
-  background-image: linear-gradient(
-    180deg,
-    rgb(255 255 255 / 0.025),
-    transparent 140px
-  );
+  background-image: var(--surface-sheen);
   box-shadow: var(--shadow-card);
 }
 .hover\:bg-white:hover,
 .bg-slate-50,
 .hover\:bg-slate-50:hover {
-  background-color: var(--surface) !important;
+  background-color: var(--surface-subtle) !important;
 }
 .bg-slate-100,
 .hover\:bg-slate-100:hover {
   background-color: var(--surface-muted) !important; /* rows, hovers, chips */
 }
 
-/* Dark text that used to sit on white → light, so it stays readable on dark. */
+/* Dark text that used to sit on white → follows the theme's text ramp. */
 .text-slate-900,
 .text-slate-800,
 .text-gray-900,
 .text-gray-800,
 .text-black {
-  color: #f1f5f9 !important;
+  color: var(--text-strong) !important;
 }
 .text-slate-700,
 .text-slate-600,
 .text-gray-700,
 .text-gray-600 {
-  color: #cbd5e1 !important;
+  color: var(--text-body) !important;
 }
 
-/* Hairline borders → visible but subtle on dark, resolved from the token. */
+/* Hairline borders → resolved from the token. */
 .border-white,
 .border-slate-100,
 .border-slate-200,
@@ -220,31 +347,37 @@ h3 {
 }
 
 /*
- * Text contrast (beta-polish-a11y-001 — WCAG AA, ≥4.5:1 on the dark surfaces).
+ * Text contrast (beta-polish-a11y-001 — WCAG AA, ≥4.5:1 on the theme surfaces).
  * Centralised here so the AA guarantee holds app-wide and can't drift per-file.
  *
- * - Muted helper/label text (slate-400/500): slate-500 fails (~3.3:1) on the
- *   dark page, so both are lifted to a tone that clears AA on the surfaces.
- * - Status text (danger/success): the -600/700 shades are too dark to read on a
- *   dark surface, so they map to the -400 shades, which pass while staying
- *   semantically red/green.
- * - Accent text/links (`text-brand`): use the lighter --brand-text token; the
- *   solid emerald brand would only reach ~3:1 as text. Solid `bg-brand` buttons
- *   keep white text and are unaffected (they use the dark --brand fill).
+ * - Muted helper/label text (slate-400/500) resolves to a tone that clears AA on
+ *   every surface in the ladder, not just the page.
+ * - Status text (danger/success/warning): the authored -600/700 shades are too
+ *   dark to read on a dark surface, so the token flips them per theme.
+ * - Accent text/links (`text-brand`): the --brand-text token. On dark that is the
+ *   lighter emerald (the solid brand would only reach ~3:1 as text); on light it
+ *   is the solid emerald (emerald-400 would only reach ~1.7:1 on white). Solid
+ *   `bg-brand` buttons keep white text and are unaffected either way.
  */
 .text-slate-500,
 .text-slate-400 {
-  color: #94a3b8 !important; /* slate-400 — AA muted text on dark */
+  color: var(--text-muted) !important;
 }
 .text-red-600,
-.text-red-700 {
-  color: #f87171 !important; /* red-400 — AA danger text on dark */
+.text-red-700,
+.text-rose-700,
+.text-rose-600 {
+  color: var(--danger-text) !important;
 }
 .text-green-700,
 .text-green-600,
 .text-emerald-700,
 .text-emerald-600 {
-  color: #34d399 !important; /* emerald-400 — AA success text on dark */
+  color: var(--success-text) !important;
+}
+.text-amber-700,
+.text-amber-600 {
+  color: var(--warning-text) !important;
 }
 .text-brand {
   color: rgb(var(--brand-text)) !important;
@@ -253,36 +386,45 @@ h3 {
 /*
  * Tinted status chips (e.g. `bg-emerald-50`, `bg-amber-50`, `bg-red-50`) were
  * authored as pale fills for dark text. On the dark UI those pale fills vanish,
- * so remap them to low-alpha tints of the same hue — keeping the semantic colour
- * legible against the lifted -400 text the contrast block above already applies.
+ * so the token remaps them to low-alpha tints of the same hue — keeping the
+ * semantic colour legible against the status text above.
  */
 .bg-emerald-50 {
-  background-color: rgb(16 185 129 / 0.14) !important;
+  background-color: var(--tint-success) !important;
 }
 .bg-amber-50 {
-  background-color: rgb(245 158 11 / 0.16) !important;
-}
-.text-amber-700,
-.text-amber-600 {
-  color: #fbbf24 !important; /* amber-400 — AA warning text on dark */
+  background-color: var(--tint-warning) !important;
 }
 .bg-red-50,
 .bg-rose-50 {
-  background-color: rgb(239 68 68 / 0.14) !important;
-}
-.text-rose-700,
-.text-rose-600 {
-  color: #f87171 !important; /* red-400 — AA danger text on dark */
+  background-color: var(--tint-danger) !important;
 }
 
-/* Tinted-status borders (e.g. destructive `border-red-200`) → readable on dark. */
+/* Tinted-status borders (e.g. destructive `border-red-200`). */
 .border-red-200,
 .border-rose-200 {
-  border-color: rgb(239 68 68 / 0.4) !important;
+  border-color: var(--border-danger) !important;
 }
 /* Warning outline (`border-amber-200` — the sign-in session notice). The pale
- * authored value is a bright yellow hairline on dark; tint it like the fills
- * above so the banner reads as a warning without shouting. */
+ * authored value is a bright yellow hairline on dark; the token tints it like
+ * the fills above so the banner reads as a warning without shouting. */
 .border-amber-200 {
-  border-color: rgb(245 158 11 / 0.4) !important;
+  border-color: var(--border-warning) !important;
+}
+
+/*
+ * Modal scrim (app/components/Modal.tsx).
+ *
+ * Literal colours, not tokens, and that is deliberate: `::backdrop` only gained
+ * inheritance from its originating element in a relatively recent spec change,
+ * and in engines predating it a `var(--scrim)` here resolves against nothing and
+ * drops the declaration — leaving an undimmed page behind the dialog. Selecting
+ * the theme on the DIALOG (which does inherit normally) and writing a literal
+ * sidesteps the question entirely.
+ */
+dialog::backdrop {
+  background-color: rgb(2 6 23 / 0.7);
+}
+:root[data-theme="light"] dialog::backdrop {
+  background-color: rgb(15 23 42 / 0.45);
 }

@@ -3,6 +3,7 @@ import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { logoutAction } from "@/lib/auth/actions";
 import { getStaffRole } from "@/lib/staff";
+import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { NavLink } from "./NavLink";
 
 // Session/identity is request-derived; never statically rendered.
@@ -89,15 +90,18 @@ export default async function DashboardLayout({
               · {gymName}
             </span>
           </div>
-          <form action={logoutAction}>
-            <input type="hidden" name="redirectTo" value="/login" />
-            <button
-              type="submit"
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
-            >
-              Log out
-            </button>
-          </form>
+          <div className="flex shrink-0 items-center gap-2">
+            <ThemeToggle />
+            <form action={logoutAction}>
+              <input type="hidden" name="redirectTo" value="/login" />
+              <button
+                type="submit"
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                Log out
+              </button>
+            </form>
+          </div>
         </div>
         <nav
           aria-label="Primary"
