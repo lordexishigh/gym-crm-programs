@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, beforeEach, vi } from "vitest";
-import { SignJWT, exportJWK, generateKeyPair, type JWK, type KeyLike } from "jose";
+import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 
 /**
  * Post-login destinations, and the dead ends around them.
@@ -101,7 +101,8 @@ import {
   STAFF_LANDING,
 } from "../lib/auth/sign-in-reason";
 
-let privateKey: KeyLike;
+// See test/identity.test.ts: jose v6 keys are Web Crypto `CryptoKey`s.
+let privateKey: CryptoKey;
 
 beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;

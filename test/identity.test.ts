@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, vi } from "vitest";
-import { SignJWT, exportJWK, generateKeyPair, type JWK, type KeyLike } from "jose";
+import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import {
   claimValue,
   identityFromClaims,
@@ -31,7 +31,9 @@ vi.mock("jose", async (importOriginal) => {
   return { ...actual, createRemoteJWKSet: () => actual.createLocalJWKSet(keyset.jwks) };
 });
 
-let privateKey: KeyLike;
+// jose v6 is Web Crypto-only: `generateKeyPair` resolves to `CryptoKey`s and the
+// v5 `KeyLike` union (which also covered Node `KeyObject`) no longer exists.
+let privateKey: CryptoKey;
 
 beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
