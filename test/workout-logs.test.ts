@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { currentStreakDays, validateWorkoutLogInput } from "../lib/workout-logs";
+import {
+  currentStreakDays,
+  nextStreakMilestone,
+  streakMilestoneReached,
+  validateWorkoutLogInput,
+} from "../lib/workout-logs";
 
 /**
  * Pure validation tests for workout logging (Phase GA — ga-engagement-001).
@@ -122,5 +127,35 @@ describe("currentStreakDays", () => {
       log("2026-07-27T19:00:00.000Z"),
     ];
     expect(currentStreakDays(logs, now)).toBe(1);
+  });
+});
+
+/**
+ * Pure streak-milestone tests (CRM-IDEAS "Next" #7 — the milestone-badge
+ * half). No database: both are lookups over a fixed, ascending constant.
+ */
+describe("streakMilestoneReached", () => {
+  it("returns the milestone on an exact match", () => {
+    expect(streakMilestoneReached(7)).toBe(7);
+    expect(streakMilestoneReached(365)).toBe(365);
+  });
+
+  it("returns null for a day count that isn't a milestone", () => {
+    expect(streakMilestoneReached(1)).toBe(null);
+    expect(streakMilestoneReached(8)).toBe(null);
+    expect(streakMilestoneReached(0)).toBe(null);
+  });
+});
+
+describe("nextStreakMilestone", () => {
+  it("returns the smallest milestone still ahead", () => {
+    expect(nextStreakMilestone(1)).toBe(3);
+    expect(nextStreakMilestone(3)).toBe(7);
+    expect(nextStreakMilestone(29)).toBe(30);
+  });
+
+  it("returns null once the longest milestone has passed", () => {
+    expect(nextStreakMilestone(365)).toBe(null);
+    expect(nextStreakMilestone(400)).toBe(null);
   });
 });

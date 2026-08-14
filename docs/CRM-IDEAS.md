@@ -88,8 +88,12 @@ Tags: **Impact** (member retention / trainer daily value) × **Effort** (for our
    (`lib/workout-logs.ts`) counts a member's consecutive logged days (pure calendar-day
    bucketing, unit-tested) and a `StreakBadge` (`app/portal/StreakBadge.tsx`) shows it in
    the portal. No schema or RLS change — it's a read-only aggregate over `workout_log`
-   under the existing `workout_log_member_select` policy. Milestone **badges** (streak
-   milestones, PR-style callouts) are still open.
+   under the existing `workout_log_member_select` policy. **Streak-milestone badges shipped
+   (2026-08-14):** `streakMilestoneReached`/`nextStreakMilestone` (`lib/workout-logs.ts`)
+   are pure lookups over a fixed milestone list (3/7/14/30/60/100/180/365 days);
+   `StreakBadge` switches to a celebratory style on a milestone day and otherwise hints how
+   many days remain to the next one. PR-style callouts remain open — they need per-exercise
+   weight data that doesn't exist yet (see `docs/RISKY-DEFERRED.md` item B).
 
 8. **Saved roster views + faster trainer navigation.** **Impact: Med · Effort: Med.**
    Our roster state already lives in the URL (shareable/back-button friendly) — extend to named saved views ("At-risk", "New this month") and consider a command-palette jump-to-member (Linear-style) to feel modern next to "dated" incumbents.

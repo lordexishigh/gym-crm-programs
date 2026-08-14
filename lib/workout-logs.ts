@@ -258,6 +258,25 @@ export function currentStreakDays(
 }
 
 /**
+ * Streak lengths that earn a milestone badge (CRM-IDEAS "Next" #7 — the
+ * streak-milestone half; PR-style callouts need per-exercise weight data that
+ * does not exist yet, see docs/RISKY-DEFERRED.md item B, so they stay out of
+ * scope here). Ascending so `find` can pick the first match in either
+ * direction below.
+ */
+export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100, 180, 365] as const;
+
+/** The milestone reached exactly today, or null if `days` isn't one. */
+export function streakMilestoneReached(days: number): number | null {
+  return STREAK_MILESTONES.find((m) => m === days) ?? null;
+}
+
+/** The next milestone still ahead, or null once the longest has passed. */
+export function nextStreakMilestone(days: number): number | null {
+  return STREAK_MILESTONES.find((m) => m > days) ?? null;
+}
+
+/**
  * A member's current streak of consecutive days with a logged workout. Reuses
  * the same RLS as `recentWorkoutLogs` (`workout_log_member_select` /
  * `workout_log_staff_select`) — a cross-tenant or another member's id yields 0,
