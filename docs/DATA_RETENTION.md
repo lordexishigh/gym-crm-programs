@@ -14,6 +14,8 @@ The behaviour described here is implemented by:
   markers, and RLS.
 - `migrations/0008_workout_logs.sql` — the member-written workout-log entity and
   its RLS (covered by export/erasure above; Phase GA).
+- `migrations/0025_member_tasks.sql` — the staff follow-up task entity and its
+  RLS (covered by export/erasure above).
 
 ## Data subjects
 
@@ -66,7 +68,7 @@ What is scrubbed on erasure:
 
 | Subject | Fields anonymised |
 | ------- | ----------------- |
-| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, and the free-text `note` on every `workout_log` → null. |
+| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, and the free-text `title` on every `member_task` → `"[erased]"`. |
 | Staff   | `email` → unique tombstone, `full_name` → null, `auth_user_id` → null. |
 
 Workout logs (`workout_log`, Phase GA) are the member's own data: they are
@@ -74,6 +76,13 @@ included in the member export (and member self-export), and on erasure their
 free-text notes are scrubbed while the (now anonymised) rows are kept — they
 carry only the tombstoned `member_id` plus aggregate effort/timing, preserving
 referential integrity exactly like assignments and status history.
+
+Follow-up tasks (`member_task`, CRM-IDEAS "Apply now" #5) are a staff-internal
+controller record, not member-facing data — like status history and invites,
+they are included only in a **staff-initiated** export, never a member
+self-export (member RLS policies do not expose `member_task` at all). Their
+free-text `title` may name PII about the member, so it is scrubbed on erasure
+exactly like workout-log notes; the (now anonymised) task rows are kept.
 
 Where the subject had a portal/auth account, the Supabase auth user is deleted
 (best-effort, post-commit) so they can no longer sign in. Every erasure is

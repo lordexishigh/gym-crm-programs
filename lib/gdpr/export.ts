@@ -15,6 +15,7 @@ import { recordGdprEvent, resolveActorUserId } from "./audit";
  */
 export const ERASED_MEMBER_NAME = "Erased member";
 export const ERASED_INVITE_EMAIL = "[erased]";
+export const ERASED_TASK_TITLE = "[erased]";
 
 /**
  * Member data export (beta-gdpr-001).
@@ -105,6 +106,15 @@ export type ExportedClassBooking = {
   cancelled_at: string | null;
 };
 
+/** One staff-authored follow-up task, as exported (CRM-IDEAS "Apply now" #5). */
+export type ExportedMemberTask = {
+  id: string;
+  title: string;
+  due_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
 /** The full export document handed to the data subject. */
 export type MemberDataExport = {
   format: "alpha-crm.member-export";
@@ -117,6 +127,7 @@ export type MemberDataExport = {
   workout_logs: ExportedWorkoutLog[];
   check_ins: ExportedCheckIn[];
   class_bookings: ExportedClassBooking[];
+  tasks: ExportedMemberTask[];
 };
 
 /** Result of an export: the document (null if the subject was not found). */
@@ -156,6 +167,19 @@ export async function exportMemberData(
           await c.query<ExportedInvite>(
             `select id, email, status, expires_at, created_at, accepted_at
                from invite where member_id = $1
+              order by created_at desc`,
+            [memberId],
+          )
+        ).rows
+      : [];
+    // Staff-authored follow-up tasks (CRM-IDEAS "Apply now" #5) are another
+    // staff-internal controller record — the member RLS policies never expose
+    // member_task at all, so this is staff-only exactly like status history.
+    const tasks = isStaff
+      ? (
+          await c.query<ExportedMemberTask>(
+            `select id, title, due_at, completed_at, created_at
+               from member_task where member_id = $1
               order by created_at desc`,
             [memberId],
           )
@@ -267,6 +291,7 @@ export async function exportMemberData(
         workout_logs: workoutLogs.length,
         check_ins: checkIns.length,
         class_bookings: classBookings.length,
+        tasks: tasks.length,
       },
     });
 
@@ -281,6 +306,7 @@ export async function exportMemberData(
       workout_logs: workoutLogs,
       check_ins: checkIns,
       class_bookings: classBookings,
+      tasks,
     };
     return { data };
   });
@@ -465,6 +491,17 @@ export async function anonymiseMember(
     // member_id and aggregate effort/timing, preserving referential integrity.
     await c.query(`update workout_log set note = null where member_id = $1`, [
       memberId,
+    ]);
+
+    // Scrub free-text titles on the member's follow-up tasks (may contain PII,
+    // e.g. "ask about her surgery recovery") — same rationale as workout-log
+    // notes. Unlike workout_log, staff already hold full UPDATE on member_task
+    // (member_task_staff_all is a `for all` policy), so no extra grant is needed
+    // here — this scrub cannot hit the missing-UPDATE-grant class of bug fixed
+    // for workout_log.
+    await c.query(`update member_task set title = $2 where member_id = $1`, [
+      memberId,
+      ERASED_TASK_TITLE,
     ]);
 
     await recordGdprEvent(c, {

@@ -16,6 +16,11 @@ import { captureException, reportHandledError } from "@/lib/observability/monito
 import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
 import { generateUniquePinCode } from "@/lib/checkin";
 import { isUuid, sniffImageType, validatePhotoUpload } from "@/lib/member-photo";
+import {
+  completeMemberTask,
+  createMemberTask,
+  validateMemberTaskInput,
+} from "@/lib/member-tasks";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -642,6 +647,79 @@ export async function eraseMemberAction(
       ? "This member was already erased."
       : "Member erased. Their personal data has been anonymised.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Trainer follow-up tasks / reminders (CRM-IDEAS "Apply now" #5). Staff-only —
+// enforced by requireStaff() and, as the real boundary, the staff-only
+// `member_task_staff_all` RLS policy (migration 0013): a member session cannot
+// read or write this table at all, and a cross-tenant memberId/taskId resolves
+// to no row.
+
+export type MemberTaskState = { error?: string };
+
+/** Add a follow-up task to a member. */
+export async function createMemberTaskAction(
+  _prev: MemberTaskState,
+  formData: FormData,
+): Promise<MemberTaskState> {
+  const session = await requireStaff();
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId) return { error: "Missing member id." };
+
+  const parsed = validateMemberTaskInput({
+    title: formData.get("title"),
+    dueAt: formData.get("dueAt"),
+  });
+  if (!parsed.ok) return { error: parsed.error };
+
+  try {
+    await withTenantContext(session.identity, async (c) => {
+      const createdBy = await staffUserId(c, session.identity.userId);
+      await createMemberTask(session.identity, memberId, parsed.value, createdBy);
+    });
+  } catch (err) {
+    await reportHandledError(err, "create-member-task", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not save the task. Please try again." };
+  }
+
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return {};
+}
+
+/** Mark a follow-up task done. `memberId` is optional and used only to
+ * revalidate the member detail page, mirroring `revokeInviteAction`. */
+export async function completeMemberTaskAction(
+  _prev: MemberTaskState,
+  formData: FormData,
+): Promise<MemberTaskState> {
+  const session = await requireStaff();
+
+  const taskId = String(formData.get("taskId") ?? "");
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!taskId) return { error: "Missing task id." };
+
+  let updated: number;
+  try {
+    updated = await completeMemberTask(session.identity, taskId);
+  } catch (err) {
+    await reportHandledError(err, "complete-member-task", {
+      tenantId: session.identity.tenantId,
+      taskId,
+    });
+    return { error: "Could not update the task. Please try again." };
+  }
+
+  if (updated === 0) {
+    return { error: "This task was already done or could not be found." };
+  }
+
+  if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
+  return {};
 }
 
 function inviteEmailHtml(name: string, url: string): string {
