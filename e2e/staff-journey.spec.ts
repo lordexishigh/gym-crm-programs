@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
 import {
+  attachHydrationState,
   flushFlightRecords,
   recordServerActionResponses,
 } from "./action-trace";
@@ -217,7 +218,11 @@ test.describe("staff journey", () => {
     await expect(page).toHaveURL(/\/dashboard\/members\/new$/);
     await page.getByLabel("Full name").fill(memberName);
     await page.getByLabel("Email").fill(memberEmail);
-    await page.getByRole("button", { name: "Create member" }).click();
+    const createMemberButton = page.getByRole("button", { name: "Create member" });
+    // #26 evidence: was this control actually hydrated at the moment of the
+    // click, or did the click land on a listener-less SSR node?
+    await attachHydrationState("member-create", createMemberButton);
+    await createMemberButton.click();
 
     // The action redirects to the new member's detail page.
     await expect(page).toHaveURL(/\/dashboard\/members\/[0-9a-f-]{36}$/, {
@@ -260,7 +265,9 @@ test.describe("staff journey", () => {
     await builder.getByLabel("Sets").fill("4");
     await builder.getByLabel("Reps").fill("6");
     await builder.getByLabel("Rest").fill("150s");
-    await builder.getByRole("button", { name: "Create program" }).click();
+    const createProgramButton = builder.getByRole("button", { name: "Create program" });
+    await attachHydrationState("program-create", createProgramButton);
+    await createProgramButton.click();
 
     // Redirects to the new program's detail page, which re-reads it from the DB.
     await expect(page).toHaveURL(/\/dashboard\/programs\/[0-9a-f-]{36}$/, {
@@ -284,7 +291,11 @@ test.describe("staff journey", () => {
     });
     await expect(assignPanel).toContainText("Not assigned to anyone yet.");
     await assignPanel.getByLabel("Member").selectOption({ label: memberName });
-    await assignPanel.getByRole("button", { name: "Assign" }).click();
+    const assignButton = assignPanel.getByRole("button", { name: "Assign" });
+    // Comment 2026-08-13 on #26: assignment once produced no Server Action
+    // request at all — the shape an un-hydrated control would produce.
+    await attachHydrationState("assign", assignButton);
+    await assignButton.click();
     await expect(assignPanel.getByText("Program assigned.")).toBeVisible({
       timeout: 30_000,
     });
