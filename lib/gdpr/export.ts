@@ -16,6 +16,7 @@ import { recordGdprEvent, resolveActorUserId } from "./audit";
 export const ERASED_MEMBER_NAME = "Erased member";
 export const ERASED_INVITE_EMAIL = "[erased]";
 export const ERASED_TASK_TITLE = "[erased]";
+export const ERASED_SUGGESTION_HEADLINE = "[erased]";
 
 /**
  * Member data export (beta-gdpr-001).
@@ -503,6 +504,19 @@ export async function anonymiseMember(
       memberId,
       ERASED_TASK_TITLE,
     ]);
+
+    // Scrub the free-text headline on the member's derived-claim ledger rows
+    // (0021) — a brief's headline is built by interpolating the member's full
+    // name straight into the sentence (`buildAtRiskBrief`, lib/briefs.ts), so
+    // it is exactly the kind of PII-bearing free text workout-log notes and
+    // task titles already get scrubbed for. Unlike those two, `suggestions`
+    // rows are kept regardless of status (pending/accepted/dismissed) — the
+    // row itself is the audit trail of what was suggested and decided, only
+    // the identifying sentence is tombstoned.
+    await c.query(
+      `update suggestions set headline = $2 where member_id = $1`,
+      [memberId, ERASED_SUGGESTION_HEADLINE],
+    );
 
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
