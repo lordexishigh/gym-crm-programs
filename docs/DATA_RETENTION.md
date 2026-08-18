@@ -16,6 +16,8 @@ The behaviour described here is implemented by:
   its RLS (covered by export/erasure above; Phase GA).
 - `migrations/0025_member_tasks.sql` — the staff follow-up task entity and its
   RLS (covered by export/erasure above).
+- `migrations/0021_suggestions.sql` — the derived-claim ledger; its headline
+  text is scrubbed on erasure (below).
 
 ## Data subjects
 
@@ -68,7 +70,7 @@ What is scrubbed on erasure:
 
 | Subject | Fields anonymised |
 | ------- | ----------------- |
-| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, and the free-text `title` on every `member_task` → `"[erased]"`. |
+| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, the free-text `title` on every `member_task` → `"[erased]"`, and the free-text `headline` on every `suggestions` row about the member → `"[erased]"`. |
 | Staff   | `email` → unique tombstone, `full_name` → null, `auth_user_id` → null. |
 
 Workout logs (`workout_log`, Phase GA) are the member's own data: they are
@@ -83,6 +85,19 @@ they are included only in a **staff-initiated** export, never a member
 self-export (member RLS policies do not expose `member_task` at all). Their
 free-text `title` may name PII about the member, so it is scrubbed on erasure
 exactly like workout-log notes; the (now anonymised) task rows are kept.
+
+Derived-claim suggestions (`suggestions`, migration 0021 — at-risk briefs
+today, and whatever future generator writes here) are staff-internal
+deliberations and are not exposed to members under RLS at all, so they are
+never part of any export. Their `headline` is not a label — it is built by
+interpolating the member's full name directly into a sentence (`"$NAME has
+not trained in N days…"`, `buildAtRiskBrief` in `lib/briefs.ts`), so a
+suggestion filed before erasure keeps naming an "erased" member forever unless
+scrubbed. Erasure now tombstones `headline` on every suggestion about the
+member (regardless of status — pending, accepted, dismissed, or superseded);
+`detail`/`evidence` are left as-is since today's only generator (at-risk
+briefs) never writes the member's name into them, only program names and
+dates.
 
 Where the subject had a portal/auth account, the Supabase auth user is deleted
 (best-effort, post-commit) so they can no longer sign in. Every erasure is
