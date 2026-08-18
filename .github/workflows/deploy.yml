@@ -130,6 +130,10 @@ jobs:
       - name: Run database migrations (production)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # scripts/migrate.mjs refuses a non-local target unless this is set. This is the
+          # one place production is supposed to be migrated, so this is the one place that
+          # says so out loud.
+          ALLOW_REMOTE_MIGRATE: "1"
         run: npm run migrate
 
       # Single deploy path: Vercel Git auto-deploy is disabled for BOTH release

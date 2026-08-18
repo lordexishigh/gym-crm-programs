@@ -19,6 +19,43 @@ const { Client } = pg;
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 /**
+ * Hosts this runner will apply DDL to without being asked twice.
+ *
+ * `test/setup/db-safety.ts` guards the vitest suites against a specific dotenv trap, and
+ * says so at length: importing this file loads `.env`, and locally `.env` carries the
+ * PRODUCTION connection string. That guard protects the TESTS. It does not protect
+ * `npm run migrate`, which is the command CI runs, therefore the command anyone
+ * reproducing CI runs — and unlike the tests, this one executes DDL.
+ *
+ * It is also worse than the tests' version of the trap, for a reason that is not obvious:
+ * this runner prefers MIGRATE_DATABASE_URL, and BOTH `.env` and `.env.local` set it to the
+ * production host. So a developer who knows about the trap, and carefully exports
+ * `DATABASE_URL=postgres://...@localhost/...`, is STILL pointed at production, because
+ * dotenv fills in the variable they did not think to override.
+ *
+ * Observed 2026-08-19: a local run reported "nothing to apply (database already up to
+ * date)" against a database created empty seconds earlier. It had connected to production.
+ * Nothing was mutated — production was current, so no DDL ran — but a pending migration
+ * would have been applied there by a command whose whole purpose was to set up a local
+ * database.
+ */
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/** Host, port and database name of a connection string, or null if it will not parse. */
+function describeTarget(connectionString) {
+  try {
+    const u = new URL(connectionString);
+    return {
+      host: u.hostname.replace(/^\[|\]$/g, ""),
+      port: u.port || "5432",
+      database: u.pathname.slice(1) || "(server default)",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Migrations renamed after they had already been applied somewhere, mapping the
  * CURRENT filename -> the OLD filename it used to carry.
  *
@@ -68,6 +105,34 @@ export async function runMigrations(
   if (!connectionString) {
     throw new Error(
       "No connection string: set MIGRATE_DATABASE_URL (preferred for DDL) or DATABASE_URL.",
+    );
+  }
+
+  // Say where, before doing anything. The old output named the migrations and never the
+  // target, so "nothing to apply" against the wrong database was indistinguishable from
+  // "nothing to apply" against the right one.
+  const target = describeTarget(connectionString);
+  console.log(
+    target
+      ? `Migrating ${target.database} at ${target.host}:${target.port}`
+      : "Migrating an unparseable connection string",
+  );
+
+  // Fail closed: an unparseable target counts as remote, because it cannot be shown to be
+  // local. `ALLOW_REMOTE_MIGRATE=1` is the deliberate override, and the deploy path sets it.
+  const isLocal = target !== null && LOCAL_HOSTS.has(target.host);
+  if (!isLocal && process.env.ALLOW_REMOTE_MIGRATE !== "1") {
+    throw new Error(
+      [
+        `Refusing to migrate a non-local database (${target ? target.host : "unparseable target"}).`,
+        "This runs DDL. Both .env and .env.local set MIGRATE_DATABASE_URL to the production",
+        "host, and it takes precedence over DATABASE_URL, so exporting DATABASE_URL alone is",
+        "not enough to point this at a local database.",
+        "",
+        "  Local work:  export DATABASE_URL and MIGRATE_DATABASE_URL to a throwaway Postgres",
+        "  Deliberate:  ALLOW_REMOTE_MIGRATE=1 (set by the deploy workflow, scripts/deploy.mjs",
+        "               and the boot-time migration in instrumentation.ts)",
+      ].join("\n"),
     );
   }
 

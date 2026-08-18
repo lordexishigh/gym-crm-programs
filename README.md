@@ -125,6 +125,13 @@ npm run migrate   # apply the schema (0005 grants the app_user role; login fails
 npm run seed      # create the demo gym, accounts and sample data
 ```
 
+Point **both** `DATABASE_URL` *and* `MIGRATE_DATABASE_URL` at your throwaway local
+Postgres first. The second one is the one people miss: `scripts/migrate.mjs` prefers
+`MIGRATE_DATABASE_URL`, and `.env`/`.env.local` set it to the production host — so
+exporting only `DATABASE_URL` still aims the migration at production. The runner now
+prints its target and refuses a non-local one unless `ALLOW_REMOTE_MIGRATE=1` is set, so
+this fails loudly instead of quietly, but it is worth knowing before you hit it.
+
 That leaves a walkable product on first run — a gym with a trainer, a member who
 already has a program assigned, the built-in exercise catalog, and all three
 billing tiers:

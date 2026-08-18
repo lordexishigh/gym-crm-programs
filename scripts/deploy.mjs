@@ -610,7 +610,13 @@ async function main() {
   const { migrate, reason } = decideMigrate();
   console.log(`[deploy] ${reason}`);
   if (migrate) {
-    const res = await run(process.execPath, ["scripts/migrate.mjs"], { echo: true });
+    // Deploying IS the sanctioned reason to migrate a remote database, so this path opts
+    // past migrate.mjs's local-host refusal explicitly. `decideMigrate` above has already
+    // established that a connection string exists and that migrating is wanted.
+    const res = await run(process.execPath, ["scripts/migrate.mjs"], {
+      echo: true,
+      env: { ...process.env, ALLOW_REMOTE_MIGRATE: "1" },
+    });
     if (res.code !== 0) {
       console.error(
         `[deploy] Migrations failed (exit ${res.code}). NOT deploying: a build that goes ` +
