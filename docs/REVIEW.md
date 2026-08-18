@@ -202,3 +202,72 @@ grant/RLS-policy drift earlier.
   assumed from the table's original grant).
 - CRM-IDEAS "Apply now" #5 (trainer follow-up tasks / reminders on a member)
   is still open — a good next single-PR pick once this fix lands.
+
+**Update (2026-08-04+):** both of the above are done. #5 shipped as
+`auto-improve: trainer follow-up tasks / reminders on a member` (`member_task`,
+migration `0025`). The grant-audit check was done too: that PR's own erasure
+scrub (`anonymiseMember` scrubbing `member_task.title`) explicitly notes
+`member_task_staff_all` already grants staff full UPDATE, so — unlike
+`workout_log` — no separate grant migration was needed. `check_ins` and
+`class_bookings` (added since, migrations `0016`/`0022`/`0023`) hold no
+free-text PII and need no scrub; both are already included in
+`exportMemberData` (`lib/gdpr/export.ts`). No open gap found in this pass.
+
+## 2026-08-16 — CI is not actually running (blocks every open PR and deploy)
+
+**This is the priority finding of this pass — a process/infra gap, not a code
+one, and it needs a human decision, not a PR.**
+
+`build-and-test` (`.github/workflows/ci.yml`) is the one required check
+gating `master` (branch protection) and deploys (`deploy.yml`'s
+`migrate-and-deploy: needs: test`). It has been failing **without ever
+starting a runner** since some point between **2026-08-14 06:42 UTC** (the
+last run that genuinely executed — master push for #10, run
+[31776978152](https://github.com/lordexishigh/gym-crm-programs/actions/runs/31776978152),
+which ran the full ~4.5 minute pipeline and failed for a real reason, the
+already-tracked #26 e2e flake) and **2026-08-14 22:26 UTC** (PR #39's first
+attempt, run
+[31846609297](https://github.com/lordexishigh/gym-crm-programs/actions/runs/31846609297),
+which failed in **4 seconds** with no job steps recorded and `runner_id: 0` —
+GitHub never assigned it a runner at all). Every run since matches that same
+signature: PR #38 (5 attempts), PR #39 (1 attempt), PR #40 (4 attempts) — all
+complete in 3-4 seconds, all with `runner_id: 0` and no `steps` array, and
+`get_job_logs` 404s on every one of them (consistent with a runner that never
+started — there is no log stream to fetch). As of this pass (2026-08-16) it
+has not recovered on its own for over 24 hours.
+
+This is a **different failure than #26**. #26 is a real, intermittent
+in-test hang that still shows a full step-by-step run reaching the e2e job
+and then failing there (see the two runs above it, and #26 itself). What's
+happening now never reaches a runner at all — the shape this repo's own
+`ci.yml` comment already names and warns about: *"Rebasing the open PRs in
+one go therefore started ~11 simultaneous full runs and exhausted the
+account's Actions spending limit, after which GitHub refused to start ANY
+job for hours."* The timing (transition right after a dense run of pushes/PRs
+on 2026-08-14) and the exact symptom (job created, never scheduled) match
+that description, though this pass could not confirm the account's Actions
+billing/usage page directly — no tool available here reaches GitHub billing
+settings.
+
+**Why this matters:** three PRs are currently stuck and unmergeable through
+no fault of their own content (#38 streak-milestone badges, #39 a routine
+dependency bump, #40 the current #26 diagnostic step) — the required check
+cannot pass no matter what the diff contains. No further PR opened by this
+routine (or anyone) can merge until this clears, either.
+
+**Recommended next step (needs a human with repository/org admin access):**
+check the GitHub Actions usage/billing page for this account
+(Settings → Billing → Plans and usage → Actions, or the org equivalent) for
+a spending-limit cap or a suspended state, and raise or clear it. If usage
+genuinely got that high, the follow-up worth a separate ticket is trimming
+this workflow's cost — `test:e2e` alone runs a full Chromium install plus two
+Playwright journeys against a fresh Postgres + Next.js build on every push
+and every retry, and #26 has driven a lot of retries lately.
+
+Not fixed in this pass: there is nothing in this repository to fix — the
+gap is external (GitHub account configuration), and every retry against it
+so far has cost more of the same limited resource without changing the
+outcome. No further diagnostic PRs for #26 should be opened until a run can
+actually reach the e2e step again; the four already open/queued (#38/#39/#40
+and any future one) will simply resume being evaluated once CI starts
+scheduling runners again — no rebase or re-push needed.
