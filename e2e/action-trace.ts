@@ -1,4 +1,4 @@
-import { test, type Page } from "@playwright/test";
+import { test, type Locator, type Page } from "@playwright/test";
 
 /**
  * Records Server Action responses (the RSC "flight" payload) as test attachments.
@@ -259,6 +259,50 @@ export async function recordServerActionResponses(page: Page): Promise<void> {
         /* test already finished; nothing left to attach to */
       }
     })();
+  });
+}
+
+/**
+ * Whether React has taken over a DOM node — the question the 2026-08-13 #26
+ * comment proposed checking next. Two symptoms are on record under one issue:
+ * a control whose click fires the Server Action but the page never commits the
+ * result, and a control whose click produces no Server Action request at all.
+ * The second is exactly what an un-hydrated control would do, and nothing in
+ * this product marks hydration explicitly, so the only signal reachable from
+ * outside is the internal key React writes onto a node once it owns it
+ * (`__reactFiber$<id>` in the React version this app ships; the older
+ * `__reactInternalInstance$<id>` name is checked too in case a transitive
+ * dependency still uses it). Its absence means the node is in the DOM — SSR'd
+ * or statically rendered — but no listener is attached to it yet.
+ */
+async function isHydrated(target: Locator): Promise<boolean> {
+  return target.evaluate((el) =>
+    Object.keys(el).some(
+      (key) =>
+        key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"),
+    ),
+  );
+}
+
+/**
+ * Attaches whether `target` was hydrated at THIS moment — call immediately
+ * before a click on a control issue #26 has seen fail silently. A `false`
+ * result on a failing run explains that click's "never fired" without needing
+ * anything else; a `true` result rules an un-hydrated control out for that
+ * click and leaves "fired, never committed" (the flight-recorder's territory
+ * above) as the remaining explanation. Never throws — a probe failure is
+ * itself evidence and is attached rather than lost.
+ */
+export async function attachHydrationState(label: string, target: Locator): Promise<void> {
+  let hydrated: string;
+  try {
+    hydrated = String(await isHydrated(target));
+  } catch (err) {
+    hydrated = `probe threw: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  await test.info().attach(`hydration-${label}.txt`, {
+    body: `hydrated: ${hydrated}\n`,
+    contentType: "text/plain",
   });
 }
 

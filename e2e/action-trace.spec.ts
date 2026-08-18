@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import {
+  attachHydrationState,
   flushFlightRecords,
   recordedFlightCount,
   recordServerActionResponses,
@@ -163,4 +164,33 @@ test("leaves non-action traffic unrecorded", async ({ page }) => {
   await flushFlightRecords();
   // The install sentinel and the probe are expected; no flight records are.
   expect(flightNames()).toHaveLength(0);
+});
+
+/**
+ * Covers `attachHydrationState`, added for the #26 hydration hypothesis: is a
+ * control un-hydrated at the moment of its click? No React runs in this file's
+ * fixture (it needs no app), so these attach the same internal key React
+ * itself writes onto a node it owns, and prove the probe reads it correctly in
+ * both directions rather than trusting the implementation by inspection alone.
+ */
+test("reports a plain DOM node as not hydrated", async ({ page }) => {
+  await page.setContent('<button id="cta">Go</button>');
+
+  await attachHydrationState("plain", page.locator("#cta"));
+
+  expect(bodyOf("hydration-plain")).toContain("hydrated: false");
+});
+
+test("reports a node carrying a React fiber key as hydrated", async ({ page }) => {
+  await page.setContent('<button id="cta">Go</button>');
+  await page.locator("#cta").evaluate((el) => {
+    // The property name React actually uses; a fixed random suffix here would
+    // still start with the prefix the probe checks and is enough to prove it
+    // reads the key rather than special-casing this test's exact string.
+    (el as unknown as Record<string, unknown>)["__reactFiber$abc123"] = {};
+  });
+
+  await attachHydrationState("real", page.locator("#cta"));
+
+  expect(bodyOf("hydration-real")).toContain("hydrated: true");
 });
