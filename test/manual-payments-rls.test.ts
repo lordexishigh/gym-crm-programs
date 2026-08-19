@@ -211,7 +211,9 @@ describe.skipIf(!hasDb)("manual_payment isolation + GDPR (0026)", () => {
       await manualPaymentsForMember(staff(seed.gymA, seed.staffAuthA), seed.memberA1)
     )[0];
     expect(afterSecond.void_reason).toBe("entered twice by mistake");
-    expect(afterSecond.voided_at).toBe(stamp);
+    // `toEqual`, not `toBe`: pg hands a timestamptz back as a Date instance, so
+    // two reads of the same unchanged row are equal in value but not identical.
+    expect(afterSecond.voided_at).toEqual(stamp);
   });
 
   it("excludes voided payments from the revenue totals", async () => {
