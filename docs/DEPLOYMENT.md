@@ -58,25 +58,40 @@ On every push/PR, CI spins up a `postgres:16` service and:
 ## Deploy — `npm run deploy`
 
 **`npm run deploy` ([`scripts/deploy.mjs`](../scripts/deploy.mjs)) is the deploy
-path. `git push` does not deploy anything.** That is not a preference, it is the
-current state of the two automated paths — both verified, not assumed:
+path you can rely on.** `deploy.yml` is working again as of 2026-08-19, so a push
+to `master` can now deploy — but the CLI is still the path that does not depend on
+an account setting outside this repo.
 
-- **GitHub Actions cannot run.** Every workflow on this repo (Deploy, CI, the
-  scheduled expiry job) fails in 4–13s with the annotation *"The job was not
-  started because recent account payments have failed or your spending limit needs
-  to be increased."* All four deploy secrets (`DATABASE_URL`, `VERCEL_TOKEN`,
-  `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`) are present and correct — the jobs simply
-  never start. A red Deploy run currently tells you nothing about the code.
-- **Vercel's Git integration cannot cover for it.** The Vercel project has no Git
-  link at all (`GET /v9/projects/gym-crm-programs` → `link: undefined`), so a push
-  to GitHub reaches Vercel by no route. `vercel.json` also sets
-  `git.deploymentEnabled.master/main = false`, which is belt-and-braces rather
-  than the cause.
+- **GitHub Actions runs again, and this is now checkable rather than assumed.**
+  The Actions outage described below ended for this repository between
+  2026-08-19 09:06 UTC and 18:12 UTC. `deploy.yml` run
+  [32192304370](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32192304370)
+  executed for real — 12 steps in `test`, 10 in `migrate-and-deploy`, both green —
+  so `master` has been deployed by Actions. `ci.yml` executes too: the four most
+  recent runs each ran all 23 steps.
+  **So a red CI run now means something.** `master` is currently red because two
+  e2e journeys fail ([#26](https://github.com/lordexishigh/gym-crm-programs/issues/26)),
+  which is a real defect in the product and not the outage. Read the step list
+  before blaming billing: an outage-blocked job has **zero** steps and completes in
+  3–13s, and its annotation says *"The job was not started because recent account
+  payments have failed or your spending limit needs to be increased."*
+  The account-level block has **not** fully cleared — the private repositories on
+  this account are still refused, and this repo's own scheduled job
+  (`membership-expiry.yml`, 08:30 UTC daily) was still refused on its
+  2026-08-19 attempt, before the recovery. Its next attempt is the first evidence
+  either way.
+- **Vercel's Git integration still cannot cover for it.** The Vercel project has no
+  Git link (`GET /v9/projects/gym-crm-programs` → `link: undefined`), so a push
+  reaches Vercel through `deploy.yml` or the CLI and by no other route.
+  `vercel.json` also sets `git.deploymentEnabled.master/main = false`.
 
-Consequence, and the reason this section is emphatic: pushing to `master` moves
-nothing live, silently. A correct, pushed, reviewed fix stays invisible until
-somebody runs the CLI, which is how "built but not live" was reported round after
-round against features that were already implemented.
+The reason this section stays emphatic: for the five days the outage lasted,
+pushing to `master` moved nothing live, silently, and a correct, pushed, reviewed
+fix stayed invisible until somebody ran the CLI — which is how "built but not
+live" was reported round after round against features that were already
+implemented. One account setting can put the repository back in that state without
+a commit, and the only thing that tells you which state you are in is the step
+list of the last run.
 
 ```bash
 export VERCEL_TOKEN=...        # or `npx vercel login` once

@@ -271,3 +271,42 @@ outcome. No further diagnostic PRs for #26 should be opened until a run can
 actually reach the e2e step again; the four already open/queued (#38/#39/#40
 and any future one) will simply resume being evaluated once CI starts
 scheduling runners again — no rebase or re-push needed.
+
+## 2026-08-20 — the Actions outage ended; the red CI on `master` is now real
+
+Correcting the 2026-08-16 entry above, which is left as written. Its measurement
+was right and its conclusion has expired.
+
+**Actions runs again on this repository.** The outage ended between
+2026-08-19 09:06 UTC and 18:12 UTC. Evidence, all step-level rather than
+conclusion-level:
+
+| run | what executed |
+|---|---|
+| [32192304370](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32192304370) (`deploy.yml`) | `test` 12 steps green, `migrate-and-deploy` 10 steps green — `master` was deployed |
+| [32192304375](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32192304375) (`ci.yml`, attempt 3) | all 23 steps ran; failed at *End-to-end journey tests* |
+| [32289534734](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32289534734), [32290230618](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32290230618), [32292232989](https://github.com/lordexishigh/gym-crm-programs/actions/runs/32292232989) | 23 steps each, 2 failed / 13 passed in Playwright |
+
+**What that changes: `master` is red for a real reason again.** The two failing
+journeys are `invite-flow.spec.ts:131` and `staff-journey.spec.ts:180`, and they
+have failed on **every** run since the outage lifted — four for four, across four
+different branches. That is [#26](https://github.com/lordexishigh/gym-crm-programs/issues/26),
+which was closed on 2026-08-18 by PR #40's body containing the words *"Does not fix
+#26"* (GitHub parses `fix #26` regardless of the prose in front of it) and has been
+reopened with the evidence. The 2026-08-13 record of "2 pass / 2 fail across four
+runs" is superseded: it is now 0 pass / 4 fail.
+
+**What has not changed.** The account-level block is still in force for the private
+repositories on this account, and this repo's own scheduled job
+(`membership-expiry.yml`) was still refused on its 2026-08-19 attempt. Public
+repositories get free minutes; private ones bill against an allowance that is not
+paying. So the underlying setting the 2026-08-16 entry asked a human to fix is
+**still unfixed** — it merely stopped affecting this repository.
+
+**The reading rule this leaves behind.** An outage-blocked job has **zero** steps,
+completes in 3–13s, and carries the annotation *"The job was not started because
+recent account payments have failed…"*. Anything with a step list failed for a
+reason in the diff. Check which one before writing either off — for five days
+every red run here was the former, and the habit that formed made a real failure
+easy to dismiss.
+
