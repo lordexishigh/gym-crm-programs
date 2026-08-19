@@ -245,8 +245,37 @@ export type BookResult =
   | { ok: false; error: string };
 
 /**
+ * Why a non-'active' membership cannot book a class.
+ *
+ * Migration 0013 deliberately splits the two states this product needs to keep
+ * apart: `member.status` is the portal/roster flag, `member.membership_status`
+ * is the BILLING lifecycle. Class booking consumes a paid entitlement, so it
+ * gates on the billing one — while the portal (programs, workout logging)
+ * gates on neither and stays open. That asymmetry is the point: a member who
+ * pauses for the summer keeps their rehab programme and keeps logging
+ * sessions, and simply cannot take a class slot they are not paying for.
+ *
+ * Worded per status because "you can't book" is actively misleading for a
+ * freeze — the member still has a portal, and telling them otherwise is what
+ * makes them leave.
+ */
+const BOOKING_BLOCKED_GENERIC =
+  "Your membership is not active, so class booking is unavailable. Speak to your gym.";
+
+const BOOKING_BLOCKED_REASON: Record<string, string> = {
+  frozen:
+    "Your membership is paused, so class booking is unavailable. Your training programs are still here, and you can keep logging workouts.",
+  expired:
+    "Your membership has expired, so class booking is unavailable. Speak to your gym to renew.",
+  cancelled:
+    "Your membership is cancelled, so class booking is unavailable. Speak to your gym to restart it.",
+};
+
+/**
  * Book a member into a class: confirmed if under capacity, waitlisted
- * otherwise.
+ * otherwise — and only if their membership is billing-active at all (see
+ * `BOOKING_BLOCKED_REASON`; until this gate existed, an expired or cancelled
+ * member could take class slots indefinitely).
  *
  * **Admin context, and why the count has to run there.** The previous version
  * ran everything under the member's own `withTenantContext` session. That
@@ -280,6 +309,26 @@ export async function bookClass(
   }
 
   return withAdminContext(async (c) => {
+    // Billing gate, before the class row is locked — a blocked member should
+    // never hold a lock other bookers of the same class are queued behind.
+    // `tenant_id` is matched explicitly because admin context bypasses RLS.
+    const mem = (
+      await c.query<{ membership_status: "active" | "expired" | "frozen" | "cancelled" }>(
+        "select membership_status from member where id = $1 and tenant_id = $2",
+        [memberId, identity.tenantId],
+      )
+    ).rows[0];
+    if (!mem) return { ok: false, error: "Member not found." };
+    // Allowlist, not a blocklist: a fifth status added to 0013's CHECK must
+    // block booking by default rather than silently become bookable, and must
+    // still produce a real message rather than `undefined`.
+    if (mem.membership_status !== "active") {
+      return {
+        ok: false,
+        error: BOOKING_BLOCKED_REASON[mem.membership_status] ?? BOOKING_BLOCKED_GENERIC,
+      };
+    }
+
     const cls = (
       await c.query<{ capacity: number }>(
         "select capacity from classes where id = $1 and tenant_id = $2 for update",
