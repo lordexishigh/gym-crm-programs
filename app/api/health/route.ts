@@ -135,6 +135,11 @@ export async function GET() {
       capabilities: capabilitySummary(),
       capability_gaps: capabilityGaps().map((c) => ({
         id: c.id,
+        // Human name for the gap. Carried so a CLIENT can render the gap without
+        // shipping its own copy of the labels: app/ReadinessNotice.tsx reads this
+        // payload to tell an unauthenticated visitor why sign-in cannot work, and
+        // a second label map would be free to drift from lib/capabilities.ts.
+        label: c.label,
         severity: c.severity,
         missing: c.missing,
         consequence: c.consequence,

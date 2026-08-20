@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DEMO_ACCOUNTS, DEMO_ACCOUNTS_CAVEAT } from "@/lib/demo-accounts";
 import { DemoSignInButton } from "./DemoSignInButton";
+import { ReadinessNotice } from "./ReadinessNotice";
 
 /**
  * Landing page.
@@ -60,6 +61,10 @@ export default function LandingPage() {
           Member portal
         </Link>
       </div>
+
+      {/* Above the demo panel, not below it: its whole job is to be read BEFORE
+          the visitor spends a click on credentials that cannot work here. */}
+      <ReadinessNotice />
 
       <DemoAccounts />
     </main>
