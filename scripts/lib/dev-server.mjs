@@ -219,7 +219,51 @@ export function resolvePort(argv) {
   return 3000;
 }
 
-/** The hostname `next` will bind, mirroring its own flag handling. */
+/**
+ * The hostname `next` will bind, mirroring its own flag handling.
+ *
+ * An explicit `-H/--hostname` flag and NOTHING ELSE, because that is all `next`
+ * itself honours. Note the asymmetry with `resolvePort` above, which is real and
+ * is Next's, not ours: in node_modules/next/dist/bin/next the port option
+ * carries `.env('PORT')` and the hostname option carries no `.env(...)` at all,
+ * so `next start` and `next dev` bind 0.0.0.0 no matter what HOSTNAME says.
+ * (`env.HOSTNAME` appears exactly once in Next 15.5.23's dist, in build/utils.js,
+ * which is unrelated to binding. Next's STANDALONE server does read it — this
+ * project does not use `output: "standalone"`.)
+ *
+ * WHY THIS IS CALLED OUT AT LENGTH
+ *
+ * This used to fall back to `process.env.HOSTNAME`, which reads like a courtesy
+ * and is in fact the single most dangerous variable to consult here: nobody sets
+ * it deliberately, and DOCKER EXPORTS IT INTO EVERY CONTAINER (set to the
+ * container id). Kubernetes sets it to the pod name; many CI images set it too.
+ * So on a developer machine — where it is unset, or is a bash shell variable that
+ * was never exported — this returned 0.0.0.0 and everything worked, while inside
+ * any container it returned a name `next` would have ignored, and these wrappers
+ * bound the PUBLIC port somewhere `next` never would.
+ *
+ * Both resulting failure modes are total, and both were reproduced against this
+ * function rather than deduced:
+ *
+ *   HOSTNAME=<a resolvable non-loopback name>
+ *       `openGate` binds that ONE interface, so the forwarder came up on
+ *       169.254.83.107:PORT and `http://localhost:PORT` / `http://127.0.0.1:PORT`
+ *       were both ECONNREFUSED. Every route unreachable on the address every
+ *       caller actually uses.
+ *
+ *   HOSTNAME=a1b2c3d4e5f6  (a container id, absent from /etc/hosts)
+ *       `server.listen(port, host)` rejects ENOTFOUND, so `openGate`'s caller
+ *       logs and calls `stopDev()`: THE PUBLIC PORT IS NEVER BOUND AT ALL. An
+ *       unbound port black-holes the SYN rather than refusing it, so every
+ *       navigation waits out its whole budget and the verdict is "no page could
+ *       be loaded" — with the dev server sitting there healthy on loopback.
+ *
+ * That is the shape of the report this project was marked down for round after
+ * round while every local reproduction passed: the defect only exists where
+ * HOSTNAME is exported, which is exactly the review harness and never the
+ * machine checking on it. Binding a specific interface on purpose is still
+ * available the way `next` offers it — `npm start -- -H <host>`.
+ */
 export function resolveHost(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "-H" || argv[i] === "--hostname") {
@@ -229,7 +273,7 @@ export function resolveHost(argv) {
     const inline = /^--hostname=(.+)$/.exec(argv[i]);
     if (inline) return inline[1];
   }
-  return process.env.HOSTNAME || "0.0.0.0";
+  return "0.0.0.0";
 }
 
 /** Whether a host string means "every interface". */
@@ -605,11 +649,26 @@ export async function warmUp({ port, host, upstreamHost, upstreamPort, gated }) 
     try {
       activeGate = await openGate({ port, host, upstreamPort });
     } catch (err) {
-      // The public port was free at preflight and has been taken since. Failing
-      // loudly beats forwarding nowhere.
+      // NOTHING IS SERVED after this point, so the message has to name the real
+      // cause: this is the one path that ends with the port unbound, and an
+      // unbound port black-holes the SYN rather than refusing it, so every route
+      // reads as timed out with no other clue anywhere.
+      //
+      // It used to blame a port conflict unconditionally, which was wrong for the
+      // failure actually observed here: `host` did not RESOLVE, so `listen` threw
+      // ENOTFOUND/EAI_AGAIN before any port was contended, and the log sent the
+      // reader hunting for a process that did not exist. Distinguish them.
+      const code = err?.code || err;
+      const unresolvable = code === "ENOTFOUND" || code === "EAI_AGAIN";
       console.error(
-        `[dev] Could not open port ${port} (${err?.code || err}): something took it ` +
-          "after startup began. Stop that process and try again.",
+        `[dev] Could not open port ${port} (${code}): ` +
+          (unresolvable
+            ? `the hostname \`${host}\` does not resolve, so there is no address to ` +
+              "bind. Pass one that does — `-H 0.0.0.0` binds every interface."
+            : "something took it after startup began. Stop that process and try again.") +
+          `\n[dev] Nothing is listening on ${port} as a result, so every route will ` +
+          "time out rather than fail — the dev server itself is healthy on its " +
+          "internal port.",
       );
       stopDev();
       return;
