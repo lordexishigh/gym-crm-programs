@@ -117,7 +117,7 @@ async function signInAsStaff(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Email").fill(staffEmail);
   await page.getByLabel("Password").fill(staffPassword);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
 }
 
@@ -346,7 +346,7 @@ test.describe("staff journey", () => {
     await page.goto("/portal/login");
     await page.getByLabel("Email").fill(staffEmail);
     await page.getByLabel("Password").fill(staffPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(
       page.getByText("This is a staff account — please use the staff sign-in page."),

@@ -104,9 +104,15 @@ test.describe("live deployment: staff authentication", () => {
     await expect(page.getByText(EMAIL, { exact: false }).first()).toBeVisible();
 
     // 3. Submit real credentials through the real Server Action.
+    //    `exact` is load-bearing: accessible-name matching is a SUBSTRING match
+    //    by default, and app/DemoSignInHint.tsx renders a "Sign in as Owner" /
+    //    "Sign in as Trainer" button under this form, each in its own <form>.
+    //    Without it the locator matches all three and Playwright refuses to
+    //    guess — a red deploy gate caused by the page around the form, not by
+    //    sign-in being broken.
     await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // 4. The whole point: the session is established and the staff landing page
     //    is reached. A failure here is the reported defect, and the assertion
