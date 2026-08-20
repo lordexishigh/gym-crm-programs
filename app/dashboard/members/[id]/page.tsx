@@ -123,6 +123,15 @@ export default async function MemberDetailPage({
     photo_url: member.photo_url,
   });
 
+  // An erased member's record is a TOMBSTONE, and this page is the only place it
+  // is still reachable (the roster and every other staff list filter it out).
+  // Every control that would write personal data back into it is withheld —
+  // the edit form, the photo uploader, the PIN, the invite panel and follow-up
+  // tasks — leaving the read-only record, its history, and the erasure notice.
+  // The Server Actions behind those controls refuse an erased member too (see
+  // ../actions.ts); this is the UI half of the same rule, not the whole of it.
+  const erased = Boolean(member.erased_at);
+
   // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
   // tenant-scoped by the `workout_log_staff_select` RLS policy.
   const [adherence, workouts, staffRole, tasks] = await Promise.all([
@@ -188,6 +197,18 @@ export default async function MemberDetailPage({
         </div>
       </div>
 
+      {erased ? (
+        <p className="rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <strong className="font-semibold">Erased.</strong> This member
+          exercised their right to erasure on{" "}
+          {new Date(member.erased_at as string).toLocaleDateString("en-GB", {
+            dateStyle: "long",
+          })}
+          . The record is kept as a tombstone so their training history stays
+          valid; it holds no personal data and cannot be edited or re-invited.
+        </p>
+      ) : null}
+
       <dl className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
         <div className="flex flex-col gap-0.5">
           <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -245,49 +266,53 @@ export default async function MemberDetailPage({
         </div>
       </dl>
 
-      <MemberPhotoPanel
-        memberId={member.id}
-        memberName={member.full_name}
-        photoSrc={avatarSrc}
-        hasUpload={photoUpdatedAt !== null}
-      />
+      {erased ? null : (
+        <>
+          <MemberPhotoPanel
+            memberId={member.id}
+            memberName={member.full_name}
+            photoSrc={avatarSrc}
+            hasUpload={photoUpdatedAt !== null}
+          />
 
-      <MemberForm
-        action={updateMemberAction}
-        submitLabel="Save changes"
-        defaults={{
-          id: member.id,
-          fullName: member.full_name,
-          email: member.email ?? "",
-          phone: member.phone ?? "",
-          status: member.status,
-          notes: member.notes ?? "",
-          photoUrl: member.photo_url ?? "",
-          emergencyContactName: member.emergency_contact_name ?? "",
-          emergencyContactPhone: member.emergency_contact_phone ?? "",
-          membershipStatus: member.membership_status,
-        }}
-      />
+          <MemberForm
+            action={updateMemberAction}
+            submitLabel="Save changes"
+            defaults={{
+              id: member.id,
+              fullName: member.full_name,
+              email: member.email ?? "",
+              phone: member.phone ?? "",
+              status: member.status,
+              notes: member.notes ?? "",
+              photoUrl: member.photo_url ?? "",
+              emergencyContactName: member.emergency_contact_name ?? "",
+              emergencyContactPhone: member.emergency_contact_phone ?? "",
+              membershipStatus: member.membership_status,
+            }}
+          />
 
-      <section className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-slate-400">
-            Check-in PIN
-          </h2>
-          <p className="font-mono text-2xl font-bold tracking-widest text-slate-900">
-            {member.pin_code ?? "—"}
-          </p>
-        </div>
-        <form action={regeneratePinAction}>
-          <input type="hidden" name="memberId" value={member.id} />
-          <button
-            type="submit"
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            {member.pin_code ? "Regenerate" : "Generate PIN"}
-          </button>
-        </form>
-      </section>
+          <section className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-0.5">
+              <h2 className="text-sm font-medium uppercase tracking-wide text-slate-400">
+                Check-in PIN
+              </h2>
+              <p className="font-mono text-2xl font-bold tracking-widest text-slate-900">
+                {member.pin_code ?? "—"}
+              </p>
+            </div>
+            <form action={regeneratePinAction}>
+              <input type="hidden" name="memberId" value={member.id} />
+              <button
+                type="submit"
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                {member.pin_code ? "Regenerate" : "Generate PIN"}
+              </button>
+            </form>
+          </section>
+        </>
+      )}
 
       <WorkoutAdherence adherence={adherence} logs={workouts} />
 
@@ -303,32 +328,34 @@ export default async function MemberDetailPage({
       {/* Follow-ups sit above the timeline: they are the outstanding work on
           this member, where the timeline is the record of what already
           happened. */}
-      <MemberTasks memberId={member.id} tasks={tasks} />
+      {erased ? null : <MemberTasks memberId={member.id} tasks={tasks} />}
 
       {/* Replaces the standalone StatusHistory panel: status changes,
           assignments, invites and workouts are one chronology, and reading
           them as four separate lists made the order between them invisible. */}
       <Timeline entries={timeline} />
 
-      <InvitePanel
-        memberId={member.id}
-        hasEmail={Boolean(member.email)}
-        alreadyActive={Boolean(member.auth_user_id)}
-        lastInvite={
-          lastInvite
-            ? {
-                id: lastInvite.id,
-                // Show the effective status so a just-expired pending invite
-                // reads as "expired", matching the invites dashboard.
-                status: effectiveInviteStatus(
-                  lastInvite.status,
-                  lastInvite.expires_at,
-                ),
-                expiresAt: lastInvite.expires_at,
-              }
-            : null
-        }
-      />
+      {erased ? null : (
+        <InvitePanel
+          memberId={member.id}
+          hasEmail={Boolean(member.email)}
+          alreadyActive={Boolean(member.auth_user_id)}
+          lastInvite={
+            lastInvite
+              ? {
+                  id: lastInvite.id,
+                  // Show the effective status so a just-expired pending invite
+                  // reads as "expired", matching the invites dashboard.
+                  status: effectiveInviteStatus(
+                    lastInvite.status,
+                    lastInvite.expires_at,
+                  ),
+                  expiresAt: lastInvite.expires_at,
+                }
+              : null
+          }
+        />
+      )}
 
       <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
     </div>

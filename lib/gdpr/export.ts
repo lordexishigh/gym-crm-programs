@@ -518,6 +518,18 @@ export async function anonymiseMember(
       [memberId, ERASED_SUGGESTION_HEADLINE],
     );
 
+    // Scrub the member's own words on any erasure request they filed (0026).
+    // The request row itself is KEPT — it is the controller's evidence that a
+    // subject request was received and answered, which must outlive the data it
+    // concerned — but `reason` is free text the member wrote about themselves
+    // ("I'm moving away", "after what happened in class") and is exactly the
+    // PII-bearing prose the scrubs above exist for. The dates and the decision,
+    // which are what the evidence needs, survive.
+    await c.query(
+      `update member_deletion_request set reason = null where member_id = $1`,
+      [memberId],
+    );
+
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
       action: "erasure",

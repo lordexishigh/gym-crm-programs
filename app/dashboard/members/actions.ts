@@ -161,17 +161,23 @@ export async function updateMemberAction(
     membershipStatus,
   } = parsed.value;
 
-  let updated: number;
+  let updated: number | "erased";
   try {
     updated = await withTenantContext(session.identity, async (c) => {
       // Read the prior status first so we only log an event when it changes.
       const prev = (
-        await c.query<{ status: string }>(
-          "select status from member where id = $1",
+        await c.query<{ status: string; erased_at: string | null }>(
+          "select status, erased_at from member where id = $1",
           [id],
         )
       ).rows[0];
       if (!prev) return 0;
+      // An erased member is a tombstone, not a record staff may keep editing:
+      // saving this form would write the subject's name and contact details
+      // straight back into a row they exercised their right to erasure over.
+      // Enforced HERE (the write path), not only by hiding the form — the
+      // Server Action is reachable regardless of what the page renders.
+      if (prev.erased_at) return "erased" as const;
 
       const res = await c.query(
         `update member
@@ -179,7 +185,7 @@ export async function updateMemberAction(
                 notes = $6, photo_url = $7, emergency_contact_name = $8,
                 emergency_contact_phone = $9, membership_status = $10,
                 updated_at = now()
-          where id = $1`,
+          where id = $1 and erased_at is null`,
         [
           id,
           fullName,
@@ -218,6 +224,12 @@ export async function updateMemberAction(
     return { error: "Could not save changes. Please try again." };
   }
 
+  if (updated === "erased") {
+    return {
+      error:
+        "This member has been erased. Their record cannot be edited — restoring personal data to it would undo the erasure.",
+    };
+  }
   // RLS makes a cross-tenant id silently match nothing.
   if (updated === 0) return { error: "Member not found." };
 
@@ -258,13 +270,20 @@ export async function sendInviteAction(
   if (!memberId) return { error: "Missing member id." };
 
   // Resolve the member (RLS-scoped) — must have an email to be invited.
-  let member: { email: string | null; full_name: string } | null;
+  let member: {
+    email: string | null;
+    full_name: string;
+    erased_at: string | null;
+  } | null;
   try {
     member = await withTenantContext(session.identity, async (c) => {
-      const { rows } = await c.query<{ email: string | null; full_name: string }>(
-        "select email, full_name from member where id = $1",
-        [memberId],
-      );
+      const { rows } = await c.query<{
+        email: string | null;
+        full_name: string;
+        erased_at: string | null;
+      }>("select email, full_name, erased_at from member where id = $1", [
+        memberId,
+      ]);
       return rows[0] ?? null;
     });
   } catch (err) {
@@ -275,6 +294,12 @@ export async function sendInviteAction(
     return { error: "Could not load the member. Please try again." };
   }
   if (!member) return { error: "Member not found." };
+  // Checked before the missing-email branch so an erased member gets the real
+  // reason rather than "add an email address" — their address was removed on
+  // purpose, and re-adding one to invite them would undo the erasure.
+  if (member.erased_at) {
+    return { error: "This member has been erased and cannot be invited." };
+  }
   if (!member.email) {
     return { error: "Add an email address to this member before inviting them." };
   }
@@ -453,9 +478,17 @@ export async function regeneratePinAction(formData: FormData): Promise<void> {
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return;
 
-  await withTenantContext(session.identity, (c) =>
-    generateUniquePinCode(c, session.identity.tenantId, memberId),
-  );
+  await withTenantContext(session.identity, async (c) => {
+    // Erasure deliberately clears the PIN and rotates the QR token so an erased
+    // member loses kiosk access; handing them a fresh PIN would put them back on
+    // the check-in feed under a tombstoned name.
+    const live = await c.query(
+      "select 1 from member where id = $1 and erased_at is null",
+      [memberId],
+    );
+    if ((live.rowCount ?? 0) === 0) return;
+    await generateUniquePinCode(c, session.identity.tenantId, memberId);
+  });
 
   revalidatePath(`/dashboard/members/${memberId}`);
 }
@@ -506,8 +539,14 @@ export async function uploadMemberPhotoAction(
     saved = await withTenantContext(session.identity, async (c) => {
       // RLS makes a member outside this gym invisible, so this doubles as the
       // authorisation check — and turns the composite-FK violation that would
-      // otherwise follow into a clean "not found".
-      const found = await c.query("select 1 from member where id = $1", [memberId]);
+      // otherwise follow into a clean "not found". `erased_at is null` is part
+      // of the same check for the same reason: a photograph is the most
+      // identifying data here, and erasure deletes it — re-uploading one to an
+      // erased record would silently undo that.
+      const found = await c.query(
+        "select 1 from member where id = $1 and erased_at is null",
+        [memberId],
+      );
       if ((found.rowCount ?? 0) === 0) return false;
 
       await c.query(

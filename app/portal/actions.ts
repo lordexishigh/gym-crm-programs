@@ -9,6 +9,10 @@ import {
   sendBookingConfirmationEmail,
   notifyWaitlistPromotions,
 } from "@/lib/notifications";
+import {
+  normaliseNote,
+  submitDeletionRequest,
+} from "@/lib/gdpr/deletion-requests";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
 /**
@@ -152,5 +156,56 @@ export async function cancelClassBookingAction(
       result.promoted.length > 0
         ? "Booking cancelled — your spot went to the next member on the waitlist."
         : "Booking cancelled.",
+  };
+}
+
+export type ErasureRequestState = { error?: string; success?: string };
+
+/**
+ * File a right-to-erasure request for the signed-in member (beta-gdpr-002).
+ *
+ * The data subject's own half of the erasure workflow: until this existed, a
+ * member could only ask by email or at the desk, and the gym had nothing in the
+ * product to see or act on. Nothing is deleted here — the request goes into the
+ * gym's queue and a human decides, which is deliberate: erasure is irreversible
+ * and Art. 17 has lawful exceptions the gym has to be able to invoke.
+ *
+ * The subject is the SESSION's member, never a form field, so a member cannot
+ * file a request against anyone else; the RLS insert policy (migration 0026)
+ * re-checks that against `app_current_member()` regardless.
+ */
+export async function requestErasureAction(
+  _prev: ErasureRequestState,
+  formData: FormData,
+): Promise<ErasureRequestState> {
+  const session = await requireMember();
+  const memberId = session.identity.memberId as string;
+
+  const reason = normaliseNote(formData.get("reason"));
+
+  let result: Awaited<ReturnType<typeof submitDeletionRequest>>;
+  try {
+    result = await submitDeletionRequest(session.identity, memberId, reason);
+  } catch (err) {
+    await reportHandledError(err, "portal-request-erasure", {
+      tenantId: session.identity.tenantId,
+    });
+    return { error: "Could not submit your request. Please try again." };
+  }
+
+  if (!result.ok) {
+    return {
+      error:
+        result.reason === "already_erased"
+          ? "Your personal data has already been erased."
+          : "Could not submit your request. Please try again.",
+    };
+  }
+
+  revalidatePath("/portal");
+  return {
+    success: result.alreadyPending
+      ? "You already have a deletion request waiting for your gym to review."
+      : "Your deletion request has been sent to your gym. They will confirm by email once your data has been deleted.",
   };
 }

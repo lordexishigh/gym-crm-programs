@@ -50,6 +50,9 @@ const EXPECTED_TENANTED_TABLES = [
   // its isolation is pinned explicitly rather than left to discovery alone.
   "member_photo",
   "member_task",
+  // Member-filed right-to-erasure requests — a member may file and read their
+  // OWN only, so its isolation is pinned explicitly (see 0026).
+  "member_deletion_request",
 ] as const;
 
 type CatalogRow = {

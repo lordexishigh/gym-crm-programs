@@ -161,6 +161,60 @@ export async function notifyWaitlistPromotions(
   return notified;
 }
 
+/**
+ * The email that closes a right-to-erasure request (beta-gdpr-002): the member
+ * asked for their data to be deleted, and this tells them it has been.
+ *
+ * Under GDPR the controller must inform the subject of the action taken on their
+ * Art. 17 request, so this is not a courtesy note — it is the notification that
+ * makes the erasure answerable. It is the LAST message this address will ever
+ * receive from the gym, and by the time it is sent the address itself is already
+ * gone from the database (the caller reads it before erasing — see
+ * `completeDeletionRequest`), so nothing here can be re-derived later or
+ * retried from stored data.
+ *
+ * Deliberately carries no personal data beyond the member's own name and no
+ * link back into the portal: their account is gone, so a link would 404.
+ * Returns whether the send landed, so the caller can record it against the
+ * request as the controller's evidence of having notified them.
+ */
+export async function sendErasureConfirmationEmail(params: {
+  to: string;
+  memberName: string;
+  gymName: string;
+}): Promise<boolean> {
+  const { to, memberName, gymName } = params;
+  const safeName = escapeHtml(memberName);
+  const safeGym = escapeHtml(gymName);
+
+  return sendBestEffort(
+    {
+      to,
+      subject: `Your data has been deleted — ${gymName}`,
+      html: `<!doctype html><html><body style="font-family:system-ui,Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5">
+        <p>Hi ${safeName},</p>
+        <p>Your request to delete your personal data at <strong>${safeGym}</strong> has been completed.</p>
+        <p>Your name, email address, phone number, emergency contact, photo and any notes held about you have been removed. Your training history is kept only in anonymised form, with nothing that identifies you, and your portal sign-in no longer works.</p>
+        <p>${safeGym} keeps a dated record that this request was made and completed. That record is required to demonstrate the deletion happened and contains no personal data about you.</p>
+        <p style="color:#94a3b8;font-size:12px">This is the last email you will receive from us at this address.</p>
+      </body></html>`,
+      text: [
+        `Hi ${memberName},`,
+        "",
+        `Your request to delete your personal data at ${gymName} has been completed.`,
+        "",
+        "Your name, email address, phone number, emergency contact, photo and any notes held about you have been removed. Your training history is kept only in anonymised form, with nothing that identifies you, and your portal sign-in no longer works.",
+        "",
+        `${gymName} keeps a dated record that this request was made and completed. That record is required to demonstrate the deletion happened and contains no personal data about you.`,
+        "",
+        "This is the last email you will receive from us at this address.",
+      ].join("\n"),
+    },
+    "erasure-confirmation-email",
+    { to },
+  );
+}
+
 export async function sendPaymentFailedEmail(params: {
   to: string;
   memberName: string;

@@ -25,6 +25,10 @@ const BASE_NAV = [
   { href: "/dashboard/suggestions", label: "Needs review" },
   { href: "/dashboard/members", label: "Members" },
   { href: "/dashboard/invites", label: "Invites" },
+  // A permanent entry rather than one that appears only when the queue is
+  // non-empty: this is a statutory obligation surface, and a page a gym can only
+  // reach while it already has a problem is a page nobody knows exists.
+  { href: "/dashboard/deletion-requests", label: "Deletion requests" },
   { href: "/dashboard/classes", label: "Classes" },
   { href: "/dashboard/checkin", label: "Check-in" },
   { href: "/dashboard/programs", label: "Programs" },

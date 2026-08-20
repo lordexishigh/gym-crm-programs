@@ -308,6 +308,11 @@ export async function todaysCheckIns(identity: Identity): Promise<CheckInLogRow[
          join member m on m.id = ci.member_id
         where ci.checked_in_at >= date_trunc('day', now() at time zone $2::text)
                                     at time zone $2::text
+          -- An erased member (beta-gdpr-002) drops off the desk feed: erasure
+          -- also revokes their PIN/QR so they cannot appear here again, but a
+          -- visit recorded EARLIER today would otherwise still be on screen
+          -- under the "Erased member" tombstone.
+          and m.erased_at is null
         order by ci.checked_in_at desc
         limit 50`,
       [String(STALE_VISIT_HOURS), GYM_TIME_ZONE],
