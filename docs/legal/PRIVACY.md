@@ -15,23 +15,33 @@ This policy explains what Alpha CRM ("we") collects, why, and your choices.
 - your name
 - your email address
 - an encrypted password or login identifier
+- billing details (processed by our payment provider — we do not store full card numbers)
+- usage data (pages viewed, actions taken)
+- device and browser information
 
 ## Why we collect it
 
 To provide and operate the service, keep your account secure, and improve the product. We only use your data for the purposes described here.
+
+
+## Payments
+
+Payments are handled by our payment provider. We do not store your full card details; the provider processes them under PCI-DSS standards.
 
 ## How we share it
 
 We share data with the third-party service providers that run the product:
 
 - Supabase (database, auth & hosting)
+- Stripe (payment processing)
+- an analytics provider (usage analytics)
 - an email delivery provider (transactional email)
 
 These providers process data on our behalf under their own terms. We do not sell your personal data.
 
 ## Cookies
 
-We use cookies and similar technologies for keeping you signed in. See our Cookie Policy for details.
+We use cookies and similar technologies for keeping you signed in and understanding usage (analytics). See our Cookie Policy for details.
 
 ## Data retention
 
