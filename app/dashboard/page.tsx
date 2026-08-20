@@ -59,7 +59,21 @@ export default async function DashboardPage() {
   ];
 
   const actions = [
-    // First, and conditional: a pending brief is time-sensitive in a way that
+    // Ahead of even the suggestion queue, and for a stronger reason: a pending
+    // erasure request carries a one-month legal deadline, so an unnoticed one is
+    // a compliance breach rather than a missed opportunity. Hidden when the
+    // queue is empty (the nav still links the page).
+    ...(stats.pendingDeletionRequests > 0
+      ? [
+          {
+            label: `${stats.pendingDeletionRequests} deletion request${stats.pendingDeletionRequests === 1 ? "" : "s"}`,
+            hint: "Members asking you to delete their data — respond within a month",
+            href: "/dashboard/deletion-requests",
+            icon: IconShield,
+          },
+        ]
+      : []),
+    // Then, and conditional: a pending brief is time-sensitive in a way that
     // "add a member" is not — it names a member who has already stopped
     // training, and the value of contacting them decays daily. Hidden entirely
     // when the queue is empty rather than shown as a zero, so it reads as work
@@ -237,6 +251,15 @@ function IconMail() {
     <svg {...iconProps}>
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="m2 7 10 6 10-6" />
+    </svg>
+  );
+}
+
+function IconShield() {
+  return (
+    <svg {...iconProps}>
+      <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z" />
+      <path d="M9 12h6" />
     </svg>
   );
 }

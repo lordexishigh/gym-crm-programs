@@ -5,6 +5,7 @@ import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
 import { recentWorkoutLogs, workoutStreakDays } from "@/lib/workout-logs";
 import { listUpcomingClassesForMember } from "@/lib/classes";
 import { memberMembershipStatus, memberPlansFor, paymentHistoryForMember } from "@/lib/billing";
+import { latestDeletionRequestForMember } from "@/lib/gdpr/deletion-requests";
 import { ProgramView } from "./ProgramView";
 import { ProgramHistory } from "./ProgramHistory";
 import { LogWorkout } from "./LogWorkout";
@@ -13,6 +14,7 @@ import { ClassSchedule } from "./ClassSchedule";
 import { MembershipStatus } from "./MembershipStatus";
 import { PaymentHistory } from "./PaymentHistory";
 import { StreakBadge } from "./StreakBadge";
+import { DataPrivacy } from "./DataPrivacy";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -52,6 +54,7 @@ export default async function PortalPage() {
     membershipStatus,
     plans,
     paymentHistory,
+    deletionRequest,
   ] = await Promise.all([
     loadMemberPortal(session.identity, memberId),
     archivedPrograms(session.identity, memberId),
@@ -61,6 +64,9 @@ export default async function PortalPage() {
     memberMembershipStatus(session.identity, memberId),
     memberPlansFor(session.identity, memberId),
     paymentHistoryForMember(session.identity, memberId),
+    // Whether the member already has a right-to-erasure request on file, so the
+    // "Your data" card shows its state instead of offering the button again.
+    latestDeletionRequestForMember(session.identity, memberId),
   ]);
 
   // The active programs a member can log a session against (id + name only).
@@ -118,6 +124,9 @@ export default async function PortalPage() {
         <ClassSchedule classes={classes} />
         <MembershipStatus membershipStatus={membershipStatus} plans={plans} />
         <PaymentHistory events={paymentHistory} />
+        {/* Last on the page on purpose: it is the one destructive control a
+            member has, and it belongs below everything they came here to do. */}
+        <DataPrivacy request={deletionRequest} />
       </main>
     </div>
   );
