@@ -125,12 +125,27 @@ export function capabilities(): Capability[] {
     },
     {
       id: "payments",
-      label: "Payments",
+      label: "Payments (Stripe)",
       configured: Boolean(process.env.STRIPE_SECRET_KEY?.trim()),
-      severity: "optional",
+      /**
+       * "degraded", not "optional" — corrected 2026-08-20 against the real
+       * production project, which has neither variable set.
+       *
+       * The old classification said payments were "deliberately off on this
+       * product", and that is not what the product does. The owner's billing
+       * panel offers a "Send checkout link" button, `assignPlanAction` tells them
+       * in so many words to "send the member a checkout link to collect payment",
+       * and the portal shows a payment history that only the Stripe webhook ever
+       * writes to. Those are promises, so their absence is a broken promise —
+       * the exact class this module exists to make loud. An automated review has
+       * duly reported the Stripe integration as "built but the running app
+       * doesn't serve it", and it was right: the code ships, the keys do not,
+       * and nothing anywhere said so.
+       */
+      severity: "degraded",
       missing: missingEnv(["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"]),
       consequence:
-        "Plan checkout and payment-status tracking are unavailable; membership plans can still be recorded manually.",
+        "No money can be collected: checkout links cannot be created, so an assigned plan stays 'pending' forever, the portal's payment history stays empty, and the automated failed-payment retry never runs because Stripe has nowhere to deliver events. Plans can still be assigned and tracked by hand.",
     },
     {
       id: "ai",
