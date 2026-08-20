@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { PoolClient } from "pg";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { resolveStaffUserId } from "@/lib/staff";
 import { reportHandledError } from "@/lib/observability/monitoring";
@@ -53,7 +53,7 @@ async function insertOrdered(
 export async function saveProgramAsTemplateAction(
   formData: FormData,
 ): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const programId = String(formData.get("programId") ?? "");
   if (!programId) redirect("/dashboard/programs");
@@ -120,7 +120,7 @@ export async function saveProgramAsTemplateAction(
 export async function createProgramFromTemplateAction(
   formData: FormData,
 ): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const templateId = String(formData.get("templateId") ?? "");
   if (!templateId) redirect("/dashboard/templates");
@@ -178,7 +178,7 @@ export async function createProgramFromTemplateAction(
 
 /** Delete a template (and its exercises, via FK cascade). RLS scopes it. */
 export async function deleteTemplateAction(formData: FormData): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const id = String(formData.get("id") ?? "");
   if (!id) redirect("/dashboard/templates");

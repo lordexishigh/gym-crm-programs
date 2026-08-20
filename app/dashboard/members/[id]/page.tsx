@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
-import { getStaffRole } from "@/lib/staff";
+import { staffCan } from "@/lib/permissions";
+import { memberAttendance } from "@/lib/checkin";
 import type { MemberRow, MembershipStatus } from "@/lib/members";
 import {
   effectiveInviteStatus,
@@ -24,6 +25,7 @@ import { memberTasks } from "@/lib/member-tasks";
 import { Avatar } from "@/app/components/Avatar";
 import { MemberForm } from "../MemberForm";
 import { MemberPhotoPanel } from "../MemberPhotoPanel";
+import { Attendance } from "../Attendance";
 import { Timeline } from "../Timeline";
 import { WorkoutAdherence } from "../WorkoutAdherence";
 import { MemberTasks } from "../MemberTasks";
@@ -47,7 +49,7 @@ export default async function MemberDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("members.read");
 
   const data = await withTenantContext(session.identity, async (c) => {
     const member = (
@@ -123,18 +125,22 @@ export default async function MemberDetailPage({
   });
 
   // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
-  // tenant-scoped by the `workout_log_staff_select` RLS policy.
-  const [adherence, workouts, staffRole, tasks] = await Promise.all([
+  // tenant-scoped by the `workout_log_staff_select` RLS policy. Attendance
+  // joins it here because it is the same question asked of a different table —
+  // and it is the lookup the Front Desk role exists to perform.
+  const [adherence, workouts, attendance, tasks] = await Promise.all([
     memberAdherence(session.identity, member.id),
     recentWorkoutLogs(session.identity, member.id),
-    getStaffRole(session.identity),
+    memberAttendance(session.identity, member.id),
     memberTasks(session.identity, member.id),
   ]);
 
-  // Billing data is owner-only (issue: staff role separation) — a trainer
-  // never even queries plans/subscriptions, let alone sees them rendered.
+  // Billing data is owner-only (issue: staff role separation) — a trainer or
+  // front-desk session never even queries plans/subscriptions, let alone sees
+  // them rendered. RLS denies the front desk those tables outright (0026), so
+  // this is the guard, not the only one.
   const billing =
-    staffRole === "owner"
+    staffCan(session.staffRole, "payments.read")
       ? await withTenantContext(session.identity, async (c) => {
           const plans = (
             await c.query<MembershipPlanRow>(
@@ -288,6 +294,8 @@ export default async function MemberDetailPage({
         </form>
       </section>
 
+      <Attendance attendance={attendance} />
+
       <WorkoutAdherence adherence={adherence} logs={workouts} />
 
       {billing ? (
@@ -308,27 +316,34 @@ export default async function MemberDetailPage({
           them as four separate lists made the order between them invisible. */}
       <Timeline entries={timeline} />
 
-      <InvitePanel
-        memberId={member.id}
-        hasEmail={Boolean(member.email)}
-        alreadyActive={Boolean(member.auth_user_id)}
-        lastInvite={
-          lastInvite
-            ? {
-                id: lastInvite.id,
-                // Show the effective status so a just-expired pending invite
-                // reads as "expired", matching the invites dashboard.
-                status: effectiveInviteStatus(
-                  lastInvite.status,
-                  lastInvite.expires_at,
-                ),
-                expiresAt: lastInvite.expires_at,
-              }
-            : null
-        }
-      />
+      {/* Portal access and data-subject rights are administrative, not desk
+          work: both are hidden from a front-desk session, and their Server
+          Actions refuse it independently of what is rendered here. */}
+      {staffCan(session.staffRole, "invites.manage") ? (
+        <InvitePanel
+          memberId={member.id}
+          hasEmail={Boolean(member.email)}
+          alreadyActive={Boolean(member.auth_user_id)}
+          lastInvite={
+            lastInvite
+              ? {
+                  id: lastInvite.id,
+                  // Show the effective status so a just-expired pending invite
+                  // reads as "expired", matching the invites dashboard.
+                  status: effectiveInviteStatus(
+                    lastInvite.status,
+                    lastInvite.expires_at,
+                  ),
+                  expiresAt: lastInvite.expires_at,
+                }
+              : null
+          }
+        />
+      ) : null}
 
-      <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
+      {staffCan(session.staffRole, "gdpr.manage") ? (
+        <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
+      ) : null}
     </div>
   );
 }
