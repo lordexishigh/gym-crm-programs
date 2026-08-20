@@ -103,10 +103,14 @@ test.describe("live deployment: staff authentication", () => {
     //    credentials have to be ON this page (the app has no public sign-up).
     await expect(page.getByText(EMAIL, { exact: false }).first()).toBeVisible();
 
-    // 3. Submit real credentials through the real Server Action.
+    // 3. Submit real credentials through the real Server Action. `exact`
+    //    matters: a deployment that also renders the one-click demo shortcuts
+    //    has "Sign in as Owner"/"Sign in as Trainer" buttons, against which a
+    //    substring match is ambiguous and fails before typing anything — and
+    //    the point of this check is the CREDENTIAL path, not the shortcut.
     await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // 4. The whole point: the session is established and the staff landing page
     //    is reached. A failure here is the reported defect, and the assertion
