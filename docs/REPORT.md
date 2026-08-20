@@ -4,23 +4,23 @@
 
 **Overall: 40/100** · readiness: **blocked** · build verified ✓
 
-**Live:** https://gym-crm-programs.vercel.app
+**Live:** https://wt-gym.vercel.app
 
 ## Quality dimensions
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 58 | `████████████░░░░░░░░` |
-| Code quality | 78 | `████████████████░░░░` |
-| Robustness & error handling | 66 | `█████████████░░░░░░░` |
-| Builds & tests | 70 | `██████████████░░░░░░` |
-| UX & design | 60 | `████████████░░░░░░░░` |
+| Spec coverage | 50 | `██████████░░░░░░░░░░` |
+| Code quality | 81 | `████████████████░░░░` |
+| Robustness & error handling | 72 | `██████████████░░░░░░` |
+| Builds & tests | 68 | `██████████████░░░░░░` |
+| UX & design | 63 | `█████████████░░░░░░░` |
 | Works at runtime | 32 | `██████░░░░░░░░░░░░░░` |
 
 ## Readiness checks
 
 **Security**
-- ⚠️ No hardcoded secrets — 1 in test fixtures only (not shipped code): hardcoded secret in test/task-dispatch.test.ts
+- ⚠️ No hardcoded secrets — 2 in test fixtures only (not shipped code): hardcoded secret in test/demo-sign-in.test.ts; hardcoded secret in test/task-dispatch.test.ts
 - ✅ Secrets file ignored — no .env present
 - ✅ Row-Level Security — RLS enabled on the schema
 - ⚠️ Dependency vulnerabilities — 1 high-severity vulnerability(ies) in dependencies
@@ -45,23 +45,20 @@
 
 ## Strengths
 
-- All 8 spec features have concrete, non-stub implementations in the file tree — ProgramBuilder, AssignPanel, invite acceptance flow, RLS-enforced withTenantContext, and the full portal directory are all present and fully fleshed out.
-- The test suite is genuinely substantive: 239 tests including real-Postgres RLS isolation suites, startup-race regression guards, and smoke-portal decision tests that pin the exact failure modes that previously slipped past CI.
-- Security posture is strong in the code: RLS enforced at the DB layer, identity derived server-side from signed JWT (lib/identity.ts), per-IP rate limiting, login throttling, and GDPR anonymisation with an audit trail in a single transaction.
-- Module boundaries are clean — lib/ owns data access, app/ owns UI/routing, Server Actions are the only mutation surface, and withTenantContext is the sole query entry point, making tenant isolation easy to audit.
+- All eight spec features have real, substantive implementations with no stub markers — app/dashboard/members/actions.ts alone is 26k chars of production-grade Server Actions backed by real DB queries inside withTenantContext.
+- E2E journey tests are genuinely thorough: e2e/staff-journey.spec.ts (17k chars) drives the full staff flow (sign-in → member creation → program authoring → assignment) against a real Postgres, and e2e/invite-flow.spec.ts covers the complete member onboarding path with documented rationale for why each prior check was insufficient.
+- Security fundamentals are solid end-to-end: RLS enforced at the DB layer, withTenantContext wrapping every tenant-scoped query, requireStaff/requireMember guards on all Server Actions, a dedicated login throttle, and a rate limiter — all passing their automated checks.
 
 ## To improve
 
 - App works at runtime: 5 product gap(s) found by the walkthrough; first: Both /login and /portal/login time out (90s) and never load — fix the server routes or startup so both entry points respond before the app can be used at all.
-- The /login and /portal/login 90 s timeout has been reported in every round since Round 1 and is still present — add an explicit readiness gate in scripts/dev.mjs that polls /api/health (or app/api/health/route.ts) until HTTP 200 before yielding control, and add a CI smoke step in .github/workflows/ci.yml that waits on this gate before running the walkthrough; this one fix unblocks verification of every other feature.
-- The undici high-severity CVE and the moderate next/postcss vulnerabilities are still unpatched after Round 8's report — run npm audit fix --force against the pinned lockfile and update package.json to the resolved safe versions.
-- Cookie consent is absent (WARN) despite analytics and trackers being loaded — add a consent banner component mounted in app/layout.tsx that gates analytics scripts (app/WebVitals.tsx) on user acceptance, with preference persisted in a cookie.
-- Two img elements lack alt attributes (accessibility WARN from readiness checks) — locate them (likely in app/portal/ or app/dashboard/members/MemberPhotoPanel.tsx) and add descriptive alt strings so screen readers and lighthouse audits pass.
-- Staff role separation is missing from the running UI: lib/staff.ts exists but app/dashboard has no role-gated routes — add a requireRole('owner') guard (alongside the existing requireStaff) to the billing and reports routes, and hide trainer-irrelevant nav items in app/dashboard/layout.tsx based on the session role.
+- /login and /portal/login have timed out in every runtime evaluation across all eight rounds — add an explicit ready-gate in scripts/start.mjs that polls /api/health until it returns 200 before the process reports ready, matching the startup probe already implemented and tested in scripts/lib/dev-server.mjs and test/dev-server.test.ts; without this fix no rubric dimension can improve because the product is unreachable.
+- Cookie consent is absent despite the automated WARN flagging analytics trackers present — add a consent banner in app/layout.tsx that gates analytics script loading behind user acceptance, consistent with the GDPR obligations already documented in docs/legal/COMPLIANCE.md.
+- Two <img> elements are missing alt text (automated WARN) — audit app/components/Avatar.tsx and app/dashboard/members/MemberPhotoPanel.tsx, which are the most likely sources given their image-rendering role, and add descriptive alt strings or aria-label attributes to clear the accessibility failure.
 
 ## Summary
 
-The codebase is fully implemented — all 8 spec features are present in non-stub code, 239 tests pass, and security fundamentals are solid — but the product has been completely inaccessible at runtime for 8 consecutive evaluation rounds because /login and /portal/login time out, making every promised feature undemonstrable; fixing the server startup race is the single highest-leverage change.
+The codebase is feature-complete and well-engineered — all eight spec features are implemented without stubs, 239 tests pass, and security fundamentals are solid — but the running application has failed the same runtime check in every round since the start, with both login routes timing out and the entire product surface unreachable; fixing the server startup race in scripts/start.mjs is the single change that unlocks every other dimension.
 
 ---
-_Scored 2026-08-20 01:59 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-08-20 04:13 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
