@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { hasCapability } from "@/lib/capabilities";
 import { getStaffRole } from "@/lib/staff";
 import type { MemberRow, MembershipStatus } from "@/lib/members";
 import {
@@ -295,6 +296,7 @@ export default async function MemberDetailPage({
           memberId={member.id}
           plans={billing.plans}
           subscriptions={billing.subscriptions}
+          paymentsConfigured={hasCapability("payments")}
         />
       ) : null}
 

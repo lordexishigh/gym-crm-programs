@@ -104,9 +104,20 @@ test.describe("live deployment: staff authentication", () => {
     await expect(page.getByText(EMAIL, { exact: false }).first()).toBeVisible();
 
     // 3. Submit real credentials through the real Server Action.
+    //
+    //    `exact: true` is load-bearing, not tidiness. This spec runs against a
+    //    DEPLOYMENT, which may serve a build this checkout does not contain —
+    //    and the build live on 2026-08-20 renders one-click demo buttons named
+    //    "Sign in as Owner"/"Sign in as Trainer" beside the form's own submit.
+    //    A substring match resolved to three elements and Playwright failed the
+    //    run on strict mode, so `npm run verify:live` could not answer the
+    //    "built but not live" question at all — and `scripts/deploy.mjs` gates
+    //    every deploy on this file, so a locator that is merely PLAUSIBLE
+    //    against the live app blocks shipping. Bind to the credential form's
+    //    own button and nothing else.
     await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // 4. The whole point: the session is established and the staff landing page
     //    is reached. A failure here is the reported defect, and the assertion
