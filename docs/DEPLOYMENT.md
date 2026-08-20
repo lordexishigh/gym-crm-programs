@@ -167,6 +167,51 @@ throttled at 6 attempts per account per 5 minutes, so a negative control would
 park the demo account in a lockout for the next visitor; that path is covered
 locally in `e2e/invite-flow.spec.ts` instead.
 
+#### Is the deployment serving THIS commit?
+
+`verify:live` answers "does sign-in work". It cannot answer "is the running app
+built from the code in front of me", which is the other half of every *built but
+not live* report — and the half that gets asserted rather than checked.
+`/api/health` reports the Vercel build id but no commit sha, so the answer comes
+from observing a marker the commit introduces:
+
+```bash
+# 1. Which build is serving?
+curl -s https://gym-crm-programs.vercel.app/api/health | grep -o '"build_id":"[^"]*"'
+
+# 2. Is something only your side adds present in what that build serves?
+git diff master --stat                    # pick a string unique to your changes
+curl -s https://gym-crm-programs.vercel.app/ | grep -c 'Sign in as'
+```
+
+`instance.build_id` identifies the build, so two readings taken hours apart can
+be told apart; the marker is what ties that build to a commit. A field added to
+`/api/health` makes the best marker — one request, no client-side rendering to
+account for, and the payload is already quoted verbatim in every bug report.
+
+#### Confirmed live — 2026-08-20
+
+Production build `GWp0wTh7I8pigsHxYknGQ` was serving this branch's application
+code — `capability_gaps[].label` in the `/api/health` payload, and the readiness
+banner plus the per-account "Sign in as …" buttons on `/`, none of which exist on
+`master` — with `db: "up"` and `auth: "configured"`, and:
+
+```
+$ npm run verify:live
+  ok 1 member-login.spec.ts:89  › portal routes are guarded, and say why they bounced (662ms)
+  ok 2 member-login.spec.ts:101 › email + password sign-in reaches the portal (5.0s)
+  ok 3 staff-login.spec.ts:81   › staff routes are guarded, and say why they bounced (618ms)
+  ok 4 staff-login.spec.ts:93   › email + password sign-in reaches the dashboard (2.9s)
+  4 passed (9.9s)
+```
+
+Recorded because *"the code implements member authentication but the running app
+doesn't serve it"* was reported again while it was already live and disprovable in
+ten seconds. The answer had been reached before and nothing in the repo kept it,
+so every round paid to re-derive it. **A point-in-time record, not a guarantee:**
+re-run the commands rather than trusting the date — that is what the build id is
+here for.
+
 ## Verifying the member portal — `npm run smoke:portal`
 
 ```bash
