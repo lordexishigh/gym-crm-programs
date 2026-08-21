@@ -10,11 +10,11 @@
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 63 | `█████████████░░░░░░░` |
-| Code quality | 83 | `█████████████████░░░` |
+| Spec coverage | 68 | `██████████████░░░░░░` |
+| Code quality | 81 | `████████████████░░░░` |
 | Robustness & error handling | 74 | `███████████████░░░░░` |
-| Builds & tests | 28 | `██████░░░░░░░░░░░░░░` |
-| UX & design | 66 | `█████████████░░░░░░░` |
+| Builds & tests | 45 | `█████████░░░░░░░░░░░` |
+| UX & design | 67 | `█████████████░░░░░░░` |
 | Works at runtime | 40 | `████████░░░░░░░░░░░░` |
 
 ## Readiness checks
@@ -31,8 +31,8 @@
 - ✅ No stub/placeholder code — no stub markers found
 - ✅ Dependencies pinned — lockfile/requirements present
 - ✅ License declared — license present
-- ❌ Builds & tests pass — final product smoke test did not pass
-- ❌ App works at runtime — 6 product gap(s) found by the walkthrough; first: The crawl was declared authenticated but reached only 3 public-facing pages (/, /login, /portal/login) — no staff dashboard, member list, program builder, or me
+- ⚠️ Builds & tests pass — the project's own tests and type-checks pass; the build is marked unverified for the reason under 'App works at runtime'
+- ❌ App works at runtime — 5 product gap(s) found by the walkthrough; first: The crawl reached only 3 pre-authentication pages despite being described as authenticated — the entire post-login product is unverified; confirm demo credentia
 - ⚠️ Accessibility basics — 2 <img> without alt text
 
 **Compliance**
@@ -45,23 +45,22 @@
 
 ## Strengths
 
-- Full 26-migration schema with per-table RLS policies and a withTenantContext abstraction that makes cross-tenant data access structurally impossible at the application layer — no ad-hoc WHERE tenant_id clauses needed.
-- 239-test suite with named regression guards covering RLS isolation, GDPR export and erasure, login throttle, payment parsing, and readiness-gate timing — tests document invariants rather than just asserting outputs.
-- Market-specific implementation depth: decimal comma parsing for Cyprus locale, SEPA as a first-class payment method with an immutable void-trail ledger, and per-tenant exercise libraries — these are not generic scaffold features.
-- Readiness gate in scripts/lib/dev-server.mjs that polls /api/health until routes actually serve (not just when the port opens), directly addressing the 14-second Next.js compile window that caused repeated timeout failures.
+- Comprehensive RLS + identity enforcement: withTenantContext wraps every mutation server-side, requireStaff() guards every staff action, and identity is derived from the signed JWT — the security model is correctly layered and the automated RLS check passes.
+- 239 passing tests across 80+ files covering RLS isolation, payment validation, GDPR export/erasure, rate limiting, accessibility, and schema correctness — the unit and integration test suite is one of the build's clearest assets.
+- GDPR implementation is thorough and thoughtful: immutable payment ledger with a void trail, tombstone constants exported for test assertion, export and erasure in a single tenant-scoped transaction, and audit logging tied to every sensitive operation.
+- Program authoring, exercise library, member management, and invite flow all have substantial implementations (ProgramBuilder.tsx 7 kB, members/actions.ts 27 kB, 26 migrations) with no stub markers — the surface area of the product is genuinely built, not scaffolded.
 
 ## To improve
 
-- App works at runtime: 6 product gap(s) found by the walkthrough; first: The crawl was declared authenticated but reached only 3 public-facing pages (/, /login, /portal/login) — no staff dashboard, member list, program builder, or me
-- Builds & tests pass: final product smoke test did not pass
-- The smoke test has failed in every round: investigate app/login/actions.ts to confirm the Supabase session cookie is set and redirect() targets /dashboard (not an empty or broken destination) — use the live staff-login.spec.ts in e2e/live/ to get a real post-auth page assertion before any other work.
-- The landing page (app/page.tsx) has zero button or form elements — the DemoSignInHint component should render a form that POSTs demo credentials directly to the login action so a first-time user or QA reviewer can reach the dashboard with one click rather than copying credentials manually.
-- Cookie consent is absent despite analytics and Web Vitals trackers being initialised in app/WebVitals.tsx and instrumentation.ts — add a consent banner component that gates the analytics initialization calls until the user accepts, satisfying the WARN from the readiness checker.
-- Two images are missing alt text (accessibility WARN) — audit app/components/Avatar.tsx and any other img-rendering components to add descriptive alt attributes; Avatar in particular is rendered on member records and the portal and carries meaningful identity content.
+- App works at runtime: 5 product gap(s) found by the walkthrough; first: The crawl reached only 3 pre-authentication pages despite being described as authenticated — the entire post-login product is unverified; confirm demo credentia
+- The runtime smoke test has failed in every evaluation round — investigate scripts/smoke-portal.mjs and the deploy workflow to confirm the seed step (scripts/seed.mjs) runs post-deploy so demo credentials exist, and add a /api/health poll in the CI deploy job before marking the app ready for QA.
+- Cookie consent is absent despite analytics trackers being present (WARN flagged by automated check) — add a consent banner in app/layout.tsx that gates analytics script injection until the user accepts, as this is a compliance gap for GDPR-regulated markets.
+- Two img elements are missing alt attributes (automated accessibility WARN) — audit app/components/Avatar.tsx and any img tags in dashboard and portal pages and add descriptive alt strings.
+- The hardcoded secret in test/task-dispatch.test.ts should be replaced with a clearly fake constant (e.g. 'test-secret-fixture') so the secrets scanner produces no warnings even in test fixtures.
 
 ## Summary
 
-The codebase is genuinely well-built — no stubs, solid RLS enforcement, a large typed test suite, and real market-specific implementation depth — but the smoke test has failed in every evaluation round and the running app has never served an authenticated page, leaving all eight spec features unverifiable at runtime; the code earns its score, the product does not yet exist for a user.
+The build has genuine, non-stub implementations of all eight spec features backed by a strong 239-test suite and solid RLS/GDPR foundations, but the product smoke test has failed in every round without exception — the crawler cannot authenticate past /login in any run, leaving the entire post-login product unverifiable at runtime and the build's most important promise unproven.
 
 ---
-_Scored 2026-08-20 22:03 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-08-21 11:11 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
