@@ -17,10 +17,18 @@ export function PromoteWaitlistButton({
   classId,
   openSpots,
   waitlistCount,
+  emailConfigured,
 }: {
   classId: string;
   openSpots: number;
   waitlistCount: number;
+  /**
+   * Whether this deployment can send email, resolved by the server component
+   * that renders this. A client component cannot read `hasCapability` itself —
+   * it is env-only and server-side — and guessing would put the button back to
+   * promising a notification it cannot make.
+   */
+  emailConfigured: boolean;
 }) {
   const [state, formAction, pending] = useActionState(promoteFromWaitlistAction, initialState);
 
@@ -36,7 +44,10 @@ export function PromoteWaitlistButton({
         </p>
         <p className="text-xs text-amber-800">
           Cancellations promote automatically. Use this if a spot opened up another
-          way — the members promoted are emailed straight away.
+          way —{" "}
+          {emailConfigured
+            ? "the members promoted are emailed straight away."
+            : "email is not configured here, so promoted members are not notified. Tell them yourself; the promotion does show in their portal."}
         </p>
       </div>
 

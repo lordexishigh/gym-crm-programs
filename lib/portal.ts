@@ -20,6 +20,10 @@ import {
   type PaymentEventRow,
 } from "./billing";
 import type { MemberPlanWithPlan } from "./plans";
+import {
+  latestDeletionRequestForMemberQuery,
+  type MemberDeletionRequestView,
+} from "./gdpr/deletion-requests";
 
 /**
  * Member-portal read path (mvp-member-portal-001/002).
@@ -189,11 +193,14 @@ export type PortalHomeData = {
   membershipStatus: "active" | "expired" | "frozen" | "cancelled" | null;
   plans: MemberPlanWithPlan[];
   paymentHistory: PaymentEventRow[];
+  /** Any right-to-erasure request already on file, so the "Your data" card
+   *  shows its state instead of offering the button again. */
+  deletionRequest: MemberDeletionRequestView | null;
 };
 
 /**
  * Load everything the portal home page renders in ONE tenant transaction
- * instead of 8 separate `withTenantContext` calls (issue #32: `/portal` was
+ * instead of 9 separate `withTenantContext` calls (issue #32: `/portal` was
  * ~2x slower than `/dashboard`). Each call pays its own 7 connection-setup
  * round trips (BEGIN, four `set_config`s, `SET LOCAL ROLE`, COMMIT) before it
  * can even run its query, and 8 at once mostly queue behind the deliberately
@@ -232,6 +239,10 @@ export async function loadPortalHome(
       memberId,
       PAYMENT_HISTORY_LIMIT,
     );
+    const deletionRequest = await latestDeletionRequestForMemberQuery(
+      c,
+      memberId,
+    );
     return {
       programs,
       history,
@@ -241,6 +252,7 @@ export async function loadPortalHome(
       membershipStatus,
       plans,
       paymentHistory,
+      deletionRequest,
     };
   });
 }

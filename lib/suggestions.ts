@@ -259,6 +259,13 @@ export async function listPendingSuggestions(
          left join member  m on m.id = s.member_id
          left join program p on p.id = s.program_id
         where s.status = 'pending'
+          -- An erased member (beta-gdpr-002) drops out of the review queue: the
+          -- brief names a person the gym may no longer hold data about, and
+          -- "call Erased member, they went quiet" is not reviewable work. The
+          -- row survives (the erasure scrubs only its headline) so the ledger of
+          -- what was suggested stays intact. LEFT JOIN, so a gym-level
+          -- suggestion with no member_id must still pass.
+          and (s.member_id is null or m.erased_at is null)
         order by (s.strength = 'strong') desc, s.created_at desc
         limit $1`,
       [capped],

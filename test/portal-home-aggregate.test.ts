@@ -194,6 +194,9 @@ describe.skipIf(!hasDb)("loadPortalHome (issue #32 aggregate query)", () => {
       membershipStatus: "active",
       plans: [],
       paymentHistory: [],
+      // A member who has never asked for erasure has none on file. Part of the
+      // aggregate rather than a ninth connection — see `loadPortalHome`.
+      deletionRequest: null,
     });
   });
 

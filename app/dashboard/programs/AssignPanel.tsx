@@ -6,6 +6,7 @@ import {
   unassignProgramAction,
   type AssignState,
 } from "./actions";
+import { StuckPendingNotice } from "../../components/StuckPendingNotice";
 
 type MemberOption = { id: string; full_name: string };
 type Assignment = {
@@ -84,6 +85,8 @@ export function AssignPanel({
           </button>
         </form>
       )}
+
+      <StuckPendingNotice pending={pending} message="Still assigning?" />
 
       {state.error ? (
         <p role="alert" className="text-sm text-red-600">

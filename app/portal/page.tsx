@@ -10,6 +10,7 @@ import { ClassSchedule } from "./ClassSchedule";
 import { MembershipStatus } from "./MembershipStatus";
 import { PaymentHistory } from "./PaymentHistory";
 import { StreakBadge } from "./StreakBadge";
+import { DataPrivacy } from "./DataPrivacy";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -40,7 +41,7 @@ export default async function PortalPage() {
   // logging streak (engagement layer), the bookable class schedule, and the
   // billing/membership data (market gap #8: bookings, membership status,
   // payment history) — all fetched in one tenant transaction (see
-  // `loadPortalHome`) rather than 8 separate connections (#32).
+  // `loadPortalHome`) rather than 9 separate connections (#32).
   const {
     programs,
     history,
@@ -50,6 +51,7 @@ export default async function PortalPage() {
     membershipStatus,
     plans,
     paymentHistory,
+    deletionRequest,
   } = await loadPortalHome(session.identity, memberId);
 
   // The active programs a member can log a session against (id + name only).
@@ -107,6 +109,9 @@ export default async function PortalPage() {
         <ClassSchedule classes={classes} />
         <MembershipStatus membershipStatus={membershipStatus} plans={plans} />
         <PaymentHistory events={paymentHistory} />
+        {/* Last on the page on purpose: it is the one destructive control a
+            member has, and it belongs below everything they came here to do. */}
+        <DataPrivacy request={deletionRequest} />
       </main>
     </div>
   );

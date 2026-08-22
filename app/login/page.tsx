@@ -4,7 +4,9 @@ import { Suspense, useActionState } from "react";
 import Link from "next/link";
 import { loginAction, type LoginState } from "./actions";
 import { DemoSignInHint } from "../DemoSignInHint";
+import { ReadinessNotice } from "../ReadinessNotice";
 import { SessionNotice } from "../SessionNotice";
+import { StuckPendingNotice } from "../components/StuckPendingNotice";
 
 const initialState: LoginState = {};
 
@@ -45,6 +47,11 @@ export default function LoginPage() {
       <Suspense fallback={null}>
         <SessionNotice />
       </Suspense>
+
+      {/* A tester usually reaches this form directly (a guard redirect, a deep
+          link), so "this deployment cannot sign anyone in" has to be here too —
+          on the landing page alone it is one screen behind them. */}
+      <ReadinessNotice />
 
       <form
         action={formAction}
@@ -87,6 +94,8 @@ export default function LoginPage() {
         >
           {pending ? "Signing in…" : "Sign in"}
         </button>
+
+        <StuckPendingNotice pending={pending} message="Still signing in?" />
       </form>
 
       {/* Reached directly (deep link, bookmark, or the redirect a guarded route

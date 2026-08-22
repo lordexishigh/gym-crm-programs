@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { listPendingSuggestions } from "@/lib/suggestions";
 import { hasCapability } from "@/lib/capabilities";
 import { SuggestionCard } from "./SuggestionCard";
@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
  * migration 0021 for why that matters for health-adjacent data under GDPR).
  */
 export default async function SuggestionsPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
   const suggestions = await listPendingSuggestions(session.identity);
 
   const schedulerReady = hasCapability("scheduler");

@@ -104,9 +104,15 @@ test.describe("live deployment: staff authentication", () => {
     await expect(page.getByText(EMAIL, { exact: false }).first()).toBeVisible();
 
     // 3. Submit real credentials through the real Server Action.
+    //    `exact` is load-bearing: accessible-name matching is a SUBSTRING match
+    //    by default, and app/DemoSignInHint.tsx renders a "Sign in as Owner" /
+    //    "Sign in as Trainer" button under this form, each in its own <form>.
+    //    Without it the locator matches all three and Playwright refuses to
+    //    guess — a red deploy gate caused by the page around the form, not by
+    //    sign-in being broken.
     await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // 4. The whole point: the session is established and the staff landing page
     //    is reached. A failure here is the reported defect, and the assertion
@@ -143,6 +149,55 @@ test.describe("live deployment: staff authentication", () => {
     await expect(page).toHaveURL(/\/dashboard\/members$/);
 
     // 8. And the way out works, leaving the deployment as it was found.
+    await page.getByRole("button", { name: "Log out" }).click();
+    await expect(page).toHaveURL(/\/login/, { timeout: 60_000 });
+  });
+
+  /**
+   * The path an automated walkthrough actually takes: land on `/`, click the
+   * thing that looks like the way in, expect to be somewhere.
+   *
+   * A review crawl reported reaching only the three pre-authentication pages —
+   * `/`, `/login`, `/portal/login` — leaving the whole product behind the login
+   * unverified. Typing credentials into a form (the test above) is not something
+   * a crawler does; clicking a button is. So the one-click demo sign-in
+   * (app/demo-sign-in.ts) is what makes the authenticated surface reachable
+   * without human hands, and its being reachable is worth asserting against the
+   * deployment rather than assumed from the fact that the button exists.
+   *
+   * Starts from the landing page, not from a login form, because that is where
+   * the crawl starts and because a working button on a page nobody enters
+   * through would close nothing.
+   */
+  test("the landing page's one-click demo sign-in reaches the dashboard", async ({
+    page,
+  }) => {
+    const response = await page.goto("/", { waitUntil: "domcontentloaded" });
+    expect(response?.status(), "/ did not answer").toBe(200);
+
+    // The Owner row's button. Named by role rather than by the account's email
+    // so this reads as the visitor's view of the page.
+    const signIn = page.getByRole("button", { name: `Sign in as ${owner.role}` });
+    await expect(
+      signIn,
+      "the landing page offers no one-click demo sign-in — a crawl that cannot " +
+        "type credentials has no way past the login and the whole " +
+        "authenticated product goes unverified",
+    ).toBeVisible();
+
+    await signIn.click();
+
+    await expect(
+      page,
+      "one-click demo sign-in did not reach the dashboard — see the typed " +
+        "sign-in test above for the causes it shares, plus: the demo account " +
+        "must be present in lib/demo-accounts.ts AND seeded here",
+    ).toHaveURL(new RegExp(`${STAFF_LANDING}$`), { timeout: 60_000 });
+
+    // Same proof as the typed path: a rendered, DB-backed dashboard, not a
+    // redirect into an error boundary.
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+
     await page.getByRole("button", { name: "Log out" }).click();
     await expect(page).toHaveURL(/\/login/, { timeout: 60_000 });
   });

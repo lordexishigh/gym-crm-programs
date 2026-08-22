@@ -144,7 +144,16 @@ test("reports a stream that never ends, while it is still open", async ({ page }
   await recordServerActionResponses(page);
   await page.goto(base);
   // Not awaited: this request never settles, which is the point.
-  void page.evaluate(post, { url: base, path: "/hang", actionHeader: true });
+  //
+  // Because it never settles, its promise is STILL PENDING when the test ends,
+  // and Playwright rejects pending `evaluate` calls at teardown with
+  // "Test ended." That rejection failed this test on CI while it passed locally
+  // — a red run that said nothing about the recorder it exists to cover, on the
+  // one spec whose job is to make #26 legible. The rejection is expected here,
+  // so it is swallowed explicitly rather than left to race the teardown.
+  void page
+    .evaluate(post, { url: base, path: "/hang", actionHeader: true })
+    .catch(() => {});
 
   await expect.poll(recordedFlightCount, { timeout: 15_000 }).toBeGreaterThan(1);
   await flushFlightRecords();

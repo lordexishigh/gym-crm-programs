@@ -27,6 +27,8 @@ type Seed = {
   gymA: string;
   gymB: string;
   gymEmpty: string;
+  /** Gym A's erased member — must not be counted anywhere. */
+  erasedMemberA: string;
 };
 
 const seed = {} as Seed;
@@ -75,6 +77,30 @@ describe.skipIf(!hasDb)("dashboardOverviewStats", () => {
         [gymA, memberActive],
       );
 
+      // An ERASED member in gym A (beta-gdpr-002): the row survives for
+      // referential integrity but holds only a tombstone, so it must not appear
+      // in `members` or `activeMembers` — the roster excludes it too, and the
+      // two numbers have to agree.
+      const erasedMemberA = (
+        await c.query(
+          `insert into member (tenant_id, full_name, status, erased_at)
+           values ($1, 'Erased member', 'active', now()) returning id`,
+          [gymA],
+        )
+      ).rows[0].id as string;
+
+      // A pending erasure request in gym A, plus one already decided that must
+      // NOT be counted as pending.
+      await c.query(
+        "insert into member_deletion_request (tenant_id, member_id) values ($1, $2)",
+        [gymA, memberActive],
+      );
+      await c.query(
+        `insert into member_deletion_request (tenant_id, member_id, status, decided_at)
+         values ($1, $2, 'completed', now())`,
+        [gymA, erasedMemberA],
+      );
+
       // Gym B: a different member/program/assignment count, to prove gym A's
       // stats do not pick up gym B's rows.
       const memberB1 = (
@@ -102,7 +128,7 @@ describe.skipIf(!hasDb)("dashboardOverviewStats", () => {
         [gymB, programB, memberB1],
       );
 
-      Object.assign(seed, { gymA, gymB, gymEmpty });
+      Object.assign(seed, { gymA, gymB, gymEmpty, erasedMemberA });
     });
   });
 
@@ -112,13 +138,35 @@ describe.skipIf(!hasDb)("dashboardOverviewStats", () => {
 
   it("counts only the caller's own gym, correctly per column", async () => {
     const stats = await dashboardOverviewStats(staff(seed.gymA));
+    // 3 member rows exist in gym A; the erased one is counted in neither
+    // `members` nor `activeMembers` despite its status being 'active'.
     expect(stats).toEqual({
       members: 2,
       activeMembers: 1,
       programs: 1,
       activeAssignments: 1,
       pendingSuggestions: 1,
+      pendingDeletionRequests: 1,
     });
+  });
+
+  it("does not count an erased member, nor a decided deletion request", async () => {
+    const rows = await withAdminContext(
+      async (c) =>
+        (
+          await c.query<{ n: number }>(
+            "select count(*)::int as n from member where tenant_id = $1",
+            [seed.gymA],
+          )
+        ).rows[0].n,
+    );
+    // Three rows on disk, two counted — the difference is the tombstone.
+    expect(rows).toBe(3);
+
+    const stats = await dashboardOverviewStats(staff(seed.gymA));
+    expect(stats.members).toBe(2);
+    // Two requests exist in gym A; only the pending one is queued work.
+    expect(stats.pendingDeletionRequests).toBe(1);
   });
 
   it("does not leak another tenant's rows into the count", async () => {
@@ -130,6 +178,8 @@ describe.skipIf(!hasDb)("dashboardOverviewStats", () => {
     expect(statsB.members).toBe(3);
     expect(statsB.activeAssignments).toBe(1);
     expect(statsB.pendingSuggestions).toBe(0);
+    // Gym A's pending erasure request must not show up in gym B's overview.
+    expect(statsB.pendingDeletionRequests).toBe(0);
     expect(statsA.members).not.toBe(statsB.members);
   });
 
@@ -141,6 +191,7 @@ describe.skipIf(!hasDb)("dashboardOverviewStats", () => {
       programs: 0,
       activeAssignments: 0,
       pendingSuggestions: 0,
+      pendingDeletionRequests: 0,
     });
   });
 });
