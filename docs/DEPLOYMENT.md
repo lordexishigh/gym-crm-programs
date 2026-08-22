@@ -167,6 +167,27 @@ throttled at 6 attempts per account per 5 minutes, so a negative control would
 park the demo account in a lockout for the next visitor; that path is covered
 locally in `e2e/invite-flow.spec.ts` instead.
 
+### What `verify:live` covers beyond sign-in
+
+`e2e/live/scheduling-and-checkin.spec.ts` runs in the same command and drives the
+two features most often reported as "built but not live": the **class timetable**
+(per-class capacity on the roster, the waitlist section) and the **front-desk
+check-in kiosk** (it reads the demo member's PIN off their profile, checks them
+in, then checks them back out — a self-closing pair that leaves occupancy exactly
+as it found it, and logs the measured round trip against the "under 3 seconds"
+requirement).
+
+**If the timetable check fails, suspect the DATA, not the deploy.** The demo
+timetable is seeded relative to the seed date (`DEMO_CLASSES` in
+`scripts/seed.mjs`) and nothing rolls it forward, so a few days after a seed every
+demo class has slipped into the past — `/dashboard/classes` filters on
+`starts_at >= now() - interval '1 day'` and the member portal on `starts_at >=
+now()`, so both serve an empty state. The feature is deployed and correct and
+demonstrates as nothing, which is indistinguishable from "not live" to anyone
+evaluating the app. That is exactly the state production was found in on
+2026-08-20. The fix is to re-run the seed against that environment
+(`npm run seed`, idempotent — re-running rolls the timetable forward), not to
+redeploy.
 #### Is the deployment serving THIS commit?
 
 `verify:live` answers "does sign-in work". It cannot answer "is the running app

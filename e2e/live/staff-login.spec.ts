@@ -112,11 +112,6 @@ test.describe("live deployment: staff authentication", () => {
     //    sign-in being broken.
     await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
-    // `exact` matters: the demo hint under the form may offer one-click
-    // "Sign in as Owner"/"Sign in as Trainer" shortcuts, and a substring match
-    // resolves to three buttons and fails on strict mode BEFORE submitting —
-    // which reads as "sign-in is broken" when nothing has been submitted yet.
-    // This test must exercise the typed-credentials path specifically.
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // 4. The whole point: the session is established and the staff landing page
