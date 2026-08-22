@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { LibraryExerciseRow } from "@/lib/exercise-library";
 import { AddProgramButton } from "./AddProgramButton";
@@ -22,7 +22,7 @@ type ProgramListRow = {
  * tenant-scoped subqueries (also RLS-bound).
  */
 export default async function ProgramsPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
 
   // The list and the library the "New program" dialog builds from, in one
   // transaction — both are RLS-scoped to this gym.

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { ImportWizard } from "./ImportWizard";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * Server Action; there is deliberately no public bulk-insert API route.
  */
 export default async function ImportMembersPage() {
-  await requireStaff();
+  await requireCapability("members.write");
 
   return (
     <div className="flex flex-col gap-6">

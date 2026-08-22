@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { MemberForm } from "../MemberForm";
 import { createMemberAction } from "../actions";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** Create-member screen (mvp-member-management-001). */
 export default async function NewMemberPage() {
-  await requireStaff();
+  await requireCapability("members.write");
 
   return (
     <div className="flex flex-col gap-6">

@@ -1,4 +1,4 @@
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { LibraryExerciseDetail } from "@/lib/exercise-library";
 import { AddExerciseButton } from "./AddExerciseButton";
@@ -21,7 +21,7 @@ export default async function ExerciseLibraryPage({
 }: {
   searchParams: Promise<{ q?: string; category?: string }>;
 }) {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
   const sp = await searchParams;
   const q = sp.q?.trim() ?? "";
   const category = sp.category?.trim() ?? "";

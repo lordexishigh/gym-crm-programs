@@ -114,11 +114,17 @@ What it does, in order:
    rather than fails because a missing project env var cannot be fixed *by* a
    deploy, so blocking on it would only block the deploy carrying the fix.
 5. **Signs in for real, and fails the deploy if nobody can.** Step 4 proves the
-   pages are *there*; this proves there is a way *past* them. It runs
-   [`e2e/live/staff-login.spec.ts`](../e2e/live/staff-login.spec.ts) in a real
-   browser against the production URL: `/login` → submit the seeded staff
-   credentials → land on `/dashboard` with both session cookies set → follow a
-   second guarded route → log out. That closes the one shape of "built but not
+   pages are *there*; this proves there is a way *past* them. It runs everything
+   in [`e2e/live/`](../e2e/live) in a real browser against the production URL —
+   both sign-in surfaces, because they are separate actions behind separate
+   guards and either can break alone:
+   [`staff-login.spec.ts`](../e2e/live/staff-login.spec.ts) (`/login` → seeded
+   staff credentials → `/dashboard`) and
+   [`member-login.spec.ts`](../e2e/live/member-login.spec.ts) (`/portal/login` →
+   seeded member credentials → `/portal`). Each one asserts the guard bounced an
+   anonymous visitor with a reason, that both session cookies were set, that the
+   session survives a second request, and that logout works. That closes the one
+   shape of "built but not
    live" a route check cannot see, because `auth: "configured"` above only means
    two variables are *non-empty* — it cannot tell a working key from a rotated
    one, or a seeded database from an empty one. Skipped with a warning (never
@@ -126,10 +132,13 @@ What it does, in order:
    production install. Override with `DEPLOY_SKIP_SIGNIN_CHECK=1` when the deploy
    *is* the fix for a broken environment.
 6. **Verifies the authenticated member portal** by running `npm run smoke:portal`
-   (see below). Step 5 signs in as *staff*; this is the members' half, which no
-   static route check can see at all — a deployment whose portal is broken renders
-   every page in step 4 flawlessly. Both checks run: a deployment can pass either
-   one and fail the other.
+   (see below). Step 5 proves members can get *in*; this proves the portal then
+   *serves* — bookings, membership status, payment history — which no static route
+   check can see at all, because a deployment whose portal is broken renders every
+   page in step 4 flawlessly. The two are not redundant, and the difference is in
+   their exit codes: `smoke:portal` treats rejected credentials as *cannot run*
+   (exit 2, a warning), so on its own it can never fail a deploy for member sign-in
+   being broken. Step 5 is what fails.
 
 Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 `https://gym-crm-programs.vercel.app`), `DEPLOY_VERIFY_TIMEOUT_MS` (default 180s),
@@ -137,23 +146,92 @@ Useful overrides: `DEPLOY_VERIFY_URL` (default `APP_BASE_URL`, else
 
 ### Verifying a running deployment on its own — `npm run verify:live`
 
-The same sign-in journey, runnable any time without deploying — the quickest way
-to answer "is staff login actually working in production?" with evidence:
+The same sign-in journeys, runnable any time without deploying — the quickest way
+to answer "is login actually working in production?" with evidence:
 
 ```bash
-npm run verify:live                                   # production
+npm run verify:live                                   # both surfaces, production
+npm run verify:live:staff                             # /login only
+npm run verify:live:member                            # /portal/login only
 VERIFY_BASE_URL=https://preview-xyz.vercel.app npm run verify:live
 ```
 
 It starts no servers and needs no database or secrets — it drives the public
-sign-in path exactly as a visitor does. Credentials come from
+sign-in paths exactly as a visitor does. Credentials come from
 [`lib/demo-accounts.ts`](../lib/demo-accounts.ts) (the list the forms themselves
 advertise, pinned against `scripts/seed.mjs` by `test/demo-accounts.test.ts`);
-override with `VERIFY_STAFF_EMAIL`/`VERIFY_STAFF_PASSWORD` where the `SEED_*`
+override with `VERIFY_STAFF_EMAIL`/`VERIFY_STAFF_PASSWORD` and
+`VERIFY_MEMBER_EMAIL`/`VERIFY_MEMBER_PASSWORD` where the `SEED_*`
 defaults were changed. It deliberately has **no wrong-password case** — sign-in is
 throttled at 6 attempts per account per 5 minutes, so a negative control would
 park the demo account in a lockout for the next visitor; that path is covered
 locally in `e2e/invite-flow.spec.ts` instead.
+
+### What `verify:live` covers beyond sign-in
+
+`e2e/live/scheduling-and-checkin.spec.ts` runs in the same command and drives the
+two features most often reported as "built but not live": the **class timetable**
+(per-class capacity on the roster, the waitlist section) and the **front-desk
+check-in kiosk** (it reads the demo member's PIN off their profile, checks them
+in, then checks them back out — a self-closing pair that leaves occupancy exactly
+as it found it, and logs the measured round trip against the "under 3 seconds"
+requirement).
+
+**If the timetable check fails, suspect the DATA, not the deploy.** The demo
+timetable is seeded relative to the seed date (`DEMO_CLASSES` in
+`scripts/seed.mjs`) and nothing rolls it forward, so a few days after a seed every
+demo class has slipped into the past — `/dashboard/classes` filters on
+`starts_at >= now() - interval '1 day'` and the member portal on `starts_at >=
+now()`, so both serve an empty state. The feature is deployed and correct and
+demonstrates as nothing, which is indistinguishable from "not live" to anyone
+evaluating the app. That is exactly the state production was found in on
+2026-08-20. The fix is to re-run the seed against that environment
+(`npm run seed`, idempotent — re-running rolls the timetable forward), not to
+redeploy.
+#### Is the deployment serving THIS commit?
+
+`verify:live` answers "does sign-in work". It cannot answer "is the running app
+built from the code in front of me", which is the other half of every *built but
+not live* report — and the half that gets asserted rather than checked.
+`/api/health` reports the Vercel build id but no commit sha, so the answer comes
+from observing a marker the commit introduces:
+
+```bash
+# 1. Which build is serving?
+curl -s https://gym-crm-programs.vercel.app/api/health | grep -o '"build_id":"[^"]*"'
+
+# 2. Is something only your side adds present in what that build serves?
+git diff master --stat                    # pick a string unique to your changes
+curl -s https://gym-crm-programs.vercel.app/ | grep -c 'Sign in as'
+```
+
+`instance.build_id` identifies the build, so two readings taken hours apart can
+be told apart; the marker is what ties that build to a commit. A field added to
+`/api/health` makes the best marker — one request, no client-side rendering to
+account for, and the payload is already quoted verbatim in every bug report.
+
+#### Confirmed live — 2026-08-20
+
+Production build `GWp0wTh7I8pigsHxYknGQ` was serving this branch's application
+code — `capability_gaps[].label` in the `/api/health` payload, and the readiness
+banner plus the per-account "Sign in as …" buttons on `/`, none of which exist on
+`master` — with `db: "up"` and `auth: "configured"`, and:
+
+```
+$ npm run verify:live
+  ok 1 member-login.spec.ts:89  › portal routes are guarded, and say why they bounced (662ms)
+  ok 2 member-login.spec.ts:101 › email + password sign-in reaches the portal (5.0s)
+  ok 3 staff-login.spec.ts:81   › staff routes are guarded, and say why they bounced (618ms)
+  ok 4 staff-login.spec.ts:93   › email + password sign-in reaches the dashboard (2.9s)
+  4 passed (9.9s)
+```
+
+Recorded because *"the code implements member authentication but the running app
+doesn't serve it"* was reported again while it was already live and disprovable in
+ten seconds. The answer had been reached before and nothing in the repo kept it,
+so every round paid to re-derive it. **A point-in-time record, not a guarantee:**
+re-run the commands rather than trusting the date — that is what the build id is
+here for.
 
 ## Verifying the member portal — `npm run smoke:portal`
 
@@ -265,7 +343,7 @@ and also raises a critical alert.
 
 ### 3. Verifying deliverability against common inbox providers
 
-Use the dev send script to send to real inboxes and confirm authentication:
+Use the send script to send to real inboxes and confirm authentication:
 
 ```bash
 node scripts/send-test-email.mjs you@gmail.com
@@ -273,9 +351,25 @@ node scripts/send-test-email.mjs you@outlook.com
 node scripts/send-test-email.mjs you@yahoo.com
 ```
 
-In each inbox, open **Show original / View source** and confirm `SPF=pass`,
-`DKIM=pass`, and `DMARC=pass`. Gmail's *Show original* and
+It sends, then **polls `GET /emails/{id}` until Resend reports a terminal state**,
+and exits non-zero unless the message was `delivered`. That distinction is the
+point: a 200 from `POST /emails` only means Resend accepted the message, and a
+domain with a broken DKIM record, a suppressed recipient, or an IP the receiver
+rejects all produce a clean 200 and then fail silently. Add `--no-wait` for the
+old accept-only behaviour.
+
+For unattended runs (a cron, a deploy hook) set `VERIFY_EMAIL_TO` and use
+`npm run verify:email`; `VERIFY_EMAIL_TIMEOUT_MS` bounds the wait (default 60s).
+
+Delivery still does not prove authentication, so in each inbox open
+**Show original / View source** and confirm `SPF=pass`, `DKIM=pass`, and
+`DMARC=pass`. Gmail's *Show original* and
 [mail-tester.com](https://www.mail-tester.com) both report all three at a glance.
+
+`npm run verify:live` additionally asserts that the running deployment still
+reports every capability as configured (`e2e/live/capabilities.spec.ts`) — it
+catches a rotated or dropped `RESEND_API_KEY` without sending anything, but for
+the same reason cannot speak to deliverability.
 
 ## Observability (beta-hardening-001)
 

@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { DENIED_PARAM, requireStaff } from "@/lib/auth/session";
 import { dashboardOverviewStats } from "@/lib/dashboard";
 import { currentOccupancy } from "@/lib/checkin";
+import { staffCan, type StaffCapability } from "@/lib/permissions";
 import { CapabilityNotice } from "@/app/components/CapabilityNotice";
+import { AccessDeniedNotice } from "./AccessDeniedNotice";
 
 export const dynamic = "force-dynamic";
 
@@ -11,16 +13,26 @@ export const dynamic = "force-dynamic";
  *
  * The layout already gates access; calling `requireStaff` here too keeps the
  * page self-contained. Shows at-a-glance KPIs for the gym (live, tenant-scoped
- * counts) above quick navigational shortcuts into each section.
+ * counts) above quick navigational shortcuts into each section — each tile
+ * filtered to what the signed-in role can actually open, so a front-desk user
+ * is never offered a link that will bounce them straight back here.
  */
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const session = await requireStaff();
+  const denied = (await searchParams)[DENIED_PARAM];
 
   const stats = await dashboardOverviewStats(session.identity);
 
   // Live occupancy is its own read (a different table, and a rolling time
   // window rather than a tenant count), so it stays out of the KPI round trip.
   const occupancy = await currentOccupancy(session.identity);
+
+  const can = (capability: StaffCapability) =>
+    staffCan(session.staffRole, capability);
 
   const kpis = [
     {
@@ -29,6 +41,7 @@ export default async function DashboardPage() {
       hint: `${stats.activeMembers} active`,
       href: "/dashboard/members",
       icon: IconUsers,
+      needs: "members.read" as StaffCapability,
     },
     {
       label: "Programs",
@@ -36,6 +49,7 @@ export default async function DashboardPage() {
       hint: "Training plans built",
       href: "/dashboard/programs",
       icon: IconClipboard,
+      needs: "programs.read" as StaffCapability,
     },
     {
       label: "Active assignments",
@@ -43,6 +57,7 @@ export default async function DashboardPage() {
       hint: "Programs in members' hands",
       href: "/dashboard/programs",
       icon: IconSparkles,
+      needs: "programs.read" as StaffCapability,
     },
     // Replaces the old "Active members" tile, which restated the two numbers
     // the "Members" tile already shows (total, with "N active" as its hint) and
@@ -55,22 +70,55 @@ export default async function DashboardPage() {
       hint: "Checked in, not yet out",
       href: "/dashboard/checkin",
       icon: IconPulse,
+      needs: "checkin" as StaffCapability,
     },
-  ];
+  ].filter((kpi) => can(kpi.needs));
 
   const actions = [
-    // First, and conditional: a pending brief is time-sensitive in a way that
+    // Ahead of even the suggestion queue, and for a stronger reason: a pending
+    // erasure request carries a one-month legal deadline, so an unnoticed one is
+    // a compliance breach rather than a missed opportunity. Hidden when the
+    // queue is empty (the nav still links the page).
+    ...(stats.pendingDeletionRequests > 0
+      ? [
+          {
+            label: `${stats.pendingDeletionRequests} deletion request${stats.pendingDeletionRequests === 1 ? "" : "s"}`,
+            hint: "Members asking you to delete their data — respond within a month",
+            href: "/dashboard/deletion-requests",
+            icon: IconShield,
+            // Same gate as the nav entry. Front desk holds no `gdpr.manage`, so
+            // the desk never sees a card inviting it into a statutory workflow
+            // whose Server Actions would refuse it anyway.
+            needs: "gdpr.manage" as StaffCapability,
+          },
+        ]
+      : []),
+    // Then, and conditional: a pending brief is time-sensitive in a way that
     // "add a member" is not — it names a member who has already stopped
     // training, and the value of contacting them decays daily. Hidden entirely
     // when the queue is empty rather than shown as a zero, so it reads as work
     // waiting rather than as a permanent fixture.
-    ...(stats.pendingSuggestions > 0
+    ...(stats.pendingSuggestions > 0 && can("programs.read")
       ? [
           {
             label: `Review ${stats.pendingSuggestions} suggestion${stats.pendingSuggestions === 1 ? "" : "s"}`,
             hint: "Members who have gone quiet, with the evidence",
             href: "/dashboard/suggestions",
             icon: IconPulse,
+            needs: "programs.read" as StaffCapability,
+          },
+        ]
+      : []),
+    // Front desk leads with the kiosk: it is the whole job, and on a shared
+    // desk machine it is the screen that needs to be one click away.
+    ...(can("checkin") && !can("programs.write")
+      ? [
+          {
+            label: "Check a member in",
+            hint: "Scan a QR code or type a PIN at the desk",
+            href: "/dashboard/checkin",
+            icon: IconPulse,
+            needs: "checkin" as StaffCapability,
           },
         ]
       : []),
@@ -79,29 +127,37 @@ export default async function DashboardPage() {
       hint: "Create a member and invite them to the portal",
       href: "/dashboard/members/new",
       icon: IconUserPlus,
+      needs: "members.write" as StaffCapability,
     },
     {
       label: "Build a program",
       hint: "Compose exercises into a training plan",
       href: "/dashboard/programs/new",
       icon: IconClipboard,
+      needs: "programs.write" as StaffCapability,
     },
     {
       label: "Manage invites",
       hint: "Track and resend portal invitations",
       href: "/dashboard/invites",
       icon: IconMail,
+      needs: "invites.manage" as StaffCapability,
     },
-  ];
+  ].filter((action) => can(action.needs));
 
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold">Overview</h1>
         <p className="text-sm text-slate-600">
-          Welcome back. Build training programs and assign them to your members.
+          {can("programs.write")
+            ? "Welcome back. Build training programs and assign them to your members."
+            : "Welcome back. Check members in and look up their visits and details."}
         </p>
       </div>
+
+      {/* Why a section the visitor tried to open was refused. */}
+      <AccessDeniedNotice denied={denied} />
 
       {/* Deployment gaps, if any — see the component for why this is here. */}
       <CapabilityNotice />
@@ -237,6 +293,15 @@ function IconMail() {
     <svg {...iconProps}>
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="m2 7 10 6 10-6" />
+    </svg>
+  );
+}
+
+function IconShield() {
+  return (
+    <svg {...iconProps}>
+      <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z" />
+      <path d="M9 12h6" />
     </svg>
   );
 }

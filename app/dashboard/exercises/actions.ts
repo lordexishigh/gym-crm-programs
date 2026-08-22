@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { resolveStaffUserId } from "@/lib/staff";
 import { validateLibraryExerciseInput } from "@/lib/exercise-library";
@@ -23,7 +23,7 @@ export async function createLibraryExerciseAction(
   _prev: LibraryFormState,
   formData: FormData,
 ): Promise<LibraryFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const parsed = validateLibraryExerciseInput({
     name: formData.get("name"),
@@ -93,7 +93,7 @@ export async function createLibraryExerciseAction(
 export async function deleteLibraryExerciseAction(
   formData: FormData,
 ): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const id = String(formData.get("id") ?? "");
   if (!id) redirect("/dashboard/exercises");
