@@ -197,7 +197,7 @@ test.describe("member onboarding journey", () => {
     // 6. Sign in with the just-created credentials → portal renders again.
     await page.getByLabel("Email").fill(memberEmail);
     await page.getByLabel("Password").fill(memberPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page).toHaveURL(/\/portal$/, { timeout: 30_000 });
     await expect(page.getByText(programName)).toBeVisible();
@@ -207,7 +207,7 @@ test.describe("member onboarding journey", () => {
     await page.goto("/portal/login");
     await page.getByLabel("Email").fill(memberEmail);
     await page.getByLabel("Password").fill("definitely-wrong-password");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // Note: Next.js's route announcer is also role="alert", so target the
     // visible error text rather than the bare role.

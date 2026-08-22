@@ -20,7 +20,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "verify:live": "playwright test --config playwright.live.config.ts"
+    "verify:live": "playwright test --config playwright.live.config.ts",
+    "verify:live:staff": "playwright test --config playwright.live.config.ts e2e/live/staff-login.spec.ts",
+    "verify:live:member": "playwright test --config playwright.live.config.ts e2e/live/member-login.spec.ts"
   },
   "dependencies": {
     "jose": "^6.2.8",

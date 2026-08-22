@@ -260,15 +260,15 @@ export function routeVerdict(results) {
 }
 
 /**
- * Whether to prove that staff SIGN-IN works after deploying, and why.
+ * Whether to prove that SIGN-IN works after deploying, and why.
  *
  * Pure and injectable, like the decisions above, so the policy is unit-tested.
  *
- * This is the check that finally answers "the code implements staff
+ * This is the check that finally answers "the code implements staff/member
  * authentication but the running app doesn't serve it". `verifyLive` can only
- * see that /login RENDERS, and /login is a static page — see the long note at
- * the end of `verifyLive` for why that leaves the entire dashboard and portal
- * unverified behind a form that looks perfect.
+ * see that /login and /portal/login RENDER, and both are static pages — see the
+ * long note at the end of `verifyLive` for why that leaves the entire dashboard
+ * and portal unverified behind forms that look perfect.
  *
  * Skipped rather than failed when Playwright is absent, because `deploy.mjs` is
  * otherwise dependency-free by design and must stay runnable from a production
@@ -292,7 +292,9 @@ export function decideSignInCheck({ env = process.env, playwrightAvailable = fal
   }
   return {
     check: true,
-    reason: "Verifying that staff email + password sign-in actually works on the live URL.",
+    reason:
+      "Verifying that staff and member email + password sign-in actually works on " +
+      "the live URL.",
   };
 }
 
@@ -302,7 +304,10 @@ function playwrightInstalled() {
 }
 
 /**
- * Drive the real staff sign-in against the deployment (e2e/live/staff-login.spec.ts).
+ * Drive the real sign-ins against the deployment — everything in e2e/live/, which
+ * is both surfaces: staff at /login (staff-login.spec.ts) and members at
+ * /portal/login (member-login.spec.ts). Both run because they are separate Server
+ * Actions behind separate guards, and either can break while the other works.
  *
  * A hard failure, unlike the `auth: "unconfigured"` warning it supersedes: a
  * deployment nobody can sign in to has an unreachable dashboard and portal, which
@@ -323,10 +328,11 @@ async function verifySignIn() {
   );
   if (res.code !== 0) {
     console.error(
-      `[deploy] FAILED: ${PROD_URL} renders its sign-in form but staff cannot sign in, ` +
-        "so the dashboard and the member portal are unreachable — every feature " +
-        "behind them is deployed and unusable. This is the 'built but not live' " +
-        "state, in the only form that survives a route check.\n" +
+      `[deploy] FAILED: ${PROD_URL} renders its sign-in forms but staff or members ` +
+        "cannot sign in, so the dashboard or the member portal is unreachable — every " +
+        "feature behind it is deployed and unusable. This is the 'built but not live' " +
+        "state, in the only form that survives a route check. The Playwright output " +
+        "above names which surface failed.\n" +
         "[deploy] The three causes, in the order worth checking:\n" +
         "[deploy]   1. NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY " +
         `missing or stale on the ${VERCEL_PROJECT} project (\`npx vercel env ls production\`).\n` +
@@ -339,7 +345,10 @@ async function verifySignIn() {
     );
     return false;
   }
-  console.log("[deploy] Staff sign-in verified: /login → /dashboard on the live URL.");
+  console.log(
+    "[deploy] Sign-in verified on the live URL: /login → /dashboard (staff) and " +
+      "/portal/login → /portal (member).",
+  );
   return true;
 }
 
