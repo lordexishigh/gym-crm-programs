@@ -17,6 +17,7 @@ export const ERASED_MEMBER_NAME = "Erased member";
 export const ERASED_INVITE_EMAIL = "[erased]";
 export const ERASED_TASK_TITLE = "[erased]";
 export const ERASED_SUGGESTION_HEADLINE = "[erased]";
+export const ERASED_PAYMENT_TEXT = "[erased]";
 
 /**
  * Member data export (beta-gdpr-001).
@@ -116,6 +117,42 @@ export type ExportedMemberTask = {
   created_at: string;
 };
 
+/**
+ * One card payment, as exported. Written by the Stripe webhook
+ * (`lib/stripe-events.ts`), never by hand.
+ *
+ * This was MISSING from the export until 0026's manual-payment work went in: a
+ * member's payment history is their personal data under Art. 15, and the export
+ * silently omitted all of it. Adding only the manual half would have been worse
+ * than either — an export that reads as complete financial history while holding
+ * half of it.
+ */
+export type ExportedPaymentEvent = {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  occurred_at: string;
+};
+
+/**
+ * One off-card payment (cash / bank transfer / SEPA) recorded by staff — 0026.
+ * `void_reason` is staff-authored free text about this member, so erasure has to
+ * scrub it (see `anonymiseMember`).
+ */
+export type ExportedManualPayment = {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  method: string;
+  reference: string | null;
+  note: string | null;
+  received_on: string;
+  voided_at: string | null;
+  void_reason: string | null;
+  created_at: string;
+};
+
 /** The full export document handed to the data subject. */
 export type MemberDataExport = {
   format: "alpha-crm.member-export";
@@ -129,6 +166,8 @@ export type MemberDataExport = {
   check_ins: ExportedCheckIn[];
   class_bookings: ExportedClassBooking[];
   tasks: ExportedMemberTask[];
+  payment_events: ExportedPaymentEvent[];
+  manual_payments: ExportedManualPayment[];
 };
 
 /** Result of an export: the document (null if the subject was not found). */
@@ -276,6 +315,36 @@ export async function exportMemberData(
       )
     ).rows;
 
+    // Payment history, both halves. Also the member's own data, and exposed to a
+    // member self-export by the same `*_self_select` pattern
+    // (payment_events_self_select 0017, manual_payment_self_select 0026).
+    //
+    // Voided manual payments are INCLUDED deliberately. A void is a correction,
+    // not a deletion: the member was told at some point that this payment was
+    // recorded, so an export that quietly drops it is less complete than the
+    // controller's own books. `voided_at` and `void_reason` travel with the row
+    // so the subject can see it was reversed and why.
+    const paymentEvents = (
+      await c.query<ExportedPaymentEvent>(
+        `select id, amount_cents, currency, status, occurred_at
+           from payment_events
+          where member_id = $1
+          order by occurred_at desc`,
+        [memberId],
+      )
+    ).rows;
+
+    const manualPayments = (
+      await c.query<ExportedManualPayment>(
+        `select id, amount_cents, currency, method, reference, note,
+                received_on, voided_at, void_reason, created_at
+           from manual_payment
+          where member_id = $1
+          order by received_on desc`,
+        [memberId],
+      )
+    ).rows;
+
     // Audit the export in the SAME transaction as the reads.
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
@@ -308,6 +377,8 @@ export async function exportMemberData(
       check_ins: checkIns,
       class_bookings: classBookings,
       tasks,
+      payment_events: paymentEvents,
+      manual_payments: manualPayments,
     };
     return { data };
   });
@@ -516,6 +587,30 @@ export async function anonymiseMember(
     await c.query(
       `update suggestions set headline = $2 where member_id = $1`,
       [memberId, ERASED_SUGGESTION_HEADLINE],
+    );
+
+    // Off-card payments (0026) carry two staff-authored free-text fields about
+    // this member — `note` and `void_reason` ("paid cash at the desk, said she's
+    // moving to Limassol") — plus `reference`, which for a SEPA transfer can be a
+    // bank reference containing the payer's own name. All three are scrubbed.
+    //
+    // The ROWS ARE KEPT, unlike member_photo. These are financial records: the
+    // gym has a statutory retention obligation for its books that survives an
+    // erasure request, and Art. 17(3)(b) exempts processing required for
+    // compliance with a legal obligation. So the amount, method and date stay
+    // (they are the controller's accounts, not the subject's profile) while
+    // everything identifying is removed and the row's member_id points at an
+    // already-tombstoned member. `docs/DATA_RETENTION.md` states this.
+    //
+    // NOT filtered on `voided_at`: a voided row's free text is exactly as
+    // identifying as a live one's.
+    await c.query(
+      `update manual_payment
+          set note = null,
+              reference = null,
+              void_reason = case when void_reason is null then null else $2 end
+        where member_id = $1`,
+      [memberId, ERASED_PAYMENT_TEXT],
     );
 
     await recordGdprEvent(c, {

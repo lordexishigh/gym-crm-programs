@@ -115,6 +115,20 @@ export function capabilities(): Capability[] {
         "Member invites, booking confirmations, waitlist promotions and renewal reminders are accepted and never delivered. Invite links must be copied and shared by hand.",
     },
     {
+      // Separate from "email" on purpose. Sending and knowing-whether-it-landed
+      // are independently configurable and fail independently: a deployment can
+      // send perfectly while recording nothing, which looks healthier than a
+      // deployment that cannot send at all and is in one way worse — the invite
+      // list positively asserts "sent" against an address that hard-bounced.
+      id: "email_delivery_tracking",
+      label: "Email delivery tracking",
+      configured: Boolean(process.env.RESEND_WEBHOOK_SECRET?.trim()),
+      severity: "degraded",
+      missing: missingEnv(["RESEND_WEBHOOK_SECRET"]),
+      consequence:
+        "Bounces and spam complaints are never recorded: an invite to a mistyped or dead address shows as 'sent' forever, staff see no delivery failure, and nobody learns the member was never reachable.",
+    },
+    {
       id: "scheduler",
       label: "Scheduled jobs",
       configured: schedulerConfigured(),
