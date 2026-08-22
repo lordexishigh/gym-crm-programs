@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withTenantContext, type Identity } from "./db";
 
 /**
@@ -133,6 +134,22 @@ export async function logWorkout(
 }
 
 /**
+ * Runs the recent-sessions query on an already-open tenant-scoped client.
+ * Exported so `lib/portal.ts` can fold this into a single portal-page
+ * transaction (see `loadPortalHome`) instead of opening its own connection.
+ */
+export async function recentWorkoutLogsQuery(
+  client: PoolClient,
+  memberId: string,
+  limit: number,
+): Promise<WorkoutLogRow[]> {
+  return (await client.query<WorkoutLogRow>(RECENT_WORKOUTS_SQL, [
+    memberId,
+    limit,
+  ])).rows;
+}
+
+/**
  * The most recent logged sessions for `memberId` (default `RECENT_WORKOUTS_LIMIT`).
  *
  * Used by BOTH audiences and secured the same way — by RLS, not by this query:
@@ -147,11 +164,8 @@ export async function recentWorkoutLogs(
   memberId: string,
   limit: number = RECENT_WORKOUTS_LIMIT,
 ): Promise<WorkoutLogRow[]> {
-  return withTenantContext(
-    identity,
-    async (c) =>
-      (await c.query<WorkoutLogRow>(RECENT_WORKOUTS_SQL, [memberId, limit]))
-        .rows,
+  return withTenantContext(identity, (c) =>
+    recentWorkoutLogsQuery(c, memberId, limit),
   );
 }
 
@@ -282,18 +296,27 @@ export function nextStreakMilestone(days: number): number | null {
  * `workout_log_staff_select`) — a cross-tenant or another member's id yields 0,
  * not an error.
  */
+/** Runs the streak query on an already-open tenant-scoped client — see `recentWorkoutLogsQuery`. */
+export async function workoutStreakDaysQuery(
+  client: PoolClient,
+  memberId: string,
+  lookbackDays: number,
+): Promise<number> {
+  const { rows } = await client.query<{ completed_at: string }>(
+    STREAK_LOG_TIMESTAMPS_SQL,
+    [memberId, lookbackDays],
+  );
+  return currentStreakDays(rows);
+}
+
 export async function workoutStreakDays(
   identity: Identity,
   memberId: string,
   lookbackDays: number = STREAK_LOOKBACK_DAYS,
 ): Promise<number> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<{ completed_at: string }>(
-      STREAK_LOG_TIMESTAMPS_SQL,
-      [memberId, lookbackDays],
-    );
-    return currentStreakDays(rows);
-  });
+  return withTenantContext(identity, (c) =>
+    workoutStreakDaysQuery(c, memberId, lookbackDays),
+  );
 }
 
 /**

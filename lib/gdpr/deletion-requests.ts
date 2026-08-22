@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withTenantContext, type Identity } from "../db";
 import { sendErasureConfirmationEmail } from "../notifications";
 import { anonymiseMember } from "./export";
@@ -107,21 +108,35 @@ export async function submitDeletionRequest(
  * never asked. Read under the member's own RLS policy
  * (`member_deletion_request_member_select`).
  */
+/**
+ * The query half, taking a client so a caller that already holds a transaction
+ * can reuse it. Split from the wrapper below for the same reason as
+ * `recentWorkoutLogsQuery` and friends: the portal home loads this alongside
+ * seven other reads, and paying a separate connection setup for each was what
+ * made `/portal` ~2x slower than `/dashboard` (#32).
+ */
+export async function latestDeletionRequestForMemberQuery(
+  client: PoolClient,
+  memberId: string,
+): Promise<MemberDeletionRequestView | null> {
+  const { rows } = await client.query<MemberDeletionRequestView>(
+    `select id, status, requested_at, decided_at, decision_note
+       from member_deletion_request
+      where member_id = $1
+      order by requested_at desc
+      limit 1`,
+    [memberId],
+  );
+  return rows[0] ?? null;
+}
+
 export async function latestDeletionRequestForMember(
   identity: Identity,
   memberId: string,
 ): Promise<MemberDeletionRequestView | null> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<MemberDeletionRequestView>(
-      `select id, status, requested_at, decided_at, decision_note
-         from member_deletion_request
-        where member_id = $1
-        order by requested_at desc
-        limit 1`,
-      [memberId],
-    );
-    return rows[0] ?? null;
-  });
+  return withTenantContext(identity, (c) =>
+    latestDeletionRequestForMemberQuery(c, memberId),
+  );
 }
 
 /**
