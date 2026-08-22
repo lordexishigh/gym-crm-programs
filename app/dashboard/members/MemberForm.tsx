@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import type { MemberFormState } from "./actions";
+import { StuckPendingNotice } from "../../components/StuckPendingNotice";
 
 type Action = (
   state: MemberFormState,
@@ -208,6 +209,8 @@ export function MemberForm({
           </Link>
         )}
       </div>
+
+      <StuckPendingNotice pending={pending} message="Still saving?" />
     </form>
   );
 }
