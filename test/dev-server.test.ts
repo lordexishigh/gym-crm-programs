@@ -340,6 +340,62 @@ describe("dev readiness gate — a broken route cannot hide a working app", () =
     const res = await fetch(`http://127.0.0.1:${port}/`);
     expect(res.status).toBe(200);
   }, 30_000);
+
+  /**
+   * The gate must never be worse than a direct bind. If not one entry route
+   * can be confirmed, withholding the port forever would hide a real failure
+   * behind an unreachable host; past the gate budget it opens anyway and says
+   * so, letting the app's own response — even an error page — be seen.
+   *
+   * Regression coverage for #34: this used to drive the *whole* `scripts/dev.mjs`
+   * wrapper against a real `next dev` with no `app/` directory, racing its ~2s
+   * startup-failure-then-webpack-retry lifetime against a 1s gate budget. That
+   * assumption held on a quiet machine and broke on a loaded CI runner, where
+   * spawning `next dev` twice took long enough to blow the test's own timeout —
+   * a false failure in the test's plumbing, not the gate's behaviour. Driving
+   * `warmUp` directly against an upstream port nothing listens on (so every
+   * request is refused immediately, every time) asserts the same behaviour —
+   * the gate opens and names what never answered — without depending on how
+   * long a real dev server takes to fail to start.
+   */
+  it("opens the port anyway once the gate budget expires, so it is never worse than a direct bind", async () => {
+    const port = await freePort();
+
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    const realLog = console.log;
+    console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
+    console.log = (...a: unknown[]) => void warned.push(a.join(" "));
+    cleanups.push(() => {
+      console.warn = realWarn;
+      console.log = realLog;
+    });
+
+    const savedGate = process.env.DEV_GATE_MAX_MS;
+    process.env.DEV_GATE_MAX_MS = "1000";
+    cleanups.push(() => {
+      if (savedGate === undefined) delete process.env.DEV_GATE_MAX_MS;
+      else process.env.DEV_GATE_MAX_MS = savedGate;
+    });
+
+    // Port 1 requires privileges this process does not have, so every request
+    // is refused deterministically instead of racing a real server's startup.
+    await warmUp({
+      port,
+      host: "127.0.0.1",
+      upstreamHost: "127.0.0.1",
+      upstreamPort: 1,
+      gated: true,
+    });
+    cleanups.push(async () => {
+      const gate = activeForwarder();
+      if (gate) await closeServer(gate);
+    });
+
+    const out = warned.join("\n");
+    expect(out).toMatch(/did not answer within 1s/);
+    expect(out).toMatch(/opening the port anyway/);
+  }, 15_000);
 });
 
 describe("dev readiness gate — port and host resolution", () => {
@@ -367,7 +423,68 @@ describe("dev readiness gate — port and host resolution", () => {
     expect(resolveHost(["-H", "127.0.0.1"])).toBe("127.0.0.1");
     expect(resolveHost(["--hostname=::1"])).toBe("::1");
     // A flag-looking value is not a hostname.
-    expect(resolveHost(["-H", "-p"])).toBe(process.env.HOSTNAME || "0.0.0.0");
+    expect(resolveHost(["-H", "-p"])).toBe("0.0.0.0");
+  });
+
+  /**
+   * HOSTNAME is exported into EVERY Docker container (set to the container id),
+   * and by Kubernetes (the pod name) and many CI images. `next` itself ignores
+   * it — in node_modules/next/dist/bin/next the port option carries
+   * `.env('PORT')` and the hostname option carries no `.env(...)` — so a wrapper
+   * that honours it binds the public port somewhere `next` never would, and only
+   * ever in the environments nobody reproduces on.
+   *
+   * Both failure modes were reproduced against `resolveHost` + `openGate`, and
+   * both are total rather than degraded, which is why this is pinned twice (here
+   * for the resolution, below for the bind):
+   *
+   *   a resolvable non-loopback name -> the forwarder came up on that ONE
+   *   interface and http://127.0.0.1:PORT was ECONNREFUSED;
+   *
+   *   a container id absent from /etc/hosts -> `listen` rejected ENOTFOUND, so
+   *   `openGate`'s caller called `stopDev()` and NOTHING was ever bound. An
+   *   unbound port black-holes the SYN instead of refusing it, so every route
+   *   reads as timed out and the product reads as unreachable.
+   */
+  it("ignores HOSTNAME, which containers export and `next` does not read", () => {
+    const saved = process.env.HOSTNAME;
+    try {
+      // A container id, as Docker sets it: not resolvable, and not a request to
+      // bind anything.
+      process.env.HOSTNAME = "a1b2c3d4e5f6";
+      expect(resolveHost([])).toBe("0.0.0.0");
+      // A resolvable machine name is no more of an instruction than an id is.
+      process.env.HOSTNAME = "some-build-agent";
+      expect(resolveHost([])).toBe("0.0.0.0");
+      // An explicit flag is still honoured — that is how `next` lets you ask.
+      expect(resolveHost(["-H", "127.0.0.1"])).toBe("127.0.0.1");
+    } finally {
+      if (saved === undefined) delete process.env.HOSTNAME;
+      else process.env.HOSTNAME = saved;
+    }
+  });
+
+  it("still opens a loopback-reachable port when HOSTNAME is a container id", async () => {
+    const saved = process.env.HOSTNAME;
+    try {
+      process.env.HOSTNAME = "a1b2c3d4e5f6";
+      const upstreamPort = await stubUpstream((_req, res) => res.end("ok"));
+      const port = await freePort();
+
+      // The whole point: the host the wrapper derives with a container-style
+      // HOSTNAME set must still be bindable AND still be reachable on loopback,
+      // which is the address every caller actually uses. Before the fix this
+      // rejected ENOTFOUND and nothing was bound at all.
+      const gate = await openGate({ port, host: resolveHost([]), upstreamPort });
+      cleanups.push(() => closeServer(gate));
+
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("ok");
+    } finally {
+      if (saved === undefined) delete process.env.HOSTNAME;
+      else process.env.HOSTNAME = saved;
+    }
   });
 });
 
@@ -457,26 +574,6 @@ describe("scripts/dev.mjs", () => {
     expect(out).toMatch(/Retrying without Turbopack/);
     expect(out.match(/Couldn't find any `pages` or `app` directory/g)?.length).toBe(2);
   }, 60_000);
-
-  it("opens the port anyway once the gate budget expires, so it is never worse than a direct bind", async () => {
-    // The gate is bounded on purpose. If `/` cannot be confirmed, withholding
-    // the port forever would hide a real failure behind an unreachable host —
-    // strictly worse than `next dev`'s own behaviour. Past that budget it opens
-    // and says so, letting the app's own response (even an error page) be seen.
-    const dir = makeProjectDir();
-    const port = await freePort();
-
-    // The budget must expire well inside the wrapper's own lifetime, or the run
-    // ends first and the timeout path is never reached. `next dev` fails here
-    // after ~2s and is then retried on webpack, so ~5s of life against a 1s
-    // budget leaves no race.
-    const { out } = await runDev(dir, ["-p", String(port)], {
-      DEV_GATE_MAX_MS: "1000",
-    });
-
-    expect(out).toMatch(/did not answer within 1s/);
-    expect(out).toMatch(/opening the port anyway/);
-  }, 45_000);
 
   /**
    * The gate's bounds must stay smaller than a caller's patience.

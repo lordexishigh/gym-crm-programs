@@ -16,3 +16,36 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    # These five are migrations, not bumps, and each was evaluated and rejected
+    # on its own merits (see the "skip the risky majors" commit). Left
+    # un-ignored, Dependabot reopens them every week and each one sits on a red
+    # X forever — CI has already proven three of them break the build:
+    # typescript 7 errors TS2882 on the `globals.css` side-effect import,
+    # tailwindcss 4 fails to compile, and next 16 breaks a Turbopack assertion.
+    # On a private repo those weekly runs are also billable minutes spent to
+    # re-derive a known answer.
+    #
+    # This ignores MAJORS ONLY — minor and patch updates still flow through the
+    # group above, and Dependabot *security* updates ignore these rules
+    # entirely, so a CVE on any of them still opens a PR.
+    #
+    # Delete the relevant entry when you actually want to do that migration.
+    ignore:
+      # Turbopack becomes the default; needs the build/test assertions revisited.
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      # v4 replaces tailwind.config.ts with CSS-first config; every screen
+      # needs re-verifying against the emitted stylesheet.
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      # A compiler rewrite, under next's TS plugin.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # Types must not run ahead of the runtime floor, or code typechecks
+      # against APIs the Node 20 this project targets does not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # v30's engines drop Node 20. The undici floor already clears the
+      # advisory this would otherwise have fixed.
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]

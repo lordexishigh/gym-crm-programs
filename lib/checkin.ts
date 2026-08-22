@@ -106,9 +106,47 @@ export async function assignPinCodes(
   );
 }
 
+/**
+ * How long an un-closed visit still counts as "in the building".
+ *
+ * Check-out is a human action and humans forget it, so occupancy cannot simply
+ * be "every row with a null `checked_out_at`" — one forgotten scan would inflate
+ * the count forever and the number on the dashboard would quietly become
+ * fiction. A visit that has not been closed within this window ages out of the
+ * live count instead.
+ *
+ * Its `checked_out_at` is deliberately LEFT null rather than backfilled with a
+ * guess: we know they are no longer here, we do not know when they left, and
+ * writing a made-up departure time would corrupt any session-length reporting
+ * built on this column later. Null means "unknown departure", which is true.
+ */
+export const STALE_VISIT_HOURS = 6;
+
+/**
+ * The wall-clock timezone a gym's "day" is measured in.
+ *
+ * `date_trunc('day', now())` truncates in the DATABASE's timezone, which is UTC
+ * on this deployment. Cyprus (the market this serves) is UTC+2/+3, so a bare
+ * truncation puts the day boundary at 02:00–03:00 local: a member who checked in
+ * at 01:00 local dropped straight out of the "Today" feed while it was still the
+ * same day to everyone in the building. Truncating the LOCAL day and converting
+ * back with `AT TIME ZONE` makes "today" mean the day the front desk is having,
+ * and stays correct across the EEST/EET change because Postgres resolves the
+ * offset per timestamp rather than applying a fixed one.
+ *
+ * Env-overridable for a deployment outside Cyprus. A per-GYM timezone would be
+ * the fully correct answer for a multi-tenant product and is deliberately not
+ * built here — it needs a column and a settings UI, and every tenant today is in
+ * one timezone. scripts/seed.mjs hardcodes the same zone for the same reason; it
+ * is a .mjs script and cannot import this module.
+ */
+export const GYM_TIME_ZONE = process.env.GYM_TIME_ZONE?.trim() || "Europe/Nicosia";
+
 export type CheckInResult =
   | {
       ok: true;
+      /** Which half of the visit this scan recorded. */
+      direction: "in" | "out";
       memberId: string;
       memberName: string;
       /**
@@ -136,6 +174,20 @@ type CheckInMemberRow = {
   photo_updated_at: Date | string | null;
 };
 
+/**
+ * Record one scan as either an arrival or a departure.
+ *
+ * The kiosk has ONE input, so the same PIN/QR has to mean both — "scan in, scan
+ * out" is how a turnstile behaves and is what the desk expects. The direction
+ * is derived from state rather than from a mode the operator has to select,
+ * because a mode toggle at a front desk is a thing people forget to flip, and
+ * getting it wrong writes a wrong row.
+ *
+ * The close is a conditional UPDATE, not a read-then-write: `where
+ * checked_out_at is null` makes it idempotent under a double scan, and the
+ * `returning` tells us whether it actually closed anything. Two people scanning
+ * the same code at once therefore produce one check-out, not two.
+ */
 async function recordCheckIn(
   c: PoolClient,
   tenantId: string,
@@ -148,12 +200,28 @@ async function recordCheckIn(
       error: method === "pin" ? "No member with that PIN." : "QR code not recognised.",
     };
   }
-  await c.query(
-    `insert into check_ins (tenant_id, member_id, method) values ($1, $2, $3)`,
-    [tenantId, member.id, method],
+
+  const closed = await c.query(
+    `update check_ins
+        set checked_out_at = now()
+      where member_id = $1
+        and checked_out_at is null
+        and checked_in_at > now() - ($2 || ' hours')::interval
+      returning id`,
+    [member.id, String(STALE_VISIT_HOURS)],
   );
+
+  // Nothing open (or only a stale visit past the window) → this is an arrival.
+  if (closed.rowCount === 0) {
+    await c.query(
+      `insert into check_ins (tenant_id, member_id, method) values ($1, $2, $3)`,
+      [tenantId, member.id, method],
+    );
+  }
+
   return {
     ok: true,
+    direction: closed.rowCount === 0 ? "in" : "out",
     memberId: member.id,
     memberName: member.full_name,
     avatarSrc: memberAvatarSrc(member),
@@ -217,19 +285,122 @@ export type CheckInLogRow = {
   member_name: string;
   method: "pin" | "qr";
   checked_in_at: string;
+  /** Null while the member is still in the building (or never checked out). */
+  checked_out_at: string | null;
+  /** Whether this visit still counts toward live occupancy (see STALE_VISIT_HOURS). */
+  is_present: boolean;
 };
 
-/** Today's check-ins for the staff kiosk feed (most recent first). */
+/**
+ * Today's check-ins for the staff kiosk feed (most recent first).
+ *
+ * "Today" is the gym's LOCAL day (see GYM_TIME_ZONE), not the database's UTC
+ * day — otherwise the feed rolls over mid-morning-shift rather than at midnight.
+ */
 export async function todaysCheckIns(identity: Identity): Promise<CheckInLogRow[]> {
   return withTenantContext(identity, async (c) => {
     const { rows } = await c.query<CheckInLogRow>(
-      `select ci.id, ci.member_id, m.full_name as member_name, ci.method, ci.checked_in_at
+      `select ci.id, ci.member_id, m.full_name as member_name, ci.method,
+              ci.checked_in_at, ci.checked_out_at,
+              (ci.checked_out_at is null
+               and ci.checked_in_at > now() - ($1 || ' hours')::interval) as is_present
          from check_ins ci
          join member m on m.id = ci.member_id
-        where ci.checked_in_at >= date_trunc('day', now())
+        where ci.checked_in_at >= date_trunc('day', now() at time zone $2::text)
+                                    at time zone $2::text
+          -- An erased member (beta-gdpr-002) drops off the desk feed: erasure
+          -- also revokes their PIN/QR so they cannot appear here again, but a
+          -- visit recorded EARLIER today would otherwise still be on screen
+          -- under the "Erased member" tombstone.
+          and m.erased_at is null
         order by ci.checked_in_at desc
         limit 50`,
+      [String(STALE_VISIT_HOURS), GYM_TIME_ZONE],
     );
     return rows;
+  });
+}
+
+export type MemberAttendance = {
+  /** Most recent visits first, capped at `MEMBER_ATTENDANCE_LIMIT`. */
+  visits: CheckInLogRow[];
+  /** Every recorded visit, not just the ones listed. */
+  totalVisits: number;
+  /** Start of the most recent visit, or null for a member who has never come in. */
+  lastVisitAt: string | null;
+};
+
+/** How many individual visits the member's attendance panel lists. */
+export const MEMBER_ATTENDANCE_LIMIT = 20;
+
+/**
+ * One member's attendance history — the lookup the front desk is asked for
+ * ("when were they last in?", "have they used the ten visits they paid for?").
+ *
+ * Returns the recent visits AND the lifetime count, because the two answer
+ * different questions and computing the count from a truncated list would
+ * quietly understate it. RLS scopes both to the caller's own gym, so a foreign
+ * `memberId` resolves to an empty history rather than to someone else's.
+ */
+export async function memberAttendance(
+  identity: Identity,
+  memberId: string,
+): Promise<MemberAttendance> {
+  return withTenantContext(identity, async (c) => {
+    const visits = (
+      await c.query<CheckInLogRow>(
+        `select ci.id, ci.member_id, m.full_name as member_name, ci.method,
+                ci.checked_in_at, ci.checked_out_at,
+                (ci.checked_out_at is null
+                 and ci.checked_in_at > now() - ($2 || ' hours')::interval) as is_present
+           from check_ins ci
+           join member m on m.id = ci.member_id
+          where ci.member_id = $1
+          order by ci.checked_in_at desc
+          limit ${MEMBER_ATTENDANCE_LIMIT}`,
+        [memberId, String(STALE_VISIT_HOURS)],
+      )
+    ).rows;
+
+    const total = (
+      await c.query<{ count: string }>(
+        "select count(*) as count from check_ins where member_id = $1",
+        [memberId],
+      )
+    ).rows[0];
+
+    return {
+      visits,
+      totalVisits: Number(total?.count ?? 0),
+      lastVisitAt: visits[0]?.checked_in_at ?? null,
+    };
+  });
+}
+
+/**
+ * How many members are in the building right now (feedback-2026-08: "showcase
+ * live checked in number of members in the dashboard").
+ *
+ * Counts DISTINCT members, not rows: a member with a stale un-closed visit from
+ * this morning who scans in again this afternoon has two open rows, and the
+ * count of bodies in the room is still one.
+ *
+ * Deliberately NOT bounded to a calendar day — the rolling window is the only
+ * bound. Occupancy answers "who is in the building", and someone who arrived at
+ * 23:50 is still in the building at 00:10; a day boundary would drop them from
+ * the count at midnight while they were standing in the room, and would break a
+ * 24-hour gym outright. (The "Today" FEED is a different question and is
+ * correctly anchored to the local day — see `todaysCheckIns`.)
+ */
+export async function currentOccupancy(identity: Identity): Promise<number> {
+  return withTenantContext(identity, async (c) => {
+    const { rows } = await c.query<{ count: string }>(
+      `select count(distinct member_id) as count
+         from check_ins
+        where checked_out_at is null
+          and checked_in_at > now() - ($1 || ' hours')::interval`,
+      [String(STALE_VISIT_HOURS)],
+    );
+    return Number(rows[0]?.count ?? 0);
   });
 }

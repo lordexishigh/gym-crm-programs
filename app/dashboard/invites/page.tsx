@@ -1,4 +1,4 @@
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { isEmailConfigured } from "@/lib/email/resend";
 import { expireStalePendingInvites } from "@/lib/invite-status";
@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
  * RLS (`invite_staff_all`) scopes it to the staff member's own gym.
  */
 export default async function InvitesPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("invites.manage");
 
   const { invites, invitable } = await withTenantContext(
     session.identity,

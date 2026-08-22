@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { PoolClient } from "pg";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { validateProgramInput, type ExerciseInput } from "@/lib/programs";
 import { reassignProgram } from "@/lib/assignments";
@@ -63,7 +63,7 @@ export async function createProgramAction(
   _prev: ProgramFormState,
   formData: FormData,
 ): Promise<ProgramFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   let exercisesRaw: unknown;
   try {
@@ -115,7 +115,7 @@ export async function updateProgramAction(
   _prev: ProgramFormState,
   formData: FormData,
 ): Promise<ProgramFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing program id." };
@@ -185,7 +185,7 @@ export async function assignProgramAction(
   _prev: AssignState,
   formData: FormData,
 ): Promise<AssignState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const programId = String(formData.get("programId") ?? "");
   const memberId = String(formData.get("memberId") ?? "");
@@ -246,7 +246,7 @@ export async function unassignProgramAction(
   _prev: AssignState,
   formData: FormData,
 ): Promise<AssignState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   const programId = String(formData.get("programId") ?? "");
   const memberId = String(formData.get("memberId") ?? "");

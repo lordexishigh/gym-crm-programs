@@ -14,8 +14,17 @@ const labelClass = "flex flex-col gap-1 text-sm font-medium text-slate-700";
  * a category, an image link, and how-to instructions, form guidelines, and
  * coaching tips. `useActionState` surfaces validation errors inline; the form is
  * cleared after a successful add so the trainer can enter several in a row.
+ *
+ * Presentation-free by design: no card chrome and no heading of its own, because
+ * it is rendered inside a `<Modal>` (see AddExerciseButton) which supplies both.
+ * A second heading here would give the dialog two competing labels.
  */
-export function ExerciseLibraryForm() {
+export function ExerciseLibraryForm({
+  onSuccess,
+}: {
+  /** Called after a successful add — used by the modal host to close itself. */
+  onSuccess?: () => void;
+} = {}) {
   const [state, formAction, pending] = useActionState<
     LibraryFormState,
     FormData
@@ -25,17 +34,14 @@ export function ExerciseLibraryForm() {
 
   // Reset the inputs once an add succeeds (state carries a success message).
   useEffect(() => {
-    if (state.success) formRef.current?.reset();
-  }, [state.success]);
+    if (state.success) {
+      formRef.current?.reset();
+      onSuccess?.();
+    }
+  }, [state.success, onSuccess]);
 
   return (
-    <form
-      ref={formRef}
-      action={formAction}
-      className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4"
-    >
-      <h2 className="text-base font-semibold text-slate-900">Add an exercise</h2>
-
+    <form ref={formRef} action={formAction} className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className={labelClass}>
           Name

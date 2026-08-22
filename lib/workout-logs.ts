@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withTenantContext, type Identity } from "./db";
 
 /**
@@ -133,6 +134,22 @@ export async function logWorkout(
 }
 
 /**
+ * Runs the recent-sessions query on an already-open tenant-scoped client.
+ * Exported so `lib/portal.ts` can fold this into a single portal-page
+ * transaction (see `loadPortalHome`) instead of opening its own connection.
+ */
+export async function recentWorkoutLogsQuery(
+  client: PoolClient,
+  memberId: string,
+  limit: number,
+): Promise<WorkoutLogRow[]> {
+  return (await client.query<WorkoutLogRow>(RECENT_WORKOUTS_SQL, [
+    memberId,
+    limit,
+  ])).rows;
+}
+
+/**
  * The most recent logged sessions for `memberId` (default `RECENT_WORKOUTS_LIMIT`).
  *
  * Used by BOTH audiences and secured the same way — by RLS, not by this query:
@@ -147,11 +164,8 @@ export async function recentWorkoutLogs(
   memberId: string,
   limit: number = RECENT_WORKOUTS_LIMIT,
 ): Promise<WorkoutLogRow[]> {
-  return withTenantContext(
-    identity,
-    async (c) =>
-      (await c.query<WorkoutLogRow>(RECENT_WORKOUTS_SQL, [memberId, limit]))
-        .rows,
+  return withTenantContext(identity, (c) =>
+    recentWorkoutLogsQuery(c, memberId, limit),
   );
 }
 
@@ -209,6 +223,100 @@ export async function memberAdherence(
       lastCompletedAt: r?.last_completed_at ?? null,
     };
   });
+}
+
+/**
+ * How many days of workout history to consider when computing a member's
+ * current streak (CRM-IDEAS "Next" #7 — engagement layer). Comfortably covers
+ * any realistic streak while keeping the query bounded.
+ */
+export const STREAK_LOOKBACK_DAYS = 400;
+
+// Raw timestamps only (no ::date cast — pg's `date` type parses in the server's
+// local timezone, which would silently misclassify a session logged near
+// midnight; `currentStreakDays` below does the calendar-day bucketing itself,
+// in UTC, from the full timestamp).
+const STREAK_LOG_TIMESTAMPS_SQL = `select completed_at
+   from workout_log
+  where member_id = $1
+    and completed_at >= now() - make_interval(days => $2)
+  order by completed_at desc`;
+
+/**
+ * Current daily training streak, computed from already-fetched logs. PURE (no
+ * DB, no env): counts consecutive UTC calendar days with at least one logged
+ * session, walking backward from today. A member who trained yesterday but
+ * has not yet logged today's session still sees their streak (it only resets
+ * once a full calendar day is missed), so the count doesn't flicker to zero
+ * the instant the clock rolls into a new UTC day.
+ */
+export function currentStreakDays(
+  logs: { completed_at: string }[],
+  now: Date = new Date(),
+): number {
+  const days = new Set(
+    logs.map((l) => new Date(l.completed_at).toISOString().slice(0, 10)),
+  );
+  if (days.size === 0) return 0;
+
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  const today = now.toISOString().slice(0, 10);
+  let cursor = days.has(today) ? now.getTime() : now.getTime() - ONE_DAY_MS;
+
+  let streak = 0;
+  while (days.has(new Date(cursor).toISOString().slice(0, 10))) {
+    streak += 1;
+    cursor -= ONE_DAY_MS;
+  }
+  return streak;
+}
+
+/**
+ * Streak lengths that earn a milestone badge (CRM-IDEAS "Next" #7 — the
+ * streak-milestone half; PR-style callouts need per-exercise weight data that
+ * does not exist yet, see docs/RISKY-DEFERRED.md item B, so they stay out of
+ * scope here). Ascending so `find` can pick the first match in either
+ * direction below.
+ */
+export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100, 180, 365] as const;
+
+/** The milestone reached exactly today, or null if `days` isn't one. */
+export function streakMilestoneReached(days: number): number | null {
+  return STREAK_MILESTONES.find((m) => m === days) ?? null;
+}
+
+/** The next milestone still ahead, or null once the longest has passed. */
+export function nextStreakMilestone(days: number): number | null {
+  return STREAK_MILESTONES.find((m) => m > days) ?? null;
+}
+
+/**
+ * A member's current streak of consecutive days with a logged workout. Reuses
+ * the same RLS as `recentWorkoutLogs` (`workout_log_member_select` /
+ * `workout_log_staff_select`) — a cross-tenant or another member's id yields 0,
+ * not an error.
+ */
+/** Runs the streak query on an already-open tenant-scoped client — see `recentWorkoutLogsQuery`. */
+export async function workoutStreakDaysQuery(
+  client: PoolClient,
+  memberId: string,
+  lookbackDays: number,
+): Promise<number> {
+  const { rows } = await client.query<{ completed_at: string }>(
+    STREAK_LOG_TIMESTAMPS_SQL,
+    [memberId, lookbackDays],
+  );
+  return currentStreakDays(rows);
+}
+
+export async function workoutStreakDays(
+  identity: Identity,
+  memberId: string,
+  lookbackDays: number = STREAK_LOOKBACK_DAYS,
+): Promise<number> {
+  return withTenantContext(identity, (c) =>
+    workoutStreakDaysQuery(c, memberId, lookbackDays),
+  );
 }
 
 /**

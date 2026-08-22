@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 import { DEMO_ACCOUNTS, DEMO_ACCOUNTS_CAVEAT } from "@/lib/demo-accounts";
+import { DemoSignInButton } from "./DemoSignInButton";
+import { ReadinessNotice } from "./ReadinessNotice";
 
 /**
  * Landing page.
@@ -8,12 +10,17 @@ import { DEMO_ACCOUNTS, DEMO_ACCOUNTS_CAVEAT } from "@/lib/demo-accounts";
  * Carries the DEMO ACCOUNT NOTICE, which is load-bearing rather than
  * decorative: the app has no public sign-up (members are invite-only, staff are
  * seeded), so without credentials on this screen a first-time visitor or QA
- * tester reaches the login form and stops there. The list is static — no DB
- * call, no client JS — so it renders on the prerendered page and is visible even
- * when the database or auth service is unreachable, which is precisely when
- * someone is most likely to be poking at the app. See lib/demo-accounts.ts for
- * why the values live in a shared module and how they are kept in step with
+ * tester reaches the login form and stops there. The list itself is static — no
+ * DB call — so it renders on the prerendered page and is visible even when the
+ * database or auth service is unreachable, which is precisely when someone is
+ * most likely to be poking at the app. See lib/demo-accounts.ts for why the
+ * values live in a shared module and how they are kept in step with
  * `scripts/seed.mjs`.
+ *
+ * Each row also carries a `DemoSignInButton` that signs the visitor straight in
+ * (app/demo-sign-in.ts). That is the part a review found missing: the panel
+ * said "Sign in with a demo account" but only linked to an empty form, so the
+ * one path into the product still required copying credentials by hand.
  */
 export default function LandingPage() {
   return (
@@ -55,6 +62,10 @@ export default function LandingPage() {
         </Link>
       </div>
 
+      {/* Above the demo panel, not below it: its whole job is to be read BEFORE
+          the visitor spends a click on credentials that cannot work here. */}
+      <ReadinessNotice />
+
       <DemoAccounts />
     </main>
   );
@@ -63,11 +74,12 @@ export default function LandingPage() {
 /**
  * The "try it without setting anything up" panel.
  *
- * Credentials are rendered in `<code>` so they can be selected and copied
+ * Credentials are rendered in `<code>` so they can still be selected and copied
  * cleanly (no smart quotes, no line-wrap surprises in a password containing
- * `!`), and each row links straight to the sign-in screen that accepts it —
- * a tester should never have to work out which of the two logins a given
- * account belongs to.
+ * `!`). Acting on a row takes one click — the button signs in as that account —
+ * and the link beside it goes to the sign-in screen that accepts those
+ * credentials, so a tester never has to work out which of the two logins a
+ * given account belongs to.
  */
 function DemoAccounts() {
   return (
@@ -121,12 +133,21 @@ function DemoAccounts() {
               <p className="text-xs text-slate-500">{account.blurb}</p>
             </div>
 
-            <Link
-              href={account.href}
-              className="inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            >
-              Go to {account.surface.toLowerCase()}
-            </Link>
+            {/* One click signs in as this account; the link below is for anyone
+                who would rather type the credentials into the form themselves
+                (and is the fallback if the seed has not been run here). */}
+            <div className="flex shrink-0 flex-col gap-1.5 sm:items-end">
+              <DemoSignInButton
+                email={account.email}
+                label={`Sign in as ${account.role}`}
+              />
+              <Link
+                href={account.href}
+                className="rounded text-center text-xs font-medium text-slate-500 underline transition hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 sm:text-right"
+              >
+                or open the {account.surface.toLowerCase()} form
+              </Link>
+            </div>
           </li>
         ))}
       </ul>

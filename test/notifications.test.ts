@@ -135,26 +135,34 @@ describe("notifyWaitlistPromotions", () => {
 
   it("emails each promoted member and returns their booking ids", async () => {
     const fetchMock = mockFetchOk();
-    const notified = await notifyWaitlistPromotions([
+    const result = await notifyWaitlistPromotions([
       promotion(),
       promotion({ booking_id: "b2", member_email: "sam@example.com", member_name: "Sam" }),
     ]);
-    expect(notified).toEqual(["b1", "b2"]);
+    expect(result).toEqual({ notified: ["b1", "b2"], emailed: 2, noAddress: 0 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing for an empty batch", async () => {
     const fetchMock = mockFetchOk();
-    await expect(notifyWaitlistPromotions([])).resolves.toEqual([]);
+    await expect(notifyWaitlistPromotions([])).resolves.toEqual({
+      notified: [],
+      emailed: 0,
+      noAddress: 0,
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // A member with no address can never be emailed, so treating them as
   // "unnotified" would leave a row pending a retry that can never succeed.
-  it("marks a member with no email as handled without sending", async () => {
+  //
+  // But `notified` and `emailed` must diverge here, and that is the point of the
+  // separate counts: a caller that reported `notified.length` as "emailed" would
+  // tell staff this member was contacted when no send was even attempted.
+  it("marks a member with no email as handled without sending, and does not count it as emailed", async () => {
     const fetchMock = mockFetchOk();
-    const notified = await notifyWaitlistPromotions([promotion({ member_email: null })]);
-    expect(notified).toEqual(["b1"]);
+    const result = await notifyWaitlistPromotions([promotion({ member_email: null })]);
+    expect(result).toEqual({ notified: ["b1"], emailed: 0, noAddress: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -164,7 +172,7 @@ describe("notifyWaitlistPromotions", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     await expect(
       notifyWaitlistPromotions([promotion(), promotion({ booking_id: "b2" })]),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ notified: [], emailed: 0, noAddress: 0 });
   });
 });
 

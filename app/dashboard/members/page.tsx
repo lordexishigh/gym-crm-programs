@@ -1,6 +1,8 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { AddMemberButton } from "./AddMemberButton";
+import { createMemberAction } from "./actions";
 import {
   ROSTER_PAGE_SIZE,
   memberRosterWhere,
@@ -40,7 +42,7 @@ export default async function MembersPage({
 }: {
   searchParams: Promise<{ q?: string; status?: string; page?: string }>;
 }) {
-  const session = await requireStaff();
+  const session = await requireCapability("members.read");
   const filters = parseRosterFilters(await searchParams);
 
   const { members, total } = await withTenantContext(
@@ -103,12 +105,7 @@ export default async function MembersPage({
           >
             Import CSV
           </Link>
-          <Link
-            href="/dashboard/members/new"
-            className="inline-flex items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-dark"
-          >
-            Add member
-          </Link>
+          <AddMemberButton action={createMemberAction} />
         </div>
       </div>
 

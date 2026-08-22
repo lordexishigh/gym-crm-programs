@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { validateWorkoutLogInput } from "../lib/workout-logs";
+import {
+  currentStreakDays,
+  nextStreakMilestone,
+  streakMilestoneReached,
+  validateWorkoutLogInput,
+} from "../lib/workout-logs";
 
 /**
  * Pure validation tests for workout logging (Phase GA — ga-engagement-001).
@@ -64,5 +69,93 @@ describe("validateWorkoutLogInput", () => {
       note: "x".repeat(1001),
     });
     expect(r.ok).toBe(false);
+  });
+});
+
+/**
+ * Pure streak-calculation tests (engagement layer, CRM-IDEAS "Next" #7). No
+ * database: `currentStreakDays` only reshapes already-fetched timestamps, so
+ * these pin the day-bucketing/anchoring contract directly, mirroring
+ * `taskUrgency`'s pure-classifier tests.
+ */
+describe("currentStreakDays", () => {
+  const log = (iso: string) => ({ completed_at: iso });
+  const now = new Date("2026-07-27T18:00:00.000Z");
+
+  it("is 0 with no logs", () => {
+    expect(currentStreakDays([], now)).toBe(0);
+  });
+
+  it("counts a single session logged today as a 1-day streak", () => {
+    expect(currentStreakDays([log("2026-07-27T09:00:00.000Z")], now)).toBe(1);
+  });
+
+  it("counts consecutive prior days logged today", () => {
+    const logs = [
+      log("2026-07-27T09:00:00.000Z"),
+      log("2026-07-26T09:00:00.000Z"),
+      log("2026-07-25T09:00:00.000Z"),
+    ];
+    expect(currentStreakDays(logs, now)).toBe(3);
+  });
+
+  it("stops counting at the first missed day", () => {
+    const logs = [
+      log("2026-07-27T09:00:00.000Z"),
+      log("2026-07-26T09:00:00.000Z"),
+      // 2026-07-25 missing
+      log("2026-07-24T09:00:00.000Z"),
+    ];
+    expect(currentStreakDays(logs, now)).toBe(2);
+  });
+
+  it("still counts the streak when today has no session yet, anchoring on yesterday", () => {
+    const logs = [
+      log("2026-07-26T09:00:00.000Z"),
+      log("2026-07-25T09:00:00.000Z"),
+    ];
+    expect(currentStreakDays(logs, now)).toBe(2);
+  });
+
+  it("is 0 when the most recent session was before yesterday (streak broken)", () => {
+    expect(currentStreakDays([log("2026-07-24T09:00:00.000Z")], now)).toBe(0);
+  });
+
+  it("counts multiple sessions on the same day as one", () => {
+    const logs = [
+      log("2026-07-27T08:00:00.000Z"),
+      log("2026-07-27T19:00:00.000Z"),
+    ];
+    expect(currentStreakDays(logs, now)).toBe(1);
+  });
+});
+
+/**
+ * Pure streak-milestone tests (CRM-IDEAS "Next" #7 — the milestone-badge
+ * half). No database: both are lookups over a fixed, ascending constant.
+ */
+describe("streakMilestoneReached", () => {
+  it("returns the milestone on an exact match", () => {
+    expect(streakMilestoneReached(7)).toBe(7);
+    expect(streakMilestoneReached(365)).toBe(365);
+  });
+
+  it("returns null for a day count that isn't a milestone", () => {
+    expect(streakMilestoneReached(1)).toBe(null);
+    expect(streakMilestoneReached(8)).toBe(null);
+    expect(streakMilestoneReached(0)).toBe(null);
+  });
+});
+
+describe("nextStreakMilestone", () => {
+  it("returns the smallest milestone still ahead", () => {
+    expect(nextStreakMilestone(1)).toBe(3);
+    expect(nextStreakMilestone(3)).toBe(7);
+    expect(nextStreakMilestone(29)).toBe(30);
+  });
+
+  it("returns null once the longest milestone has passed", () => {
+    expect(nextStreakMilestone(365)).toBe(null);
+    expect(nextStreakMilestone(400)).toBe(null);
   });
 });

@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { classRoster } from "@/lib/classes";
 import { staffCancelBookingAction } from "../actions";
 import { PromoteWaitlistButton } from "../PromoteWaitlistButton";
+import { hasCapability } from "@/lib/capabilities";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export default async function ClassDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("classes.read");
   const { class: cls, bookings } = await classRoster(session.identity, id);
   if (!cls) notFound();
 
@@ -52,6 +53,7 @@ export default async function ClassDetailPage({
           classId={cls.id}
           openSpots={openSpots}
           waitlistCount={waitlisted.length}
+          emailConfigured={hasCapability("email")}
         />
       ) : null}
 

@@ -1,19 +1,37 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { createClassAction, type ClassFormState } from "./actions";
 
 const initialState: ClassFormState = {};
 
-/** Staff form to schedule a new class. */
-export function ClassForm() {
+/**
+ * Staff form to schedule a new class.
+ *
+ * Presentation-free (no card, no heading): it is rendered inside a `<Modal>`
+ * via ScheduleClassButton, which supplies both. Stacked rather than the wrapping
+ * horizontal bar it used to be, because a dialog is narrow and a 5-field row
+ * reflows into ragged columns at that width.
+ */
+export function ClassForm({
+  onSuccess,
+}: {
+  /** Called after a successful schedule — used by the modal host to close. */
+  onSuccess?: () => void;
+} = {}) {
   const [state, formAction, pending] = useActionState(createClassAction, initialState);
 
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    if (state.success) {
+      formRef.current?.reset();
+      onSuccess?.();
+    }
+  }, [state.success, onSuccess]);
+
   return (
-    <form
-      action={formAction}
-      className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:flex-wrap sm:items-end"
-    >
+    <form ref={formRef} action={formAction} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
         Class name
         <input
@@ -45,39 +63,38 @@ export function ClassForm() {
         />
       </label>
 
-      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-        Duration (min)
-        <input
-          type="number"
-          name="durationMinutes"
-          min="1"
-          max="600"
-          defaultValue={60}
-          required
-          className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
-        />
-      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+          Duration (min)
+          <input
+            type="number"
+            name="durationMinutes"
+            min="1"
+            max="600"
+            defaultValue={60}
+            required
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </label>
 
-      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-        Capacity
-        <input
-          type="number"
-          name="capacity"
-          min="1"
-          max="1000"
-          defaultValue={12}
-          required
-          className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
-        />
-      </label>
+        <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+          Capacity
+          <input
+            type="number"
+            name="capacity"
+            min="1"
+            max="1000"
+            defaultValue={12}
+            required
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </label>
+      </div>
 
       {state.error ? (
-        <p role="alert" className="w-full text-sm text-red-600">
+        <p role="alert" className="text-sm text-red-600">
           {state.error}
         </p>
-      ) : null}
-      {state.success ? (
-        <p className="w-full text-sm text-emerald-700">{state.success}</p>
       ) : null}
 
       <button

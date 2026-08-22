@@ -15,6 +15,9 @@ import { recordGdprEvent, resolveActorUserId } from "./audit";
  */
 export const ERASED_MEMBER_NAME = "Erased member";
 export const ERASED_INVITE_EMAIL = "[erased]";
+export const ERASED_TASK_TITLE = "[erased]";
+export const ERASED_SUGGESTION_HEADLINE = "[erased]";
+export const ERASED_PAYMENT_TEXT = "[erased]";
 
 /**
  * Member data export (beta-gdpr-001).
@@ -29,8 +32,10 @@ export const ERASED_INVITE_EMAIL = "[erased]";
  *
  * Scope by role:
  *   - staff (DSAR fulfilment): the complete record — profile, status history,
- *     invites, and all assigned programs with exercises.
- *   - member (self-service): profile + assigned programs/exercises. The
+ *     invites, all assigned programs with exercises, workout logs, check-in
+ *     (attendance) history, and class bookings.
+ *   - member (self-service): profile + assigned programs/exercises + workout
+ *     logs + check-ins + class bookings (all the member's own data). The
  *     staff-internal tables (status history, invite tokens) are controller
  *     records the member RLS policies do not expose; they are omitted rather
  *     than relied upon to return empty.
@@ -85,6 +90,69 @@ export type ExportedWorkoutLog = {
   note: string | null;
 };
 
+/** One recorded gym visit, as exported (market gap #5 — check-in). */
+export type ExportedCheckIn = {
+  id: string;
+  method: "pin" | "qr";
+  checked_in_at: string;
+};
+
+/** One class booking, as exported (market gap #4 — class scheduling). */
+export type ExportedClassBooking = {
+  booking_id: string;
+  class_id: string;
+  class_name: string;
+  starts_at: string;
+  status: string;
+  booked_at: string;
+  cancelled_at: string | null;
+};
+
+/** One staff-authored follow-up task, as exported (CRM-IDEAS "Apply now" #5). */
+export type ExportedMemberTask = {
+  id: string;
+  title: string;
+  due_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+/**
+ * One card payment, as exported. Written by the Stripe webhook
+ * (`lib/stripe-events.ts`), never by hand.
+ *
+ * This was MISSING from the export until 0026's manual-payment work went in: a
+ * member's payment history is their personal data under Art. 15, and the export
+ * silently omitted all of it. Adding only the manual half would have been worse
+ * than either — an export that reads as complete financial history while holding
+ * half of it.
+ */
+export type ExportedPaymentEvent = {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  occurred_at: string;
+};
+
+/**
+ * One off-card payment (cash / bank transfer / SEPA) recorded by staff — 0026.
+ * `void_reason` is staff-authored free text about this member, so erasure has to
+ * scrub it (see `anonymiseMember`).
+ */
+export type ExportedManualPayment = {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  method: string;
+  reference: string | null;
+  note: string | null;
+  received_on: string;
+  voided_at: string | null;
+  void_reason: string | null;
+  created_at: string;
+};
+
 /** The full export document handed to the data subject. */
 export type MemberDataExport = {
   format: "alpha-crm.member-export";
@@ -95,6 +163,11 @@ export type MemberDataExport = {
   invites: ExportedInvite[];
   programs: ExportedProgram[];
   workout_logs: ExportedWorkoutLog[];
+  check_ins: ExportedCheckIn[];
+  class_bookings: ExportedClassBooking[];
+  tasks: ExportedMemberTask[];
+  payment_events: ExportedPaymentEvent[];
+  manual_payments: ExportedManualPayment[];
 };
 
 /** Result of an export: the document (null if the subject was not found). */
@@ -134,6 +207,19 @@ export async function exportMemberData(
           await c.query<ExportedInvite>(
             `select id, email, status, expires_at, created_at, accepted_at
                from invite where member_id = $1
+              order by created_at desc`,
+            [memberId],
+          )
+        ).rows
+      : [];
+    // Staff-authored follow-up tasks (CRM-IDEAS "Apply now" #5) are another
+    // staff-internal controller record — the member RLS policies never expose
+    // member_task at all, so this is staff-only exactly like status history.
+    const tasks = isStaff
+      ? (
+          await c.query<ExportedMemberTask>(
+            `select id, title, due_at, completed_at, created_at
+               from member_task where member_id = $1
               order by created_at desc`,
             [memberId],
           )
@@ -203,6 +289,62 @@ export async function exportMemberData(
       )
     ).rows;
 
+    // Check-in (attendance) history and class bookings are the member's OWN
+    // data too — included for both staff DSAR and member self-export, same as
+    // workout logs above (the member RLS policies expose only their own rows:
+    // check_ins_self_select, class_bookings_self_select).
+    const checkIns = (
+      await c.query<ExportedCheckIn>(
+        `select id, method, checked_in_at
+           from check_ins
+          where member_id = $1
+          order by checked_in_at desc`,
+        [memberId],
+      )
+    ).rows;
+
+    const classBookings = (
+      await c.query<ExportedClassBooking>(
+        `select cb.id as booking_id, cb.class_id, cl.name as class_name,
+                cl.starts_at, cb.status, cb.booked_at, cb.cancelled_at
+           from class_bookings cb
+           join classes cl on cl.id = cb.class_id
+          where cb.member_id = $1
+          order by cb.booked_at desc`,
+        [memberId],
+      )
+    ).rows;
+
+    // Payment history, both halves. Also the member's own data, and exposed to a
+    // member self-export by the same `*_self_select` pattern
+    // (payment_events_self_select 0017, manual_payment_self_select 0026).
+    //
+    // Voided manual payments are INCLUDED deliberately. A void is a correction,
+    // not a deletion: the member was told at some point that this payment was
+    // recorded, so an export that quietly drops it is less complete than the
+    // controller's own books. `voided_at` and `void_reason` travel with the row
+    // so the subject can see it was reversed and why.
+    const paymentEvents = (
+      await c.query<ExportedPaymentEvent>(
+        `select id, amount_cents, currency, status, occurred_at
+           from payment_events
+          where member_id = $1
+          order by occurred_at desc`,
+        [memberId],
+      )
+    ).rows;
+
+    const manualPayments = (
+      await c.query<ExportedManualPayment>(
+        `select id, amount_cents, currency, method, reference, note,
+                received_on, voided_at, void_reason, created_at
+           from manual_payment
+          where member_id = $1
+          order by received_on desc`,
+        [memberId],
+      )
+    ).rows;
+
     // Audit the export in the SAME transaction as the reads.
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,
@@ -217,6 +359,9 @@ export async function exportMemberData(
         invites: invites.length,
         status_events: statusHistory.length,
         workout_logs: workoutLogs.length,
+        check_ins: checkIns.length,
+        class_bookings: classBookings.length,
+        tasks: tasks.length,
       },
     });
 
@@ -229,6 +374,11 @@ export async function exportMemberData(
       invites,
       programs,
       workout_logs: workoutLogs,
+      check_ins: checkIns,
+      class_bookings: classBookings,
+      tasks,
+      payment_events: paymentEvents,
+      manual_payments: manualPayments,
     };
     return { data };
   });
@@ -414,6 +564,66 @@ export async function anonymiseMember(
     await c.query(`update workout_log set note = null where member_id = $1`, [
       memberId,
     ]);
+
+    // Scrub free-text titles on the member's follow-up tasks (may contain PII,
+    // e.g. "ask about her surgery recovery") — same rationale as workout-log
+    // notes. Unlike workout_log, staff already hold full UPDATE on member_task
+    // (member_task_staff_all is a `for all` policy), so no extra grant is needed
+    // here — this scrub cannot hit the missing-UPDATE-grant class of bug fixed
+    // for workout_log.
+    await c.query(`update member_task set title = $2 where member_id = $1`, [
+      memberId,
+      ERASED_TASK_TITLE,
+    ]);
+
+    // Scrub the free-text headline on the member's derived-claim ledger rows
+    // (0021) — a brief's headline is built by interpolating the member's full
+    // name straight into the sentence (`buildAtRiskBrief`, lib/briefs.ts), so
+    // it is exactly the kind of PII-bearing free text workout-log notes and
+    // task titles already get scrubbed for. Unlike those two, `suggestions`
+    // rows are kept regardless of status (pending/accepted/dismissed) — the
+    // row itself is the audit trail of what was suggested and decided, only
+    // the identifying sentence is tombstoned.
+    await c.query(
+      `update suggestions set headline = $2 where member_id = $1`,
+      [memberId, ERASED_SUGGESTION_HEADLINE],
+    );
+
+    // Scrub the member's own words on any erasure request they filed (0026).
+    // The request row itself is KEPT — it is the controller's evidence that a
+    // subject request was received and answered, which must outlive the data it
+    // concerned — but `reason` is free text the member wrote about themselves
+    // ("I'm moving away", "after what happened in class") and is exactly the
+    // PII-bearing prose the scrubs above exist for. The dates and the decision,
+    // which are what the evidence needs, survive.
+    await c.query(
+      `update member_deletion_request set reason = null where member_id = $1`,
+      [memberId],
+    );
+
+    // Off-card payments (0026) carry two staff-authored free-text fields about
+    // this member — `note` and `void_reason` ("paid cash at the desk, said she's
+    // moving to Limassol") — plus `reference`, which for a SEPA transfer can be a
+    // bank reference containing the payer's own name. All three are scrubbed.
+    //
+    // The ROWS ARE KEPT, unlike member_photo. These are financial records: the
+    // gym has a statutory retention obligation for its books that survives an
+    // erasure request, and Art. 17(3)(b) exempts processing required for
+    // compliance with a legal obligation. So the amount, method and date stay
+    // (they are the controller's accounts, not the subject's profile) while
+    // everything identifying is removed and the row's member_id points at an
+    // already-tombstoned member. `docs/DATA_RETENTION.md` states this.
+    //
+    // NOT filtered on `voided_at`: a voided row's free text is exactly as
+    // identifying as a live one's.
+    await c.query(
+      `update manual_payment
+          set note = null,
+              reference = null,
+              void_reason = case when void_reason is null then null else $2 end
+        where member_id = $1`,
+      [memberId, ERASED_PAYMENT_TEXT],
+    );
 
     await recordGdprEvent(c, {
       tenantId: identity.tenantId,

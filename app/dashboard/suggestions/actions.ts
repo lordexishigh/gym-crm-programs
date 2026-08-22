@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { reviewSuggestion } from "@/lib/suggestions";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
@@ -23,7 +23,7 @@ export async function reviewSuggestionAction(
   _prev: ReviewFormState,
   formData: FormData,
 ): Promise<ReviewFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
 
   const id = String(formData.get("id") ?? "");
   const decision = String(formData.get("decision") ?? "");

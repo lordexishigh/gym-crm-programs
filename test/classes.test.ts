@@ -107,6 +107,55 @@ describe("promoteFromWaitlist SQL contract", () => {
   });
 });
 
+/**
+ * The billing gate in `bookClass`. The behaviour itself is proven against a
+ * real database in `class-booking-membership-gate.test.ts`, which skips without
+ * DATABASE_URL — so these assertions pin the properties that must survive an
+ * edit made on a machine where that suite never runs.
+ */
+describe("bookClass membership gate", () => {
+  const src = CLASSES_SRC.slice(
+    CLASSES_SRC.indexOf("export async function bookClass"),
+    CLASSES_SRC.indexOf("export type PromotedBooking"),
+  );
+
+  it("is extracted from the source (guards the assertions below)", () => {
+    expect(src).toContain("withAdminContext");
+    expect(src).toContain("select capacity from classes");
+  });
+
+  // Admin context bypasses RLS, so the member lookup must carry the tenant
+  // predicate itself — otherwise it reads any tenant's member row by id.
+  it("reads membership_status scoped to the tenant", () => {
+    expect(src).toMatch(
+      /select membership_status from member where id = \$1 and tenant_id = \$2/,
+    );
+  });
+
+  // An allowlist fails closed. A blocklist (`=== 'expired' || === 'cancelled'`)
+  // would silently make any future status bookable.
+  it("allows only 'active' rather than enumerating blocked statuses", () => {
+    expect(src).toContain('membership_status !== "active"');
+  });
+
+  // The gate must precede `select … for update`: a member who cannot book
+  // should never hold the lock that serializes everyone else on that class.
+  it("runs before the class row is locked", () => {
+    expect(src.indexOf("membership_status")).toBeLessThan(src.indexOf("for update"));
+  });
+
+  it("falls back to a real message for an unrecognised status", () => {
+    expect(src).toContain("?? BOOKING_BLOCKED_GENERIC");
+  });
+
+  // Wording matters for exactly one status: a freeze keeps the portal, and
+  // saying otherwise at the highest-churn moment is the churn.
+  it("tells a frozen member the portal still works", () => {
+    expect(CLASSES_SRC).toMatch(/frozen:[\s\S]{0,200}paused/);
+    expect(CLASSES_SRC).toMatch(/frozen:[\s\S]{0,200}training programs are still here/);
+  });
+});
+
 describe("cancelBooking", () => {
   // Callers must email whoever moved up; a `promotedMemberId`-style scalar
   // would silently drop the extra members a multi-spot promotion can free.

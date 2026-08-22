@@ -1,4 +1,5 @@
 import { DEMO_ACCOUNTS, DEMO_ACCOUNTS_CAVEAT } from "@/lib/demo-accounts";
+import { DemoSignInButton } from "./DemoSignInButton";
 
 /**
  * The demo credentials for ONE sign-in surface, rendered under its form.
@@ -12,13 +13,18 @@ import { DEMO_ACCOUNTS, DEMO_ACCOUNTS_CAVEAT } from "@/lib/demo-accounts";
  * accounts this form actually accepts: a tester on `/portal/login` is shown the
  * member account, not the two staff accounts that would fail against it.
  *
- * Presentational and static: no hooks, no `"use client"` of its own, no
- * database or network call. It is imported by client components, so it must
- * stay free of anything server-only — `lib/demo-accounts` is deliberately
- * `lib/db`-free for exactly this reason — and it renders in the server pass of
- * both forms, which means the credentials are on screen even when auth or the
- * database is down. That is precisely when someone is most likely to be looking
- * for them.
+ * The credentials themselves are static: no hooks here, no database or network
+ * call. It is imported by client components, so it must stay free of anything
+ * server-only — `lib/demo-accounts` is deliberately `lib/db`-free for exactly
+ * this reason — and the list renders in the server pass of both forms, which
+ * means the credentials are on screen even when auth or the database is down.
+ * That is precisely when someone is most likely to be looking for them.
+ *
+ * Each account also gets a `DemoSignInButton`, so the account can be used with
+ * one click instead of by copying two strings into the form above. That button
+ * is the only client-side part of this, and it is self-contained (it carries its
+ * own action state), so it changes nothing about how the credentials render when
+ * the services behind them are unavailable.
  *
  * Both this and the landing page read the one shared list, so
  * `test/demo-accounts.test.ts` (which pins that list to `scripts/seed.mjs`'s
@@ -48,7 +54,7 @@ export function DemoSignInHint({ href }: { href: "/login" | "/portal/login" }) {
 
       <ul className="flex flex-col gap-2">
         {accounts.map((account) => (
-          <li key={account.email} className="flex flex-col gap-1">
+          <li key={account.email} className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
               {/* `<code>` so a password containing `!` can be selected and
                   copied without smart quotes or a mid-token line break. */}
@@ -65,6 +71,12 @@ export function DemoSignInHint({ href }: { href: "/login" | "/portal/login" }) {
             <p className="text-xs text-slate-500">
               {account.role} — {account.blurb}
             </p>
+            {/* The credentials above stay visible for anyone who wants to type
+                them; this is the same sign-in without the copying. */}
+            <DemoSignInButton
+              email={account.email}
+              label={`Sign in as ${account.role}`}
+            />
           </li>
         ))}
       </ul>

@@ -3,7 +3,7 @@
 import type { PoolClient } from "pg";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { validateMemberInput } from "@/lib/members";
 import {
@@ -16,6 +16,11 @@ import { captureException, reportHandledError } from "@/lib/observability/monito
 import { anonymiseMember, exportMemberData } from "@/lib/gdpr/export";
 import { generateUniquePinCode } from "@/lib/checkin";
 import { isUuid, sniffImageType, validatePhotoUpload } from "@/lib/member-photo";
+import {
+  completeMemberTask,
+  createMemberTask,
+  validateMemberTaskInput,
+} from "@/lib/member-tasks";
 
 /**
  * Staff-facing member mutations (mvp-member-management-001/003).
@@ -50,7 +55,7 @@ export async function createMemberAction(
   _prev: MemberFormState,
   formData: FormData,
 ): Promise<MemberFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const parsed = validateMemberInput({
     fullName: formData.get("fullName"),
@@ -127,7 +132,7 @@ export async function updateMemberAction(
   _prev: MemberFormState,
   formData: FormData,
 ): Promise<MemberFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing member id." };
@@ -156,17 +161,23 @@ export async function updateMemberAction(
     membershipStatus,
   } = parsed.value;
 
-  let updated: number;
+  let updated: number | "erased";
   try {
     updated = await withTenantContext(session.identity, async (c) => {
       // Read the prior status first so we only log an event when it changes.
       const prev = (
-        await c.query<{ status: string }>(
-          "select status from member where id = $1",
+        await c.query<{ status: string; erased_at: string | null }>(
+          "select status, erased_at from member where id = $1",
           [id],
         )
       ).rows[0];
       if (!prev) return 0;
+      // An erased member is a tombstone, not a record staff may keep editing:
+      // saving this form would write the subject's name and contact details
+      // straight back into a row they exercised their right to erasure over.
+      // Enforced HERE (the write path), not only by hiding the form — the
+      // Server Action is reachable regardless of what the page renders.
+      if (prev.erased_at) return "erased" as const;
 
       const res = await c.query(
         `update member
@@ -174,7 +185,7 @@ export async function updateMemberAction(
                 notes = $6, photo_url = $7, emergency_contact_name = $8,
                 emergency_contact_phone = $9, membership_status = $10,
                 updated_at = now()
-          where id = $1`,
+          where id = $1 and erased_at is null`,
         [
           id,
           fullName,
@@ -213,6 +224,12 @@ export async function updateMemberAction(
     return { error: "Could not save changes. Please try again." };
   }
 
+  if (updated === "erased") {
+    return {
+      error:
+        "This member has been erased. Their record cannot be edited — restoring personal data to it would undo the erasure.",
+    };
+  }
   // RLS makes a cross-tenant id silently match nothing.
   if (updated === 0) return { error: "Member not found." };
 
@@ -247,19 +264,26 @@ export async function sendInviteAction(
   _prev: InviteState,
   formData: FormData,
 ): Promise<InviteState> {
-  const session = await requireStaff();
+  const session = await requireCapability("invites.manage");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return { error: "Missing member id." };
 
   // Resolve the member (RLS-scoped) — must have an email to be invited.
-  let member: { email: string | null; full_name: string } | null;
+  let member: {
+    email: string | null;
+    full_name: string;
+    erased_at: string | null;
+  } | null;
   try {
     member = await withTenantContext(session.identity, async (c) => {
-      const { rows } = await c.query<{ email: string | null; full_name: string }>(
-        "select email, full_name from member where id = $1",
-        [memberId],
-      );
+      const { rows } = await c.query<{
+        email: string | null;
+        full_name: string;
+        erased_at: string | null;
+      }>("select email, full_name, erased_at from member where id = $1", [
+        memberId,
+      ]);
       return rows[0] ?? null;
     });
   } catch (err) {
@@ -270,6 +294,12 @@ export async function sendInviteAction(
     return { error: "Could not load the member. Please try again." };
   }
   if (!member) return { error: "Member not found." };
+  // Checked before the missing-email branch so an erased member gets the real
+  // reason rather than "add an email address" — their address was removed on
+  // purpose, and re-adding one to invite them would undo the erasure.
+  if (member.erased_at) {
+    return { error: "This member has been erased and cannot be invited." };
+  }
   if (!member.email) {
     return { error: "Add an email address to this member before inviting them." };
   }
@@ -403,7 +433,7 @@ export async function revokeInviteAction(
   _prev: InviteState,
   formData: FormData,
 ): Promise<InviteState> {
-  const session = await requireStaff();
+  const session = await requireCapability("invites.manage");
 
   const inviteId = String(formData.get("inviteId") ?? "");
   const memberId = String(formData.get("memberId") ?? "");
@@ -444,13 +474,23 @@ export async function revokeInviteAction(
  * theirs and asks for a new one.
  */
 export async function regeneratePinAction(formData: FormData): Promise<void> {
-  const session = await requireStaff();
+  // The PIN is a check-in credential, so this belongs to whoever runs the desk
+  // — including a front-desk account, which is usually the one being asked.
+  const session = await requireCapability("checkin");
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return;
 
-  await withTenantContext(session.identity, (c) =>
-    generateUniquePinCode(c, session.identity.tenantId, memberId),
-  );
+  await withTenantContext(session.identity, async (c) => {
+    // Erasure deliberately clears the PIN and rotates the QR token so an erased
+    // member loses kiosk access; handing them a fresh PIN would put them back on
+    // the check-in feed under a tombstoned name.
+    const live = await c.query(
+      "select 1 from member where id = $1 and erased_at is null",
+      [memberId],
+    );
+    if ((live.rowCount ?? 0) === 0) return;
+    await generateUniquePinCode(c, session.identity.tenantId, memberId);
+  });
 
   revalidatePath(`/dashboard/members/${memberId}`);
 }
@@ -473,7 +513,7 @@ export type PhotoActionState = { error?: string; success?: string };
 export async function uploadMemberPhotoAction(
   formData: FormData,
 ): Promise<PhotoActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
@@ -501,8 +541,14 @@ export async function uploadMemberPhotoAction(
     saved = await withTenantContext(session.identity, async (c) => {
       // RLS makes a member outside this gym invisible, so this doubles as the
       // authorisation check — and turns the composite-FK violation that would
-      // otherwise follow into a clean "not found".
-      const found = await c.query("select 1 from member where id = $1", [memberId]);
+      // otherwise follow into a clean "not found". `erased_at is null` is part
+      // of the same check for the same reason: a photograph is the most
+      // identifying data here, and erasure deletes it — re-uploading one to an
+      // erased record would silently undo that.
+      const found = await c.query(
+        "select 1 from member where id = $1 and erased_at is null",
+        [memberId],
+      );
       if ((found.rowCount ?? 0) === 0) return false;
 
       await c.query(
@@ -540,7 +586,7 @@ export async function uploadMemberPhotoAction(
 export async function removeMemberPhotoAction(
   formData: FormData,
 ): Promise<PhotoActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
@@ -563,9 +609,10 @@ export async function removeMemberPhotoAction(
 }
 
 // ---------------------------------------------------------------------------
-// GDPR data-subject rights (beta-gdpr-001/002). Both actions are staff-gated via
-// requireStaff() and run through the RLS-scoped client, so a cross-tenant id is
-// invisible — the export/erasure simply finds no subject.
+// GDPR data-subject rights (beta-gdpr-001/002). Both actions require the
+// `gdpr.manage` capability — owner and trainer, never front desk — and run
+// through the RLS-scoped client, so a cross-tenant id is invisible: the
+// export/erasure simply finds no subject.
 
 export type ExportActionResult =
   | { ok: true; filename: string; json: string }
@@ -580,7 +627,7 @@ export type ExportActionResult =
 export async function exportMemberAction(
   memberId: string,
 ): Promise<ExportActionResult> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
   if (!memberId) return { ok: false, error: "Missing member id." };
 
   let json: string;
@@ -614,7 +661,7 @@ export async function eraseMemberAction(
   _prev: EraseActionState,
   formData: FormData,
 ): Promise<EraseActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return { error: "Missing member id." };
@@ -642,6 +689,79 @@ export async function eraseMemberAction(
       ? "This member was already erased."
       : "Member erased. Their personal data has been anonymised.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Trainer follow-up tasks / reminders (CRM-IDEAS "Apply now" #5). Staff-only —
+// enforced by the `members.write` capability and, as the real boundary, the
+// `member_task_staff_all` RLS policy (migration 0013): a member session cannot
+// read or write this table at all, and a cross-tenant memberId/taskId resolves
+// to no row.
+
+export type MemberTaskState = { error?: string };
+
+/** Add a follow-up task to a member. */
+export async function createMemberTaskAction(
+  _prev: MemberTaskState,
+  formData: FormData,
+): Promise<MemberTaskState> {
+  const session = await requireCapability("members.write");
+
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!memberId) return { error: "Missing member id." };
+
+  const parsed = validateMemberTaskInput({
+    title: formData.get("title"),
+    dueAt: formData.get("dueAt"),
+  });
+  if (!parsed.ok) return { error: parsed.error };
+
+  try {
+    await withTenantContext(session.identity, async (c) => {
+      const createdBy = await staffUserId(c, session.identity.userId);
+      await createMemberTask(session.identity, memberId, parsed.value, createdBy);
+    });
+  } catch (err) {
+    await reportHandledError(err, "create-member-task", {
+      tenantId: session.identity.tenantId,
+      memberId,
+    });
+    return { error: "Could not save the task. Please try again." };
+  }
+
+  revalidatePath(`/dashboard/members/${memberId}`);
+  return {};
+}
+
+/** Mark a follow-up task done. `memberId` is optional and used only to
+ * revalidate the member detail page, mirroring `revokeInviteAction`. */
+export async function completeMemberTaskAction(
+  _prev: MemberTaskState,
+  formData: FormData,
+): Promise<MemberTaskState> {
+  const session = await requireCapability("members.write");
+
+  const taskId = String(formData.get("taskId") ?? "");
+  const memberId = String(formData.get("memberId") ?? "");
+  if (!taskId) return { error: "Missing task id." };
+
+  let updated: number;
+  try {
+    updated = await completeMemberTask(session.identity, taskId);
+  } catch (err) {
+    await reportHandledError(err, "complete-member-task", {
+      tenantId: session.identity.tenantId,
+      taskId,
+    });
+    return { error: "Could not update the task. Please try again." };
+  }
+
+  if (updated === 0) {
+    return { error: "This task was already done or could not be found." };
+  }
+
+  if (memberId) revalidatePath(`/dashboard/members/${memberId}`);
+  return {};
 }
 
 function inviteEmailHtml(name: string, url: string): string {

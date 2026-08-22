@@ -1,9 +1,7 @@
 import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
-import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
-import { recentWorkoutLogs } from "@/lib/workout-logs";
-import { listUpcomingClassesForMember } from "@/lib/classes";
-import { memberMembershipStatus, memberPlansFor, paymentHistoryForMember } from "@/lib/billing";
+import { ThemeToggle } from "@/app/components/ThemeToggle";
+import { loadPortalHome } from "@/lib/portal";
 import { ProgramView } from "./ProgramView";
 import { ProgramHistory } from "./ProgramHistory";
 import { LogWorkout } from "./LogWorkout";
@@ -11,6 +9,8 @@ import { WorkoutHistory } from "./WorkoutHistory";
 import { ClassSchedule } from "./ClassSchedule";
 import { MembershipStatus } from "./MembershipStatus";
 import { PaymentHistory } from "./PaymentHistory";
+import { StreakBadge } from "./StreakBadge";
+import { DataPrivacy } from "./DataPrivacy";
 
 // Session/identity is request-derived; never statically rendered.
 export const dynamic = "force-dynamic";
@@ -37,19 +37,22 @@ export default async function PortalPage() {
   const session = await requireMember();
   const memberId = session.identity.memberId as string;
   // Active program (shown by default), the read-only history of past programs,
-  // the member's recent logged workout sessions (Phase GA), the bookable class
-  // schedule, and the billing/membership data (market gap #8: bookings,
-  // membership status, payment history).
-  const [programs, history, workouts, classes, membershipStatus, plans, paymentHistory] =
-    await Promise.all([
-      loadMemberPortal(session.identity, memberId),
-      archivedPrograms(session.identity, memberId),
-      recentWorkoutLogs(session.identity, memberId),
-      listUpcomingClassesForMember(session.identity, memberId),
-      memberMembershipStatus(session.identity, memberId),
-      memberPlansFor(session.identity, memberId),
-      paymentHistoryForMember(session.identity, memberId),
-    ]);
+  // the member's recent logged workout sessions (Phase GA), their current
+  // logging streak (engagement layer), the bookable class schedule, and the
+  // billing/membership data (market gap #8: bookings, membership status,
+  // payment history) — all fetched in one tenant transaction (see
+  // `loadPortalHome`) rather than 9 separate connections (#32).
+  const {
+    programs,
+    history,
+    workouts,
+    streakDays,
+    classes,
+    membershipStatus,
+    plans,
+    paymentHistory,
+    deletionRequest,
+  } = await loadPortalHome(session.identity, memberId);
 
   // The active programs a member can log a session against (id + name only).
   const activePrograms = programs.map(({ program }) => ({
@@ -79,15 +82,18 @@ export default async function PortalPage() {
             Alpha CRM
           </span>
         </span>
-        <form action={logoutAction}>
-          <input type="hidden" name="redirectTo" value="/portal/login" />
-          <button
-            type="submit"
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-          >
-            Log out
-          </button>
-        </form>
+        <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
+          <form action={logoutAction}>
+            <input type="hidden" name="redirectTo" value="/portal/login" />
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Log out
+            </button>
+          </form>
+        </div>
       </header>
 
       <main
@@ -96,12 +102,16 @@ export default async function PortalPage() {
         className="flex-1 px-4 py-6 focus:outline-none sm:px-6 sm:py-8"
       >
         <ProgramView programs={programs} />
+        <StreakBadge days={streakDays} />
         <LogWorkout programs={activePrograms} />
         <WorkoutHistory logs={workouts} />
         <ProgramHistory programs={history} />
         <ClassSchedule classes={classes} />
         <MembershipStatus membershipStatus={membershipStatus} plans={plans} />
         <PaymentHistory events={paymentHistory} />
+        {/* Last on the page on purpose: it is the one destructive control a
+            member has, and it belongs below everything they came here to do. */}
+        <DataPrivacy request={deletionRequest} />
       </main>
     </div>
   );

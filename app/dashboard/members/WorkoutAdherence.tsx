@@ -12,7 +12,7 @@ import {
  * being a one-way broadcast: a summary (last active, recent count, total) plus
  * the member's most recent sessions. Staff never write a member's log — this is
  * presentation only and the page owns the RLS-scoped read, mirroring
- * `StatusHistory` / `ProgramHistory`. That keeps it unit-testable without a
+ * `Timeline` / `ProgramHistory`. That keeps it unit-testable without a
  * session or database, and imports stay relative for the same reason.
  */
 function formatDate(iso: string): string {

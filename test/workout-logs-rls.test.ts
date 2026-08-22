@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../scripts/migrate.mjs";
-import { closePool, type Identity } from "../lib/db";
+import { closePool, withTenantContext, type Identity } from "../lib/db";
 import {
   logWorkout,
   memberAdherence,
   recentWorkoutLogs,
+  workoutStreakDays,
 } from "../lib/workout-logs";
 import { withAdminContext } from "../lib/db";
 
@@ -194,5 +195,89 @@ describe.skipIf(!hasDb)("workout-log isolation", () => {
     const crossTenant = await memberAdherence(staff(seed.gymB), seed.memberA1);
     expect(crossTenant.totalSessions).toBe(0);
     expect(crossTenant.lastCompletedAt).toBeNull();
+  });
+
+  // Regression coverage for migration 0018: GDPR erasure (`anonymiseMember`)
+  // scrubs a member's workout_log note, which requires staff UPDATE privilege
+  // on that ONE column — previously missing entirely (permission denied for
+  // table workout_log on every erasure request; see the migration's header).
+  it("staff can scrub the note column on their own gym's log (the erasure path)", async () => {
+    const before = (
+      await recentWorkoutLogs(staff(seed.gymA), seed.memberA1)
+    )[0];
+    expect(before.note).toBe("felt strong");
+
+    await withTenantContext(staff(seed.gymA), (c) =>
+      c.query("update workout_log set note = null where member_id = $1", [
+        seed.memberA1,
+      ]),
+    );
+
+    const after = (await recentWorkoutLogs(staff(seed.gymA), seed.memberA1))[0];
+    expect(after.note).toBeNull();
+  });
+
+  it("staff cannot update any OTHER column via the note-only grant", async () => {
+    await expect(
+      withTenantContext(staff(seed.gymA), (c) =>
+        c.query("update workout_log set effort = 1 where member_id = $1", [
+          seed.memberA1,
+        ]),
+      ),
+    ).rejects.toThrow(/permission denied for table workout_log/);
+  });
+
+  it("staff cannot scrub another gym's log (cross-tenant)", async () => {
+    const res = await withTenantContext(staff(seed.gymB), (c) =>
+      c.query("update workout_log set note = null where member_id = $1", [
+        seed.memberA1,
+      ]),
+    );
+    expect(res.rowCount).toBe(0);
+  });
+
+  it("a member session still cannot update any log, including their own", async () => {
+    const res = await withTenantContext(member(seed.gymA, seed.memberA1), (c) =>
+      c.query("update workout_log set note = 'edited' where member_id = $1", [
+        seed.memberA1,
+      ]),
+    );
+    expect(res.rowCount).toBe(0);
+  });
+
+  it("computes a member's current streak from their own real logs", async () => {
+    // logWorkout always stamps completed_at = now(), so to exercise the
+    // multi-day streak math against real rows we seed historical timestamps
+    // directly (mirrors the GDPR/erasure tests' use of withAdminContext).
+    const today = new Date();
+    const daysAgo = (n: number) => {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - n);
+      return d.toISOString();
+    };
+
+    await withAdminContext(async (c) => {
+      for (const iso of [daysAgo(0), daysAgo(1), daysAgo(2)]) {
+        await c.query(
+          "insert into workout_log (tenant_id, member_id, program_id, completed_at) values ($1,$2,$3,$4)",
+          [seed.gymA, seed.memberA2, seed.progA2, iso],
+        );
+      }
+    });
+
+    const streak = await workoutStreakDays(
+      member(seed.gymA, seed.memberA2),
+      seed.memberA2,
+    );
+    expect(streak).toBe(3);
+
+    // Cross-tenant / another member's id yields 0, not an error (RLS).
+    const crossTenant = await workoutStreakDays(staff(seed.gymB), seed.memberA2);
+    expect(crossTenant).toBe(0);
+    const otherMember = await workoutStreakDays(
+      member(seed.gymA, seed.memberA1),
+      seed.memberA2,
+    );
+    expect(otherMember).toBe(0);
   });
 });

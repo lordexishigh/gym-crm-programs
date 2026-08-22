@@ -6,6 +6,21 @@ on:
     branches: [master, main]
   pull_request:
 
+# One in-flight run per branch. This job is expensive — a Postgres service, a
+# full build and a Playwright e2e pass, several minutes of billable time — and
+# without this, every push to a PR left its predecessor running to completion.
+# Rebasing the open PRs in one go therefore started ~11 simultaneous full runs
+# and exhausted the account's Actions spending limit, after which GitHub refused
+# to start ANY job for hours. Superseded PR runs prove nothing, so cancel them.
+#
+# Only for pull_request: pushes to master are cancel-in-progress: false by
+# omission from this expression, because master's run is what deploy.yml's
+# gating and the branch's own history depend on — losing it to a rapid second
+# merge would leave a commit with no verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -221,8 +236,20 @@ jobs:
         #                              covered only by isolated unit tests)
         run: npm run test:e2e
 
-      - name: Upload Playwright report on failure
-        if: failure()
+      - name: Upload Playwright report (every run)
+        # Was `if: failure()`. That is right for a report you read to explain a
+        # failure, and wrong for one that carries DIAGNOSTIC attachments: the
+        # Server Action recorder (e2e/action-trace.ts) attaches the flight
+        # payload on every journey, and #26 is intermittent — so the runs where
+        # the payload is healthy are precisely the baseline needed to recognise
+        # an unhealthy one, and those runs are green.
+        #
+        # It also made the recorder unfalsifiable: a green run produced no
+        # artifact, so "the recorder works" could not be confirmed without
+        # waiting for the bug to reproduce. Three rounds were spent on that.
+        #
+        # `always()` rather than `success()` so a failing run still uploads.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -280,11 +307,40 @@ jobs:
           # Signal the wrapper by its stable script path, not bash's `$!` (that's
           # `npm`, which never forwards SIGTERM to the script it runs). See the
           # smoke-test step above for the reproduction and full explanation.
+          #
+          # …and then WAIT for them to actually die. `pkill` sends SIGTERM and
+          # returns immediately, so without this the step exits while a signalled
+          # `next dev` is still running, and the NEXT step's first command is
+          # `rm -rf .next`. A dev server writes into `.next` continuously, so `rm`
+          # walks a directory that is still gaining files and fails with
+          # "Directory not empty" — which is exactly how the postinstall step
+          # died the first time it ever got to run, having been skipped behind a
+          # failing journey on every previous build.
+          #
+          # Waiting on the PORT alone (what the smoke-test step does) is not
+          # enough here: this step's server is `next dev`, and the writes that
+          # break `rm` continue until the PROCESS exits, which is strictly later
+          # than the listener closing. So poll the process table, and fall back
+          # to the port check for a wrapper that died some other way.
           stop_server() {
             pkill -f "node scripts/start\.mjs" 2>/dev/null || true
             pkill -f "next-server" 2>/dev/null || true
             pkill -f "next dev" 2>/dev/null || true
             kill "$SERVER_PID" 2>/dev/null || true
+
+            for _ in $(seq 1 30); do
+              if ! pgrep -f "node scripts/start\.mjs" >/dev/null 2>&1 \
+                 && ! pgrep -f "next dev" >/dev/null 2>&1 \
+                 && ! curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            # Escalate rather than hand the next step a directory being written.
+            pkill -9 -f "node scripts/start\.mjs" 2>/dev/null || true
+            pkill -9 -f "next dev" 2>/dev/null || true
+            sleep 2
+            echo "::warning::fresh-clone teardown needed SIGKILL; a dev server outlived SIGTERM by 30s"
           }
 
           # Deliberately far tighter than a full build: ~4x the measured cold dev

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { WebVitals } from "./WebVitals";
+import { THEME_INIT_SCRIPT } from "./components/ThemeToggle";
 import { siteBaseUrl } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -27,6 +28,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/*
+          Applies the saved theme before first paint. Must be inline and must run
+          ahead of the body, or a light-mode user gets a dark flash on every
+          load. See app/components/ThemeToggle.tsx for why it ignores the OS
+          preference.
+        */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="min-h-screen">
         {children}
         {/* Measures Core Web Vitals against the mobile performance budget. */}

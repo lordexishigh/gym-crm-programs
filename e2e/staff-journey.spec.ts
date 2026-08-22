@@ -2,6 +2,11 @@ import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { captureResponsive } from "./capture";
+import {
+  attachHydrationState,
+  flushFlightRecords,
+  recordServerActionResponses,
+} from "./action-trace";
 
 /**
  * Journey test: staff sign-in → dashboard → add a member → author a program →
@@ -112,12 +117,33 @@ async function signInAsStaff(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Email").fill(staffEmail);
   await page.getByLabel("Password").fill(staffPassword);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  // `exact`: the demo hint under the form also offers "Sign in as Owner" /
+  // "Sign in as Trainer" one-click buttons (app/DemoSignInHint.tsx), which a
+  // substring match resolves to alongside the submit button. This journey signs
+  // in with the credentials IT seeded, so it must press the form's own button.
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
 }
 
 test.describe("staff journey", () => {
   test.skip(!dbUsable, "DATABASE_URL must point at a local throwaway Postgres");
+
+  // Attaches each Server Action's flight payload — the one input issue #26's
+  // retained trace cannot show, since traces store GET bodies but no POST ones.
+  test.beforeEach(async ({ page }) => {
+    // Awaited: the binding and init script must be registered before the first
+    // navigation. Firing them with `void` was one of two candidate reasons the
+    // recorder attached nothing on the run where #26 reproduced.
+    await recordServerActionResponses(page);
+  });
+
+  // Flushed here, not from the callbacks that produce the records: attaching
+  // from an exposeBinding callback or a page event does not reach the report,
+  // which is why three earlier runs produced nothing at all. afterEach still
+  // runs after a failure or timeout — the cases that matter for #26.
+  test.afterEach(async () => {
+    await flushFlightRecords();
+  });
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: DATABASE_URL });
@@ -196,7 +222,11 @@ test.describe("staff journey", () => {
     await expect(page).toHaveURL(/\/dashboard\/members\/new$/);
     await page.getByLabel("Full name").fill(memberName);
     await page.getByLabel("Email").fill(memberEmail);
-    await page.getByRole("button", { name: "Create member" }).click();
+    const createMemberButton = page.getByRole("button", { name: "Create member" });
+    // #26 evidence: was this control actually hydrated at the moment of the
+    // click, or did the click land on a listener-less SSR node?
+    await attachHydrationState("member-create", createMemberButton);
+    await createMemberButton.click();
 
     // The action redirects to the new member's detail page.
     await expect(page).toHaveURL(/\/dashboard\/members\/[0-9a-f-]{36}$/, {
@@ -216,17 +246,32 @@ test.describe("staff journey", () => {
     //    inputs, and finding the values persisted afterwards.
     await page.getByRole("link", { name: "Programs", exact: true }).click();
     await expect(page).toHaveURL(/\/dashboard\/programs$/);
-    await page.getByRole("link", { name: "New program" }).click();
-    await expect(page).toHaveURL(/\/dashboard\/programs\/new$/);
 
-    await page.getByLabel("Program name").fill(programName);
-    await page.getByLabel("Description").fill("Authored by the staff journey.");
-    await page.getByRole("button", { name: "+ Add exercise" }).click();
-    await page.getByLabel("Name", { exact: true }).fill(exerciseName);
-    await page.getByLabel("Sets").fill("4");
-    await page.getByLabel("Reps").fill("6");
-    await page.getByLabel("Rest").fill("150s");
-    await page.getByRole("button", { name: "Create program" }).click();
+    // Authoring now opens in a dialog on the list page rather than navigating to
+    // /dashboard/programs/new (feedback-2026-08: "make all the create X pages
+    // into a popup, so the user never leaves the main data"). The route still
+    // exists and still renders the same builder — it is just no longer the way
+    // the CTA gets there, so this drives the dialog instead.
+    await page.getByRole("button", { name: "New program" }).click();
+    const builder = page.getByRole("dialog", { name: "New program" });
+    await expect(builder).toBeVisible();
+    // Still on the list — that is the point of the change.
+    await expect(page).toHaveURL(/\/dashboard\/programs$/);
+
+    // Scoped to the dialog so these can never accidentally resolve against the
+    // list behind it.
+    await builder.getByLabel("Program name").fill(programName);
+    await builder
+      .getByLabel("Description")
+      .fill("Authored by the staff journey.");
+    await builder.getByRole("button", { name: "+ Add exercise" }).click();
+    await builder.getByLabel("Name", { exact: true }).fill(exerciseName);
+    await builder.getByLabel("Sets").fill("4");
+    await builder.getByLabel("Reps").fill("6");
+    await builder.getByLabel("Rest").fill("150s");
+    const createProgramButton = builder.getByRole("button", { name: "Create program" });
+    await attachHydrationState("program-create", createProgramButton);
+    await createProgramButton.click();
 
     // Redirects to the new program's detail page, which re-reads it from the DB.
     await expect(page).toHaveURL(/\/dashboard\/programs\/[0-9a-f-]{36}$/, {
@@ -250,7 +295,11 @@ test.describe("staff journey", () => {
     });
     await expect(assignPanel).toContainText("Not assigned to anyone yet.");
     await assignPanel.getByLabel("Member").selectOption({ label: memberName });
-    await assignPanel.getByRole("button", { name: "Assign" }).click();
+    const assignButton = assignPanel.getByRole("button", { name: "Assign" });
+    // Comment 2026-08-13 on #26: assignment once produced no Server Action
+    // request at all — the shape an un-hydrated control would produce.
+    await attachHydrationState("assign", assignButton);
+    await assignButton.click();
     await expect(assignPanel.getByText("Program assigned.")).toBeVisible({
       timeout: 30_000,
     });
@@ -276,8 +325,14 @@ test.describe("staff journey", () => {
     await expect(page).toHaveURL(/\/dashboard$/);
     const kpis = page.locator('section[aria-label="Gym at a glance"]');
     await expect(kpis).toContainText("1 active");
-    await expect(kpis).toContainText("of 1 total");
     await expect(kpis).toContainText("Programs in members' hands");
+
+    // The old "Active members" tile (hint: "of 1 total") is gone — it restated
+    // the two numbers the Members tile already shows and read as live presence
+    // while meaning membership status. Its slot now holds real occupancy, which
+    // is 0 here because this journey never checks anyone in at the kiosk.
+    const occupancy = kpis.getByRole("link", { name: /In the gym now/ });
+    await expect(occupancy).toContainText("0");
 
     // 7. Log out — the session ends and the dashboard is gated again.
     await page.getByRole("button", { name: "Log out" }).click();
@@ -295,7 +350,9 @@ test.describe("staff journey", () => {
     await page.goto("/portal/login");
     await page.getByLabel("Email").fill(staffEmail);
     await page.getByLabel("Password").fill(staffPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    // Exact, for the same reason as `signInAsStaff`: the portal form's demo hint
+    // carries its own "Sign in as Member" button.
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(
       page.getByText("This is a staff account — please use the staff sign-in page."),

@@ -62,7 +62,12 @@ export function register(): void {
           new Promise((resolve) => {
             const child = spawn(process.execPath, [script], {
               cwd: process.cwd(),
-              env: process.env,
+              // The deployed app migrating its own database is the third sanctioned
+              // remote migration, alongside the deploy workflow and scripts/deploy.mjs.
+              // scripts/migrate.mjs refuses a non-local target without this, which would
+              // otherwise turn the boot-time migration into a hard failure in production —
+              // exactly the environment it exists for.
+              env: { ...process.env, ALLOW_REMOTE_MIGRATE: "1" },
               stdio: ["ignore", "pipe", "pipe"],
             });
             let out = "";

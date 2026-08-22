@@ -21,8 +21,10 @@ import { describe, expect, it } from "vitest";
  *     of `middleware.ts` would defeat the session gate on /dashboard and
  *     /portal, which is the outer layer of this app's tenant isolation.
  *
- * The project is on the patched 15.5.21 and `npm audit` is clean. This suite
- * exists so it *stays* there. The realistic regression is not someone typing a
+ * The project is on the 15.5.x Maintenance LTS line, at or above that patched
+ * release, and `npm audit` is clean. (The transitive packages that audit also
+ * flags have their own floors in test/dependency-security-floor.test.ts.) This
+ * suite exists so it *stays* there. The realistic regression is not someone typing a
  * downgrade on purpose — it is a revert. Reverting a range of commits that
  * happens to touch package.json/package-lock.json would move Next back below
  * the floor silently, and nothing else in CI inspects the dependency version.

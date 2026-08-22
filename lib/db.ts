@@ -1,12 +1,15 @@
 import { Pool, type PoolClient } from "pg";
+// Type-only: `lib/permissions` is pure (no DB), so this cannot cycle back.
+import type { StaffRole } from "./permissions";
 
 /**
  * Database access with tenant/member isolation enforced at the Postgres layer.
  *
  * The connection itself is a privileged (migration/admin) role. Tenant-scoped
  * work runs inside a transaction that:
- *   1. sets transaction-local GUCs (`app.tenant_id`, `app.role`, `app.user_id`,
- *      `app.member_id`) from the *server-verified* identity, and
+ *   1. sets transaction-local GUCs (`app.tenant_id`, `app.role`,
+ *      `app.staff_role`, `app.user_id`, `app.member_id`) from the
+ *      *server-verified* identity, and
  *   2. drops to the non-owner `app_user` role via `SET LOCAL ROLE`.
  *
  * Because `app_user` neither owns the tables nor is a superuser, Row Level
@@ -22,6 +25,18 @@ export type Identity = {
   tenantId: string;
   /** Which audience the session belongs to. */
   role: "staff" | "member";
+  /**
+   * The staff member's job role ("owner" | "trainer" | "front_desk"), resolved
+   * server-side from their `users` row by `requireStaff` (see lib/staff.ts).
+   *
+   * Unlike `role`, this does NOT come from the JWT — the token only carries the
+   * staff/member audience — so it is absent on any path that has not looked it
+   * up. Absent means "unrestricted staff": the role-scoped RLS policies added in
+   * 0026 only bite when it is present and equal to 'front_desk', so forgetting
+   * it can never silently WIDEN a front-desk session's reach beyond what the
+   * application guard already allowed it to reach.
+   */
+  staffRole?: StaffRole | null;
   /** Staff user id (present for staff sessions). */
   userId?: string | null;
   /** Member id (present for member sessions; enables per-member row scoping). */
@@ -274,6 +289,11 @@ async function runTenantTransaction<T>(
     ]);
     await client.query("SELECT set_config('app.role', $1, true)", [
       identity.role,
+    ]);
+    // Empty when unresolved — 0026's restrictive policies test for the literal
+    // 'front_desk', so '' behaves exactly like owner/trainer.
+    await client.query("SELECT set_config('app.staff_role', $1, true)", [
+      identity.staffRole ?? "",
     ]);
     await client.query("SELECT set_config('app.user_id', $1, true)", [
       identity.userId ?? "",

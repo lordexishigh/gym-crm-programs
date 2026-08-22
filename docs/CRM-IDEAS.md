@@ -65,8 +65,14 @@ Tags: **Impact** (member retention / trainer daily value) × **Effort** (for our
 3. **Per-exercise set logging (actual sets/reps/weight) + simple PRs.** **Impact: High · Effort: Med-Low.**
    Extend `WorkoutLogInput` beyond session-level effort/note to per-exercise actuals (closes `ga-engagement-002`). This is the heart of Trainerize's value: members logging real numbers, and the resulting **personal-record** highlight ("new best on Squat") is the single highest-retention, lowest-cost motivator. Server Action + new child table, RLS via existing `(id, tenant_id)` FK pattern.
 
-4. **Member-detail activity timeline.** **Impact: Med · Effort: Low.**
-   We already render `StatusHistory` and `ProgramHistory` separately; merge them into one HubSpot-style chronological timeline (assigned program, logged workout, status change, invite events). Reuses already-fetched data; mostly a presentational component.
+4. ~~**Member-detail activity timeline.**~~ **Done (2026-07-24).**
+   The member detail page now shows one HubSpot-style chronological `Timeline`
+   (`app/dashboard/members/Timeline.tsx`) merging status changes, program
+   assignments, invite sent/accepted events, and logged workouts — replacing the
+   narrower `StatusHistory` section it superseded. The merge/sort is a pure
+   function (`lib/timeline.ts`, `buildMemberTimeline`), unit-tested in isolation;
+   no schema or RLS change (it's a new read-only view over already-RLS-scoped
+   data staff could already read).
 
 5. **Trainer follow-up tasks / reminders on a member.** **Impact: Med · Effort: Low-Med.**
    Borrow HubSpot's lightweight Tasks: a trainer can leave a "check in with X by Friday" note on a member, with a "Due today / Overdue" view. Closes the loop after the at-risk signal flags someone. New `task` table (tenant + member scoped, RLS), Server Actions.
@@ -78,6 +84,16 @@ Tags: **Impact** (member retention / trainer daily value) × **Effort** (for our
 
 7. **Member portal engagement layer: streaks & badges.** **Impact: High · Effort: Med.**
    Trainerize/Glofox lean hard on habit streaks and milestone badges because they measurably reduce early drop-off. Built on our logging data, this is computed server-side and rendered in the mobile portal — no native app required. Cheap psychology, high stickiness.
+   **Partially done (2026-07-27):** the current-streak half is shipped — `workoutStreakDays`
+   (`lib/workout-logs.ts`) counts a member's consecutive logged days (pure calendar-day
+   bucketing, unit-tested) and a `StreakBadge` (`app/portal/StreakBadge.tsx`) shows it in
+   the portal. No schema or RLS change — it's a read-only aggregate over `workout_log`
+   under the existing `workout_log_member_select` policy. **Streak-milestone badges shipped
+   (2026-08-14):** `streakMilestoneReached`/`nextStreakMilestone` (`lib/workout-logs.ts`)
+   are pure lookups over a fixed milestone list (3/7/14/30/60/100/180/365 days);
+   `StreakBadge` switches to a celebratory style on a milestone day and otherwise hints how
+   many days remain to the next one. PR-style callouts remain open — they need per-exercise
+   weight data that doesn't exist yet (see `docs/RISKY-DEFERRED.md` item B).
 
 8. **Saved roster views + faster trainer navigation.** **Impact: Med · Effort: Med.**
    Our roster state already lives in the URL (shareable/back-button friendly) — extend to named saved views ("At-risk", "New this month") and consider a command-palette jump-to-member (Linear-style) to feel modern next to "dated" incumbents.

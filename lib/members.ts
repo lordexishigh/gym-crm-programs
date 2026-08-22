@@ -222,12 +222,22 @@ function escapeLike(s: string): string {
  * given filters. Param placeholders start at `$1`; the caller appends limit /
  * offset placeholders after `params.length`. No tenant predicate is added —
  * RLS (`member_staff_all`) scopes rows to the current gym.
+ *
+ * `erased_at is null` is UNCONDITIONAL and not a filter the UI can turn off.
+ * A member who exercised their right to erasure (beta-gdpr-002) keeps their row
+ * so the assignments and logs referencing it stay valid, but the row now holds
+ * only a tombstone — showing "Erased member" in the roster would be a list of
+ * people the gym is no longer allowed to hold, and clicking one leads nowhere
+ * useful. It belongs here, in the ONE query the roster count and the roster list
+ * share, rather than in each view: a filter added per-view is a filter the next
+ * view forgets. (The tombstoned record itself is still reachable directly at
+ * /dashboard/members/[id], which is where the erasure is evidenced.)
  */
 export function memberRosterWhere(filters: RosterFilters): {
   clause: string;
   params: unknown[];
 } {
-  const conds: string[] = [];
+  const conds: string[] = ["erased_at is null"];
   const params: unknown[] = [];
 
   if (filters.q) {
@@ -239,8 +249,7 @@ export function memberRosterWhere(filters: RosterFilters): {
     conds.push(`status = $${params.length}`);
   }
 
-  const clause = conds.length > 0 ? `where ${conds.join(" and ")}` : "";
-  return { clause, params };
+  return { clause: `where ${conds.join(" and ")}`, params };
 }
 
 /** Total number of pages for `total` matching rows (always >= 1). */

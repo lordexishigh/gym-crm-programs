@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import {
   validateClassInput,
   createClass,
@@ -27,7 +27,7 @@ export async function createClassAction(
   _prev: ClassFormState,
   formData: FormData,
 ): Promise<ClassFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
 
   const parsed = validateClassInput({
     name: formData.get("name"),
@@ -58,19 +58,28 @@ export async function createClassAction(
  * committed, so a mail outage must never surface as a failed cancellation or
  * roll anything back — it is reported and swallowed.
  *
+ * Returns HOW MANY were actually emailed, which the caller needs in order to
+ * describe the outcome honestly. This used to return void, so the only thing
+ * `promoteFromWaitlistAction` could do was assert "…and emailed" unconditionally
+ * — true on a good day, and a flat lie on a deployment with no mail provider,
+ * with a rejected send, or for a member with no address on file. Swallowing a
+ * failure is fine; claiming it did not happen is not.
+ *
  * Not exported: a "use server" module may only export async server actions, and
  * this is an internal helper, not a form target.
  */
 async function deliverPromotionEmails(
   tenantId: string,
   promoted: PromotedBooking[],
-): Promise<void> {
-  if (promoted.length === 0) return;
+): Promise<number> {
+  if (promoted.length === 0) return 0;
   try {
-    const notified = await notifyWaitlistPromotions(promoted);
-    await markPromotionNotified(tenantId, notified);
+    const notify = await notifyWaitlistPromotions(promoted);
+    await markPromotionNotified(tenantId, notify.notified);
+    return notify.emailed;
   } catch (err) {
     await reportHandledError(err, "waitlist-promotion-notify", { tenantId });
+    return 0;
   }
 }
 
@@ -80,7 +89,7 @@ async function deliverPromotionEmails(
  * emails them — the front desk does not have to chase anyone manually.
  */
 export async function staffCancelBookingAction(formData: FormData): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
   const bookingId = String(formData.get("bookingId") ?? "");
   if (!bookingId) return;
 
@@ -117,7 +126,7 @@ export async function promoteFromWaitlistAction(
   _prev: PromoteWaitlistState,
   formData: FormData,
 ): Promise<PromoteWaitlistState> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
   const classId = String(formData.get("classId") ?? "");
   if (!classId) return { error: "Missing class." };
 
@@ -132,7 +141,7 @@ export async function promoteFromWaitlistAction(
     return { error: "Could not promote from the waitlist. Please try again." };
   }
 
-  await deliverPromotionEmails(session.identity.tenantId, promoted);
+  const emailed = await deliverPromotionEmails(session.identity.tenantId, promoted);
 
   revalidatePath(`/dashboard/classes/${classId}`);
   revalidatePath("/dashboard/classes");
@@ -140,11 +149,31 @@ export async function promoteFromWaitlistAction(
   if (promoted.length === 0) {
     return { success: "No open spots to fill — the class is full." };
   }
+  return { success: promotionOutcome(promoted, emailed) };
+}
+
+/**
+ * Describe a promotion batch in terms of what actually reached the members.
+ *
+ * The promotion always happened — it is committed before this runs, and it shows
+ * in the member's portal either way. The email may not have, so the two are
+ * reported separately, and whenever someone was NOT reached the message says who
+ * the front desk has to chase. Telling staff "and emailed" when nothing was sent
+ * is worse than saying nothing: they stop looking.
+ */
+function promotionOutcome(promoted: PromotedBooking[], emailed: number): string {
   const names = promoted.map((p) => p.member_name).join(", ");
-  return {
-    success:
-      promoted.length === 1
-        ? `${names} was moved off the waitlist and emailed.`
-        : `${promoted.length} members were moved off the waitlist and emailed: ${names}.`,
-  };
+
+  if (promoted.length === 1) {
+    return emailed === 1
+      ? `${names} was moved off the waitlist and emailed.`
+      : `${names} was moved off the waitlist, but no email was sent — tell them directly.`;
+  }
+  if (emailed === promoted.length) {
+    return `${promoted.length} members were moved off the waitlist and emailed: ${names}.`;
+  }
+  if (emailed === 0) {
+    return `${promoted.length} members were moved off the waitlist, but no emails were sent — tell them directly: ${names}.`;
+  }
+  return `${promoted.length} members were moved off the waitlist: ${names}. Only ${emailed} could be emailed — tell the rest directly.`;
 }

@@ -65,6 +65,15 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
     blurb: "Builds programs and assigns them to members.",
   },
   {
+    role: "Front desk",
+    email: "frontdesk@demo.local",
+    password: "DemoDesk!2026",
+    href: "/login",
+    surface: "Staff dashboard",
+    blurb:
+      "Checks members in and looks up their visits — no program builder, plans or staff admin.",
+  },
+  {
     role: "Owner",
     email: "owner@demo.local",
     password: "DemoOwner!2026",
