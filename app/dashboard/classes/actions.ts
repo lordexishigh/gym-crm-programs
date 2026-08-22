@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import {
   validateClassInput,
   createClass,
@@ -27,7 +27,7 @@ export async function createClassAction(
   _prev: ClassFormState,
   formData: FormData,
 ): Promise<ClassFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
 
   const parsed = validateClassInput({
     name: formData.get("name"),
@@ -89,7 +89,7 @@ async function deliverPromotionEmails(
  * emails them — the front desk does not have to chase anyone manually.
  */
 export async function staffCancelBookingAction(formData: FormData): Promise<void> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
   const bookingId = String(formData.get("bookingId") ?? "");
   if (!bookingId) return;
 
@@ -126,7 +126,7 @@ export async function promoteFromWaitlistAction(
   _prev: PromoteWaitlistState,
   formData: FormData,
 ): Promise<PromoteWaitlistState> {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.write");
   const classId = String(formData.get("classId") ?? "");
   if (!classId) return { error: "Missing class." };
 

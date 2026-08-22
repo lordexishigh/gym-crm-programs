@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { listUpcomingClasses } from "@/lib/classes";
 import { ScheduleClassButton } from "./ScheduleClassButton";
 
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * booked/waitlisted counts. Any staff member can manage the schedule.
  */
 export default async function ClassesPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("classes.read");
   const classes = await listUpcomingClasses(session.identity);
 
   return (

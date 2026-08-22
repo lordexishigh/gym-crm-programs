@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { isEmailConfigured } from "@/lib/email/resend";
 import { listPendingDeletionRequests } from "@/lib/gdpr/deletion-requests";
 import { DeletionRequestCard } from "./DeletionRequestCard";
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
  * gym's requests invisible.
  */
 export default async function DeletionRequestsPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
   const requests = await listPendingDeletionRequests(session.identity);
 
   const mailReady = isEmailConfigured();

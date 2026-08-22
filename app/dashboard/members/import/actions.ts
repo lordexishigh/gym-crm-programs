@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { parseMemberCsv, type ImportRow } from "@/lib/member-import";
 import { assignPinCodes } from "@/lib/checkin";
@@ -39,7 +39,7 @@ export async function importMembersAction(
   _prev: ImportActionState,
   formData: FormData,
 ): Promise<ImportActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const csv = formData.get("csv");
   if (typeof csv !== "string" || csv.trim() === "") {

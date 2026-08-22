@@ -93,6 +93,23 @@ describe.skipIf(!hasDb)("seedDemoWalkthrough", () => {
     });
   });
 
+  it("creates the front-desk account with the front_desk role", async () => {
+    // The role only became storable in 0026 (the check constraint on
+    // users.role rejected it before), and it is the account a reviewer signs in
+    // as to see the permission boundary — so a seed that quietly failed to
+    // create it would make the whole role unverifiable.
+    await withAdminContext(async (c) => {
+      const { rows } = await c.query(
+        "select role, email, auth_user_id from users where id = $1 and tenant_id = $2",
+        [result.frontDeskId, tenantId],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].role).toBe("front_desk");
+      expect(rows[0].email).toBe(result.frontDeskEmail);
+      expect(rows[0].auth_user_id).toBeTruthy();
+    });
+  });
+
   it("creates the member with the safety and membership-status fields populated", async () => {
     await withAdminContext(async (c) => {
       const { rows } = await c.query(

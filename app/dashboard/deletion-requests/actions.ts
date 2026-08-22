@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import {
   completeDeletionRequest,
   declineDeletionRequest,
@@ -12,7 +12,10 @@ import { reportHandledError } from "@/lib/observability/monitoring";
 /**
  * Staff decisions on member-filed erasure requests (beta-gdpr-002).
  *
- * Both are staff-gated by `requireStaff()` and run through the RLS-scoped client,
+ * Both are gated on the `gdpr.manage` capability rather than the bare staff
+ * guard they used before the front-desk role existed — "any staff member" now
+ * includes the desk, and confirming an erasure is irreversible. They also run
+ * through the RLS-scoped client,
  * so a request belonging to another gym is invisible — the decision simply finds
  * no row and reports "not found" rather than acting on someone else's subject.
  *
@@ -41,7 +44,7 @@ export async function confirmDeletionRequestAction(
   _prev: DecisionState,
   formData: FormData,
 ): Promise<DecisionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
 
   const requestId = String(formData.get("requestId") ?? "");
   if (!requestId) return { error: "Missing request id." };
@@ -85,7 +88,7 @@ export async function declineDeletionRequestAction(
   _prev: DecisionState,
   formData: FormData,
 ): Promise<DecisionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
 
   const requestId = String(formData.get("requestId") ?? "");
   if (!requestId) return { error: "Missing request id." };

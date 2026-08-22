@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { checkInByPin, checkInByQrToken } from "@/lib/checkin";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
@@ -29,7 +29,7 @@ export async function kioskCheckInAction(
   _prev: CheckInState,
   formData: FormData,
 ): Promise<CheckInState> {
-  const session = await requireStaff();
+  const session = await requireCapability("checkin");
   const code = String(formData.get("code") ?? "").trim();
   if (!code) return { error: "Scan a QR code or enter a PIN." };
 

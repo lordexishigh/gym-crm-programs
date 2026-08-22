@@ -13,7 +13,12 @@ import {
   REFRESH_TOKEN_COOKIE,
   sessionCookieOptions,
 } from "@/lib/auth/cookies";
-import { getStaffRole, type StaffRole } from "@/lib/staff";
+import { getStaffRole } from "@/lib/staff";
+import {
+  staffCan,
+  type StaffCapability,
+  type StaffRole,
+} from "@/lib/permissions";
 import { signInPathWithReason } from "@/lib/auth/sign-in-reason";
 
 /**
@@ -31,6 +36,9 @@ export type Session = {
   identity: Identity;
   role: "staff" | "member";
 };
+
+/** A staff session with its job role resolved (see `requireStaff`). */
+export type StaffSession = Session & { staffRole: StaffRole };
 
 /**
  * Read and verify the current session from cookies. Returns null when there is
@@ -80,27 +88,63 @@ export async function clearSession(): Promise<void> {
  * back on it. Landing on a blank login form with no explanation is
  * indistinguishable from sign-in having silently failed — see
  * lib/auth/sign-in-reason.ts.
+ *
+ * It also resolves the caller's job role (owner / trainer / front desk) and
+ * pins it onto the returned identity, so every `withTenantContext` call made
+ * downstream stamps `app.staff_role` and the role-scoped RLS policies from
+ * 0026 apply. That is one extra indexed read per staff request, and it replaces
+ * the ad-hoc `getStaffRole` calls the dashboard layout and member page were
+ * each making anyway.
  */
-export async function requireStaff(): Promise<Session> {
+export async function requireStaff(): Promise<StaffSession> {
   const session = await getSession();
   if (!session) redirect(signInPathWithReason("/login", "session-expired"));
   if (session.role !== "staff") redirect("/portal");
+
+  const staffRole = await getStaffRole(session.identity);
+  return {
+    ...session,
+    staffRole,
+    identity: { ...session.identity, staffRole },
+  };
+}
+
+/** Query parameter naming the capability a redirected caller was denied. */
+export const DENIED_PARAM = "denied";
+
+/**
+ * Guard for a staff route that requires one capability (see lib/permissions.ts).
+ *
+ * This is the ONE place a role gate is expressed. It is a server-side guard, so
+ * it holds for Server Components and Server Actions alike — a front-desk
+ * account cannot reach the program builder by guessing the URL, and cannot
+ * invoke the action behind it by replaying the request either. A denied caller
+ * is bounced to the overview with `?denied=<capability>` so the dashboard can
+ * explain the refusal rather than appearing to have lost the click.
+ */
+export async function requireCapability(
+  capability: StaffCapability,
+): Promise<StaffSession> {
+  const session = await requireStaff();
+  if (!staffCan(session.staffRole, capability)) {
+    redirect(`/dashboard?${DENIED_PARAM}=${encodeURIComponent(capability)}`);
+  }
   return session;
 }
 
 /**
  * Guard for owner-only staff routes (billing, plans, revenue). Redirects a
- * signed-in trainer back to the dashboard overview — the owner/trainer split
- * (issue: "staff role separation") is enforced here, server-side, so a
- * trainer can never reach a billing view by guessing the URL; the role check
- * reads `users.role` from the DB (see lib/staff.ts) since the JWT only carries
- * the staff/member audience, not the owner/trainer distinction.
+ * signed-in trainer or front-desk user back to the dashboard overview — the
+ * role split (issue: "staff role separation") is enforced here, server-side, so
+ * nobody can reach a billing view by guessing the URL; the role check reads
+ * `users.role` from the DB (see lib/staff.ts) since the JWT only carries the
+ * staff/member audience, not the job role.
  */
-export async function requireOwner(): Promise<Session & { staffRole: StaffRole }> {
-  const session = await requireStaff();
-  const staffRole = await getStaffRole(session.identity);
-  if (staffRole !== "owner") redirect("/dashboard");
-  return { ...session, staffRole };
+export async function requireOwner(): Promise<StaffSession> {
+  // Every owner-only route today is a billing/revenue one, and `payments.read`
+  // is held by the owner alone — so this stays a one-capability check rather
+  // than a second, parallel way of asking the same question.
+  return requireCapability("payments.read");
 }
 
 /**
