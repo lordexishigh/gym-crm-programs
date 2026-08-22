@@ -37,6 +37,11 @@ describe("demo account notice", () => {
   const expected = [
     { role: "Member", emailConst: "MEMBER_EMAIL", passwordConst: "MEMBER_PASSWORD" },
     { role: "Trainer", emailConst: "TRAINER_EMAIL", passwordConst: "TRAINER_PASSWORD" },
+    {
+      role: "Front desk",
+      emailConst: "FRONT_DESK_EMAIL",
+      passwordConst: "FRONT_DESK_PASSWORD",
+    },
     { role: "Owner", emailConst: "EMAIL", passwordConst: "PASSWORD" },
   ];
 
@@ -73,6 +78,7 @@ describe("demo account notice", () => {
     // a tester to a form that will reject perfectly valid credentials.
     expect(DEMO_ACCOUNTS.find((a) => a.role === "Member")!.href).toBe("/portal/login");
     expect(DEMO_ACCOUNTS.find((a) => a.role === "Trainer")!.href).toBe("/login");
+    expect(DEMO_ACCOUNTS.find((a) => a.role === "Front desk")!.href).toBe("/login");
     expect(DEMO_ACCOUNTS.find((a) => a.role === "Owner")!.href).toBe("/login");
   });
 });

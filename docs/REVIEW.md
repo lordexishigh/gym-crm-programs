@@ -271,3 +271,118 @@ outcome. No further diagnostic PRs for #26 should be opened until a run can
 actually reach the e2e step again; the four already open/queued (#38/#39/#40
 and any future one) will simply resume being evaluated once CI starts
 scheduling runners again — no rebase or re-push needed.
+
+## 2026-08-21 — #26: a client-side mitigation, a new data point, and why neither is a fix
+
+This pass had a working local reproduction for the first time (this sandbox
+has `psql`/Postgres 16 and a pre-installed Chromium — `PLAYWRIGHT_BROWSERS_PATH`
+under `/opt/pw-browsers` — the previous investigators either had no DB, no
+browser download access, or both). `npm run build && npm run start` off a
+local throwaway Postgres, driven with a temporary Playwright config pointed at
+the sandbox's Chromium build: **the staff journey failed on 2 of 2 runs**,
+matching CI's current 0/5.
+
+**A new data point.** One run's victim was not a Server Action at all: after
+member creation redirected correctly, clicking the plain `<Link>` "← Members"
+— no Server Action, no `redirect()` — hung the same way, stuck on
+`/dashboard/members/{id}` past its timeout. That member-list route had just
+been invalidated by `revalidatePath("/dashboard/members")` inside the create
+action moments earlier. So the trigger is not specific to a Server Action's
+own redirect; it looks more like: **a soft client-side navigation to a route
+whose router-cache entry a recent Server Action just invalidated can fail to
+commit**, regardless of whether that navigation is itself a redirect or a
+plain link click. That is consistent with, and sharpens, the
+2026-08-19 comment's "soft-nav vs. hard-nav" correlation on the issue — offered
+here as a further lead, not a finding; one run is not a rate, and the exact
+Next.js internals were not traced further.
+
+**What shipped instead of a fix.** The client-side half of this — the part
+this repo's app code can actually reach — is that a stuck `useActionState`
+`pending` leaves the user staring at a disabled button with no error and no
+way out, which the original issue body already named as "a real product bug
+independent of CI." `app/components/StuckPendingNotice.tsx` is a small
+client component: past 10s of continuous `pending`, it renders a "still
+signing in / still saving?" notice with a plain `<a href>` reload link — a
+HARD navigation, not a `Link`, because every reproduction on record (including
+this pass's) shows a direct GET reliably reaching the correct page once the
+server has actually applied the write. Wired into the five forms this pass's
+and prior CI runs actually caught stuck: both login forms, member creation,
+program creation, and program assignment. It does not touch RLS, auth, or
+tenant isolation, and does not resolve `#26` — the underlying navigation
+defect is untouched and still open. Unit-tested in `test/stuck-pending-notice.test.ts`
+(timing contract only, via fake timers); full suite green locally (826/826
+against a local Postgres) and `npm run typecheck` clean.
+
+**Local repro recipe, for whoever picks up the root cause next:** `service
+postgresql start`, create a throwaway DB, `npm run migrate` against it,
+`npm run build` with the e2e stub's `NEXT_PUBLIC_SUPABASE_*` vars (see
+`playwright.config.ts`), then `npx playwright test` with a `projects[0].use.launchOptions.executablePath`
+override pointed at `/opt/pw-browsers/chromium-*/chrome-linux/chrome` if
+`playwright install` can't reach `cdn.playwright.dev` from the sandbox. That
+turns this from a CI-only, minutes-per-attempt loop into a ~40s local one —
+worth having before spending more time staring at CI trace artifacts.
+
+## #26, 2026-08-22: reproduced on Windows, and six causes eliminated
+
+Reproduced **3/3** locally, which makes the loop ~40s. Recipe for a Windows box
+with no Docker and no admin rights (the previous recipe above assumes a Linux
+sandbox with `service postgresql start`):
+
+```bash
+# 1. A real Postgres 16, entirely in userland — no admin, no system service.
+mkdir /c/Users/<you>/pg26 && cd /c/Users/<you>/pg26
+npm init -y && npm i embedded-postgres@16.14.0-beta.17
+# start it on 5433 with persistent: true (see embedded-postgres docs)
+
+# 2. IMPORTANT: initdb picks the SYSTEM locale, which on Windows is WIN1252, and
+#    the migrations contain UTF-8 (em dashes). `npm run migrate` then dies with
+#    `report_untranslatable_char` in mbutils.c. Create the DB explicitly UTF8:
+#    create database alpha_crm_u with encoding 'UTF8' template template0
+#      lc_collate 'C' lc_ctype 'C';
+
+# 3. Migrate. MIGRATE_DATABASE_URL MUST be overridden — in a normal .env it
+#    points at PRODUCTION and takes precedence over DATABASE_URL.
+LOCAL=postgres://postgres:postgres@127.0.0.1:5433/alpha_crm_u
+DATABASE_URL=$LOCAL MIGRATE_DATABASE_URL=$LOCAL npm run migrate
+
+# 4. NEXT_PUBLIC_* is inlined at BUILD time, so build with the stub's values.
+DATABASE_URL=$LOCAL NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_e2e_stub \
+  SUPABASE_SECRET_KEY=sb_secret_e2e_stub npm run build
+
+# 5. Fails 3/3.
+DATABASE_URL=$LOCAL MIGRATE_DATABASE_URL=$LOCAL \
+  npx playwright test e2e/staff-journey.spec.ts --repeat-each=3
+```
+
+With this the whole suite also runs green for the first time here: **972 passed,
+0 skipped** (the 217 previously-skipped RLS tests all pass).
+
+### What #26 is NOT — eliminated with evidence, please don't re-litigate
+
+| Hypothesis | How it died |
+| --- | --- |
+| Server-side hang | Every RSC response 200 in **<75ms, median 28ms**; the two real Server Actions closed in 47–51ms with complete flight bodies |
+| DB pool starvation (`max: 3`) | `DB_POOL_MAX=25` → still 3/3 failures |
+| Malformed / wrong-typed RSC response | All 36 RSC responses: `200`, `content-type: text/x-component`, correct `vary` |
+| Client-side JS exception | Zero console errors and zero page errors in the trace during the stall |
+| Un-hydrated control | `hydration-member-create.txt` → `hydrated: true` |
+| Stale Next.js | 15.5.23 **is** the latest 15.x; no bump exists to take |
+| `<Link>` prefetch storm | `prefetch={false}` on all 11 nav links → 2/3 instead of 3/3. Marginal, not causal — reverted, since it costs navigation speed for no fix |
+
+### What it IS, more precisely than before
+
+- **Latency, not a permanent hang.** Raising one assertion's timeout to 60s made
+  that step PASS and pushed the failure to the next 5s assertion. Locally the
+  soft navigation completes somewhere between 5s and 60s. CI's failures use 30s
+  timeouts, so there it is worse — a slower runner, same defect.
+- **Not Server-Action-specific.** Every local failure is a plain `<Link>` click
+  (`/dashboard` → `/dashboard/members/new`, `/dashboard/programs` →
+  `/dashboard`). No action, no `redirect()`, no `revalidatePath` in the click
+  path. The Server-Action symptom is the same bug seen through a redirect.
+- **The stall point rotates** between runs, which is why single-run triage kept
+  producing contradictory stories.
+
+So the remaining suspect is the client router/scheduler committing a transition
+whose payload has already arrived. That is where the next pass should instrument:
+not the server, and not this repo's data layer.

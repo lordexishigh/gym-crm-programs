@@ -15,10 +15,11 @@ This explains the cookies Alpha CRM uses.
 | Type | Purpose | Set by |
 |---|---|---|
 | Essential | Sign-in sessions and security | Us (first-party) |
+| Analytics | Understand usage to improve the product | Third-party (see Privacy Policy) |
 
 ## Your choices
 
-We only use essential cookies required for the service to work.
+Essential cookies are required for the service to work. For non-essential (analytics) cookies, you can accept or decline via the consent banner, and change your choice at any time.
 
 ## Contact
 

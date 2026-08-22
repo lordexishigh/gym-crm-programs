@@ -1,4 +1,4 @@
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { currentOccupancy, todaysCheckIns, STALE_VISIT_HOURS } from "@/lib/checkin";
 import { CheckinForm } from "./CheckinForm";
 
@@ -11,7 +11,7 @@ function formatTime(value: string): string {
 
 /** Front-desk check-in kiosk (market gap #5): PIN/QR entry + today's feed. */
 export default async function CheckinPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("checkin");
   const [checkIns, occupancy] = await Promise.all([
     todaysCheckIns(session.identity),
     currentOccupancy(session.identity),

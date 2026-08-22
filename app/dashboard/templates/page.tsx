@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { ProgramTemplateListRow } from "@/lib/templates";
 import {
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * templates are created from a program's detail page ("Save as template").
  */
 export default async function TemplatesPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
 
   const templates = await withTenantContext(session.identity, async (c) => {
     const { rows } = await c.query<ProgramTemplateListRow>(

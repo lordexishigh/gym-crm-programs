@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withTenantContext, type Identity } from "@/lib/db";
 import type { MemberPlanWithPlan } from "@/lib/plans";
 
@@ -31,14 +32,24 @@ const MEMBER_PLANS_SQL = `select mp.id, mp.tenant_id, mp.member_id, mp.plan_id, 
  * scopes a member session to their own rows, so a crafted `memberId` returns
  * nothing under a member session.
  */
+/**
+ * Runs the plans query on an already-open tenant-scoped client. Exported so
+ * `lib/portal.ts` can fold this into a single portal-page transaction (see
+ * `loadPortalHome`) instead of opening its own connection.
+ */
+export async function memberPlansForQuery(
+  client: PoolClient,
+  memberId: string,
+): Promise<MemberPlanWithPlan[]> {
+  return (await client.query<MemberPlanWithPlan>(MEMBER_PLANS_SQL, [memberId]))
+    .rows;
+}
+
 export async function memberPlansFor(
   identity: Identity,
   memberId: string,
 ): Promise<MemberPlanWithPlan[]> {
-  return withTenantContext(
-    identity,
-    async (c) => (await c.query<MemberPlanWithPlan>(MEMBER_PLANS_SQL, [memberId])).rows,
-  );
+  return withTenantContext(identity, (c) => memberPlansForQuery(c, memberId));
 }
 
 /**
@@ -47,16 +58,24 @@ export async function memberPlansFor(
  * (see migration 0013). `member_self_select` (migration 0002) scopes this to
  * the caller's own row under a member session.
  */
+/** Runs the membership-status query on an already-open tenant-scoped client — see `memberPlansForQuery`. */
+export async function memberMembershipStatusQuery(
+  client: PoolClient,
+  memberId: string,
+): Promise<"active" | "expired" | "frozen" | "cancelled" | null> {
+  const { rows } = await client.query<{
+    membership_status: "active" | "expired" | "frozen" | "cancelled";
+  }>("select membership_status from member where id = $1", [memberId]);
+  return rows[0]?.membership_status ?? null;
+}
+
 export async function memberMembershipStatus(
   identity: Identity,
   memberId: string,
 ): Promise<"active" | "expired" | "frozen" | "cancelled" | null> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<{
-      membership_status: "active" | "expired" | "frozen" | "cancelled";
-    }>("select membership_status from member where id = $1", [memberId]);
-    return rows[0]?.membership_status ?? null;
-  });
+  return withTenantContext(identity, (c) =>
+    memberMembershipStatusQuery(c, memberId),
+  );
 }
 
 /** A single payment event, for the member portal's payment-history list. */
@@ -77,20 +96,29 @@ export const PAYMENT_HISTORY_LIMIT = 20;
  * own rows under a member session; a staff session sees the whole tenant's
  * history for the given member via `payment_events_staff_all`.
  */
+const PAYMENT_HISTORY_SQL = `select id, amount_cents, currency, status, occurred_at
+   from payment_events
+  where member_id = $1
+  order by occurred_at desc
+  limit $2`;
+
+/** Runs the payment-history query on an already-open tenant-scoped client — see `memberPlansForQuery`. */
+export async function paymentHistoryForMemberQuery(
+  client: PoolClient,
+  memberId: string,
+  limit: number,
+): Promise<PaymentEventRow[]> {
+  return (
+    await client.query<PaymentEventRow>(PAYMENT_HISTORY_SQL, [memberId, limit])
+  ).rows;
+}
+
 export async function paymentHistoryForMember(
   identity: Identity,
   memberId: string,
   limit: number = PAYMENT_HISTORY_LIMIT,
 ): Promise<PaymentEventRow[]> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<PaymentEventRow>(
-      `select id, amount_cents, currency, status, occurred_at
-         from payment_events
-        where member_id = $1
-        order by occurred_at desc
-        limit $2`,
-      [memberId, limit],
-    );
-    return rows;
-  });
+  return withTenantContext(identity, (c) =>
+    paymentHistoryForMemberQuery(c, memberId, limit),
+  );
 }
