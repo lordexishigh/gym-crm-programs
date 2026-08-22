@@ -23,6 +23,7 @@ const TOUCHED = [
   "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
   "RESEND_API_KEY",
   "INVITE_FROM_EMAIL",
+  "RESEND_WEBHOOK_SECRET",
   "CRON_SECRET",
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
@@ -51,6 +52,7 @@ function configureAll() {
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_x";
   process.env.RESEND_API_KEY = "re_x";
   process.env.INVITE_FROM_EMAIL = "Alpha CRM <noreply@example.test>";
+  process.env.RESEND_WEBHOOK_SECRET = "whsec_x";
   process.env.CRON_SECRET = "s".repeat(32);
   process.env.STRIPE_SECRET_KEY = "sk_test_x";
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_x";

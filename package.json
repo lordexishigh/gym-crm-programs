@@ -20,7 +20,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "verify:live": "playwright test --config playwright.live.config.ts"
+    "verify:live": "playwright test --config playwright.live.config.ts",
+    "verify:email": "node scripts/send-test-email.mjs"
   },
   "dependencies": {
     "jose": "^6.2.8",
