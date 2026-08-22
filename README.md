@@ -136,18 +136,37 @@ That leaves a walkable product on first run — a gym with a trainer, a member w
 already has a program assigned, the built-in exercise catalog, and all three
 billing tiers:
 
-| Role    | Sign in at       | Email                | Password           |
-| ------- | ---------------- | -------------------- | ------------------ |
-| Owner   | `/login`         | `owner@demo.local`   | `DemoOwner!2026`   |
-| Trainer | `/login`         | `trainer@demo.local` | `DemoTrainer!2026` |
-| Member  | `/portal/login`  | `member@demo.local`  | `DemoMember!2026`  |
+| Role       | Sign in at      | Email                  | Password           |
+| ---------- | --------------- | ---------------------- | ------------------ |
+| Owner      | `/login`        | `owner@demo.local`     | `DemoOwner!2026`   |
+| Trainer    | `/login`        | `trainer@demo.local`   | `DemoTrainer!2026` |
+| Front desk | `/login`        | `frontdesk@demo.local` | `DemoDesk!2026`    |
+| Member     | `/portal/login` | `member@demo.local`    | `DemoMember!2026`  |
 
 Use the right entry point for the audience: staff accounts sign in at `/login`
 and members at `/portal/login`. Each is rejected by the other's page, since the
 session's audience comes from a verified JWT claim rather than the form.
 
-Owner vs. trainer is a real permission boundary, not a label — billing and plan
-management are owner-only and a trainer is redirected away from them.
+The three staff roles are real permission boundaries, not labels. Each dashboard
+route and Server Action asks for a named capability (`lib/permissions.ts`), and
+Postgres enforces the sensitive half again through RLS
+(`migrations/0027_front_desk_role.sql`) so a missed check in application code
+cannot open it:
+
+| Capability                      | Owner | Trainer | Front desk |
+| ------------------------------- | :---: | :-----: | :--------: |
+| Check-in kiosk                  |  yes  |   yes   |    yes     |
+| Member records + attendance     |  yes  |   yes   |    yes     |
+| Class schedule (read)           |  yes  |   yes   |    yes     |
+| Class schedule (edit)           |  yes  |   yes   |     no     |
+| Portal invites                  |  yes  |   yes   |     no     |
+| Program builder / templates     |  yes  |   yes   |     no     |
+| Data export + erasure           |  yes  |   yes   |     no     |
+| Plans and payment records       |  yes  |   no    |     no     |
+| Staff management                |  yes  |   no    |     no     |
+
+A staff member who reaches a section their role does not have is redirected to
+the overview with an explanation, rather than being shown an empty page.
 
 Override any credential (or skip the demo data entirely, for a real gym) with the
 `SEED_*` variables in [`.env.example`](.env.example).

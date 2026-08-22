@@ -6,6 +6,7 @@ import { memberLoginAction, type LoginState } from "./actions";
 import { DemoSignInHint } from "../../DemoSignInHint";
 import { ReadinessNotice } from "../../ReadinessNotice";
 import { SessionNotice } from "../../SessionNotice";
+import { StuckPendingNotice } from "../../components/StuckPendingNotice";
 
 const initialState: LoginState = {};
 
@@ -94,6 +95,8 @@ export default function MemberLoginPage() {
         >
           {pending ? "Signing in…" : "Sign in"}
         </button>
+
+        <StuckPendingNotice pending={pending} message="Still signing in?" />
       </form>
 
       {/* A member usually arrives here from a link in an invite email rather

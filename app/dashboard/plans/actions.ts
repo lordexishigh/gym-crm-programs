@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireOwner } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
-import { validatePlanInput } from "@/lib/plans";
+import { hasCapability } from "@/lib/capabilities";
+import { PAYMENTS_UNCONFIGURED_MESSAGE, validatePlanInput } from "@/lib/plans";
 import { createCheckoutSession } from "@/lib/stripe";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
@@ -97,7 +98,15 @@ export async function assignPlanAction(
   }
 
   revalidatePath(`/dashboard/members/${memberId}`);
-  return { success: "Plan assigned. Send the member a checkout link to collect payment." };
+  // Don't tell the owner to send a checkout link on a deployment that cannot
+  // create one — that instruction is what makes an unconfigured integration read
+  // as a broken one.
+  return {
+    success: hasCapability("payments")
+      ? "Plan assigned. Send the member a checkout link to collect payment."
+      : "Plan assigned. It stays 'pending' until a payment is recorded, and Stripe " +
+        "is not configured on this deployment — collect payment by hand for now.",
+  };
 }
 
 export type CheckoutState = { error?: string };
@@ -116,6 +125,17 @@ export async function createCheckoutSessionAction(
   const session = await requireOwner();
   const memberPlanId = String(formData.get("memberPlanId") ?? "");
   if (!memberPlanId) return { error: "Missing subscription." };
+
+  // Checked before the query and before Stripe: an unconfigured deployment is a
+  // known, permanent state, not a fault. Falling through would have loaded the
+  // subscription, called `getStripeClient()`, thrown "STRIPE_SECRET_KEY is not
+  // set", reported it to monitoring as a handled ERROR, and told the owner to
+  // "try again" — noise in the logs and a lie on the screen. BillingPanel
+  // already hides the button in this state; this covers the paths that bypass a
+  // fresh render (a stale tab, a replayed post).
+  if (!hasCapability("payments")) {
+    return { error: PAYMENTS_UNCONFIGURED_MESSAGE };
+  }
 
   type Row = {
     id: string;

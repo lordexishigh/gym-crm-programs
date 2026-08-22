@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import {
   formatPrice,
+  PAYMENTS_UNCONFIGURED_MESSAGE,
   PLAN_TIER_LABELS,
   type MemberPlanWithPlan,
   type MembershipPlanRow,
@@ -27,15 +28,22 @@ const STATUS_STYLES: Record<MemberPlanWithPlan["status"], string> = {
  * Owner-only billing panel on the member detail page (market gaps #2/#3):
  * assign a plan and see the member's subscription history, including the
  * failed-payment retry count the Stripe webhook increments.
+ *
+ * `paymentsConfigured` comes from `hasCapability("payments")` on the server —
+ * env vars are not readable in a client component, and the alternative (offer
+ * the button, discover on submit) is what made the deployment look broken: see
+ * PAYMENTS_UNCONFIGURED_MESSAGE.
  */
 export function BillingPanel({
   memberId,
   plans,
   subscriptions,
+  paymentsConfigured,
 }: {
   memberId: string;
   plans: MembershipPlanRow[];
   subscriptions: MemberPlanWithPlan[];
+  paymentsConfigured: boolean;
 }) {
   const [state, formAction, pending] = useActionState(assignPlanAction, initialState);
 
@@ -44,9 +52,23 @@ export function BillingPanel({
       <div className="flex flex-col gap-1">
         <h2 className="text-lg font-semibold text-slate-900">Billing</h2>
         <p className="text-sm text-slate-500">
-          Owner-only. Assign a plan, then collect payment via a Stripe checkout link.
+          {paymentsConfigured
+            ? "Owner-only. Assign a plan, then collect payment via a Stripe checkout link."
+            : "Owner-only. Assign a plan and track it here — this deployment collects payment outside the app."}
         </p>
       </div>
+
+      {/* A standing condition of the deployment, stated once at the top of the
+          panel rather than only when a button is pressed. `role="status"` for
+          the same reason as CapabilityNotice: it is not an event. */}
+      {!paymentsConfigured ? (
+        <p
+          role="status"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          {PAYMENTS_UNCONFIGURED_MESSAGE}
+        </p>
+      ) : null}
 
       {subscriptions.length > 0 ? (
         <ul className="flex flex-col gap-2">
@@ -80,7 +102,8 @@ export function BillingPanel({
               >
                 {sub.status.replace("_", " ")}
               </span>
-              {sub.status === "pending" || sub.status === "past_due" ? (
+              {(sub.status === "pending" || sub.status === "past_due") &&
+              paymentsConfigured ? (
                 <CheckoutButton memberPlanId={sub.id} />
               ) : null}
             </li>

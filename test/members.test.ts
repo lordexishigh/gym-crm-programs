@@ -165,9 +165,9 @@ describe("parseRosterFilters", () => {
 });
 
 describe("memberRosterWhere", () => {
-  it("returns no clause when unfiltered", () => {
+  it("excludes erased members even when unfiltered", () => {
     const { clause, params } = memberRosterWhere({ q: "", status: "all", page: 1 });
-    expect(clause).toBe("");
+    expect(clause).toBe("where erased_at is null");
     expect(params).toEqual([]);
   });
 
@@ -177,7 +177,9 @@ describe("memberRosterWhere", () => {
       status: "all",
       page: 1,
     });
-    expect(clause).toBe("where full_name ilike $1 escape '\\'");
+    expect(clause).toBe(
+      "where erased_at is null and full_name ilike $1 escape '\\'",
+    );
     expect(params).toEqual(["%50\\%\\_off%"]);
   });
 
@@ -187,7 +189,7 @@ describe("memberRosterWhere", () => {
       status: "inactive",
       page: 1,
     });
-    expect(clause).toBe("where status = $1");
+    expect(clause).toBe("where erased_at is null and status = $1");
     expect(params).toEqual(["inactive"]);
   });
 
@@ -197,8 +199,30 @@ describe("memberRosterWhere", () => {
       status: "active",
       page: 1,
     });
-    expect(clause).toBe("where full_name ilike $1 escape '\\' and status = $2");
+    expect(clause).toBe(
+      "where erased_at is null and full_name ilike $1 escape '\\' and status = $2",
+    );
     expect(params).toEqual(["%Jane%", "active"]);
+  });
+
+  /**
+   * The tombstone filter is not a UI filter: an erased member (beta-gdpr-002)
+   * keeps their row for referential integrity but holds no personal data, and
+   * "the member no longer appears in any staff-facing list" is the acceptance
+   * criterion. Pinned across every filter combination so a future refactor of
+   * the clause builder cannot drop it for one branch only.
+   */
+  it("keeps the tombstone filter under every filter combination", () => {
+    const combos: Parameters<typeof memberRosterWhere>[0][] = [
+      { q: "", status: "all", page: 1 },
+      { q: "Jane", status: "all", page: 2 },
+      { q: "", status: "active", page: 1 },
+      { q: "", status: "inactive", page: 1 },
+      { q: "Jane", status: "inactive", page: 3 },
+    ];
+    for (const filters of combos) {
+      expect(memberRosterWhere(filters).clause).toContain("erased_at is null");
+    }
   });
 });
 

@@ -589,6 +589,18 @@ export async function anonymiseMember(
       [memberId, ERASED_SUGGESTION_HEADLINE],
     );
 
+    // Scrub the member's own words on any erasure request they filed (0026).
+    // The request row itself is KEPT — it is the controller's evidence that a
+    // subject request was received and answered, which must outlive the data it
+    // concerned — but `reason` is free text the member wrote about themselves
+    // ("I'm moving away", "after what happened in class") and is exactly the
+    // PII-bearing prose the scrubs above exist for. The dates and the decision,
+    // which are what the evidence needs, survive.
+    await c.query(
+      `update member_deletion_request set reason = null where member_id = $1`,
+      [memberId],
+    );
+
     // Off-card payments (0026) carry two staff-authored free-text fields about
     // this member — `note` and `void_reason` ("paid cash at the desk, said she's
     // moving to Limassol") — plus `reference`, which for a SEPA transfer can be a

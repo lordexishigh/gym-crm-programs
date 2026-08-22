@@ -6,6 +6,7 @@ import { loginAction, type LoginState } from "./actions";
 import { DemoSignInHint } from "../DemoSignInHint";
 import { ReadinessNotice } from "../ReadinessNotice";
 import { SessionNotice } from "../SessionNotice";
+import { StuckPendingNotice } from "../components/StuckPendingNotice";
 
 const initialState: LoginState = {};
 
@@ -93,6 +94,8 @@ export default function LoginPage() {
         >
           {pending ? "Signing in…" : "Sign in"}
         </button>
+
+        <StuckPendingNotice pending={pending} message="Still signing in?" />
       </form>
 
       {/* Reached directly (deep link, bookmark, or the redirect a guarded route

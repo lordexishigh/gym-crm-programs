@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { LibraryExerciseRow } from "@/lib/exercise-library";
 import { ProgramBuilder } from "../ProgramBuilder";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** Create-program screen (mvp-program-002 + alpha-exercise-library-001). */
 export default async function NewProgramPage() {
-  const session = await requireStaff();
+  const session = await requireCapability("programs.write");
 
   // The gym's library, selectable in the builder (RLS-scoped to this gym).
   const library = await withTenantContext(session.identity, async (c) => {

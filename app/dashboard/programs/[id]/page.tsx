@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { ExerciseRow, ProgramRow } from "@/lib/programs";
 import type { LibraryExerciseRow } from "@/lib/exercise-library";
@@ -30,7 +30,7 @@ export default async function ProgramDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
 
   const data = await withTenantContext(session.identity, async (c) => {
     const program = (
@@ -52,9 +52,15 @@ export default async function ProgramDetailPage({
       )
     ).rows;
 
+    // Erased members are excluded from both the assignable picker and the
+    // assigned list: a tombstoned row is not a person a program can be given to,
+    // and listing one here would put an erased member back in front of staff
+    // (see `memberRosterWhere` in lib/members.ts for the same rule on the
+    // roster). The assignment ROW itself is kept — it is what preserves the
+    // referential integrity erasure is careful not to break.
     const members = (
       await c.query<MemberOption>(
-        "select id, full_name from member order by full_name asc",
+        "select id, full_name from member where erased_at is null order by full_name asc",
       )
     ).rows;
 
@@ -64,6 +70,7 @@ export default async function ProgramDetailPage({
            from program_assignment pa
            join member m on m.id = pa.member_id
           where pa.program_id = $1 and pa.status = 'active'
+            and m.erased_at is null
           order by m.full_name asc`,
         [id],
       )

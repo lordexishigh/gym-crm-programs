@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { classRoster } from "@/lib/classes";
 import { staffCancelBookingAction } from "../actions";
 import { PromoteWaitlistButton } from "../PromoteWaitlistButton";
@@ -15,7 +15,7 @@ export default async function ClassDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("classes.read");
   const { class: cls, bookings } = await classRoster(session.identity, id);
   if (!cls) notFound();
 
