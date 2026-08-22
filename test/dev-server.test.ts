@@ -423,7 +423,68 @@ describe("dev readiness gate — port and host resolution", () => {
     expect(resolveHost(["-H", "127.0.0.1"])).toBe("127.0.0.1");
     expect(resolveHost(["--hostname=::1"])).toBe("::1");
     // A flag-looking value is not a hostname.
-    expect(resolveHost(["-H", "-p"])).toBe(process.env.HOSTNAME || "0.0.0.0");
+    expect(resolveHost(["-H", "-p"])).toBe("0.0.0.0");
+  });
+
+  /**
+   * HOSTNAME is exported into EVERY Docker container (set to the container id),
+   * and by Kubernetes (the pod name) and many CI images. `next` itself ignores
+   * it — in node_modules/next/dist/bin/next the port option carries
+   * `.env('PORT')` and the hostname option carries no `.env(...)` — so a wrapper
+   * that honours it binds the public port somewhere `next` never would, and only
+   * ever in the environments nobody reproduces on.
+   *
+   * Both failure modes were reproduced against `resolveHost` + `openGate`, and
+   * both are total rather than degraded, which is why this is pinned twice (here
+   * for the resolution, below for the bind):
+   *
+   *   a resolvable non-loopback name -> the forwarder came up on that ONE
+   *   interface and http://127.0.0.1:PORT was ECONNREFUSED;
+   *
+   *   a container id absent from /etc/hosts -> `listen` rejected ENOTFOUND, so
+   *   `openGate`'s caller called `stopDev()` and NOTHING was ever bound. An
+   *   unbound port black-holes the SYN instead of refusing it, so every route
+   *   reads as timed out and the product reads as unreachable.
+   */
+  it("ignores HOSTNAME, which containers export and `next` does not read", () => {
+    const saved = process.env.HOSTNAME;
+    try {
+      // A container id, as Docker sets it: not resolvable, and not a request to
+      // bind anything.
+      process.env.HOSTNAME = "a1b2c3d4e5f6";
+      expect(resolveHost([])).toBe("0.0.0.0");
+      // A resolvable machine name is no more of an instruction than an id is.
+      process.env.HOSTNAME = "some-build-agent";
+      expect(resolveHost([])).toBe("0.0.0.0");
+      // An explicit flag is still honoured — that is how `next` lets you ask.
+      expect(resolveHost(["-H", "127.0.0.1"])).toBe("127.0.0.1");
+    } finally {
+      if (saved === undefined) delete process.env.HOSTNAME;
+      else process.env.HOSTNAME = saved;
+    }
+  });
+
+  it("still opens a loopback-reachable port when HOSTNAME is a container id", async () => {
+    const saved = process.env.HOSTNAME;
+    try {
+      process.env.HOSTNAME = "a1b2c3d4e5f6";
+      const upstreamPort = await stubUpstream((_req, res) => res.end("ok"));
+      const port = await freePort();
+
+      // The whole point: the host the wrapper derives with a container-style
+      // HOSTNAME set must still be bindable AND still be reachable on loopback,
+      // which is the address every caller actually uses. Before the fix this
+      // rejected ENOTFOUND and nothing was bound at all.
+      const gate = await openGate({ port, host: resolveHost([]), upstreamPort });
+      cleanups.push(() => closeServer(gate));
+
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("ok");
+    } finally {
+      if (saved === undefined) delete process.env.HOSTNAME;
+      else process.env.HOSTNAME = saved;
+    }
   });
 });
 

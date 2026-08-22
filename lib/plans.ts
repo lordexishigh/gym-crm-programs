@@ -137,3 +137,25 @@ export type MemberPlanWithPlan = MemberPlanRow & {
   plan_price_cents: number;
   plan_currency: string;
 };
+
+/**
+ * What an owner is told when this deployment has no Stripe credentials.
+ *
+ * Lives here, in the DB-free module, because both halves of the answer need it:
+ * `BillingPanel` (a client component) renders it in place of a checkout button
+ * it must not offer, and `createCheckoutSessionAction` returns it if the button
+ * is reached anyway — a stale page, a replayed form post, or keys removed
+ * between render and submit.
+ *
+ * The wording matters more than it looks. Production has no `STRIPE_SECRET_KEY`
+ * (verified 2026-08-20 on the live project), and until now the failure surfaced
+ * as "Could not start checkout. Please try again." — a transient-sounding
+ * message for a permanent condition, so the owner retries forever and the
+ * Stripe integration reads as broken rather than unconfigured. Name the cause,
+ * name the fix, and say what still works.
+ */
+export const PAYMENTS_UNCONFIGURED_MESSAGE =
+  "Stripe is not configured on this deployment, so no checkout link can be " +
+  "created. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the deployment " +
+  "environment (see .env.example) to collect payment. The plan stays assigned " +
+  "and can be tracked by hand in the meantime.";

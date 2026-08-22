@@ -38,6 +38,10 @@ const NAV: { href: string; label: string; needs: StaffCapability | null }[] = [
   { href: "/dashboard/suggestions", label: "Needs review", needs: "programs.read" },
   { href: "/dashboard/members", label: "Members", needs: "members.read" },
   { href: "/dashboard/invites", label: "Invites", needs: "invites.manage" },
+  // A permanent entry rather than one that appears only when the queue is
+  // non-empty: this is a statutory obligation surface, and a page a gym can only
+  // reach while it already has a problem is a page nobody knows exists.
+  { href: "/dashboard/deletion-requests", label: "Deletion requests", needs: "gdpr.manage" },
   { href: "/dashboard/classes", label: "Classes", needs: "classes.read" },
   { href: "/dashboard/checkin", label: "Check-in", needs: "checkin" },
   { href: "/dashboard/programs", label: "Programs", needs: "programs.read" },
