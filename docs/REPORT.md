@@ -1,28 +1,29 @@
 # Build report — Alpha CRM
 
-[![nous score](https://img.shields.io/badge/nous%20score-25%2F100-red)](#) ![readiness](https://img.shields.io/badge/readiness-blocked-red)
+[![nous score](https://img.shields.io/badge/nous%20score-40%2F100-red)](#) ![readiness](https://img.shields.io/badge/readiness-blocked-red)
 
-**Overall: 25/100** · readiness: **blocked** · build verified ✓
+**Overall: 40/100** · readiness: **blocked** · build verified ✓
 
-**Live:** https://gym-crm-programs.vercel.app
+**Live:** https://wt-gym.vercel.app
 
 ## Quality dimensions
 
 | Dimension | Score | |
 |---|---:|---|
-| Spec coverage | 58 | `████████████░░░░░░░░` |
-| Code quality | 82 | `████████████████░░░░` |
-| Robustness & error handling | 68 | `██████████████░░░░░░` |
-| Builds & tests | 72 | `██████████████░░░░░░` |
-| UX & design | 45 | `█████████░░░░░░░░░░░` |
+| Spec coverage | 50 | `██████████░░░░░░░░░░` |
+| Code quality | 81 | `████████████████░░░░` |
+| Robustness & error handling | 72 | `██████████████░░░░░░` |
+| Builds & tests | 68 | `██████████████░░░░░░` |
+| UX & design | 63 | `█████████████░░░░░░░` |
+| Works at runtime | 32 | `██████░░░░░░░░░░░░░░` |
 
 ## Readiness checks
 
 **Security**
-- ⚠️ No hardcoded secrets — 1 in test fixtures only (not shipped code): hardcoded secret in test/task-dispatch.test.ts
+- ⚠️ No hardcoded secrets — 2 in test fixtures only (not shipped code): hardcoded secret in test/demo-sign-in.test.ts; hardcoded secret in test/task-dispatch.test.ts
 - ✅ Secrets file ignored — no .env present
 - ✅ Row-Level Security — RLS enabled on the schema
-- ✅ Dependency vulnerabilities — no critical/high vulnerabilities in the last audit
+- ⚠️ Dependency vulnerabilities — 1 high-severity vulnerability(ies) in dependencies
 - ✅ Rate limiting — rate limiting present on the API
 
 **Quality**
@@ -31,7 +32,7 @@
 - ✅ Dependencies pinned — lockfile/requirements present
 - ✅ License declared — license present
 - ✅ Builds & tests pass — final smoke test passed
-- ❌ App works at runtime — the product walkthrough could not be repeated (No page could be loaded.), so nothing about this app's behaviour has been verified — an unproven app is not a working one
+- ❌ App works at runtime — 5 product gap(s) found by the walkthrough; first: Both /login and /portal/login time out (90s) and never load — fix the server routes or startup so both entry points respond before the app can be used at all.
 - ⚠️ Accessibility basics — 2 <img> without alt text
 
 **Compliance**
@@ -44,24 +45,20 @@
 
 ## Strengths
 
-- Security is enforced where it actually holds: `withTenantContext` runs every query as the unprivileged `app_user`, and test/workout-logs-rls.test.ts and test/task-queue-rls.test.ts prove isolation by driving the real read/write path under member, staff, and cross-tenant identities rather than asserting on application-level WHERE clauses.
-- GDPR is implemented rather than documented — lib/gdpr/export.ts builds a role-scoped subject export and logs it in the same tenant-scoped transaction, with exported tombstone constants (ERASED_MEMBER_NAME et al.) so post-erasure shape is asserted by tests and cannot drift silently.
-- The test suite carries genuine engineering knowledge, not coverage theatre: test/dev-server.test.ts pins the measured `next dev` readiness race (port at 3.3s, 'Ready' at 5.1s, first 200 at 19.3s) with the numbers that make the defect legible.
-- Feature depth well beyond the spec is genuinely wired up — CSV member import (ImportWizard.tsx + lib/member-import.ts), check-in PINs, class scheduling with waitlists, Stripe webhooks, and an exercise library all have route, action, lib, and migration layers.
+- All eight spec features have real, substantive implementations with no stub markers — app/dashboard/members/actions.ts alone is 26k chars of production-grade Server Actions backed by real DB queries inside withTenantContext.
+- E2E journey tests are genuinely thorough: e2e/staff-journey.spec.ts (17k chars) drives the full staff flow (sign-in → member creation → program authoring → assignment) against a real Postgres, and e2e/invite-flow.spec.ts covers the complete member onboarding path with documented rationale for why each prior check was insufficient.
+- Security fundamentals are solid end-to-end: RLS enforced at the DB layer, withTenantContext wrapping every tenant-scoped query, requireStaff/requireMember guards on all Server Actions, a dedicated login throttle, and a rate limiter — all passing their automated checks.
 
 ## To improve
 
-- App works at runtime: the product walkthrough could not be repeated (No page could be loaded.), so nothing about this app's behaviour has been verified — an unproven app is not a working one
-- The deployed start path has no readiness gate: scripts/lib/dev-server.mjs already exports `openGate`/`warmUp`/`missingRenderDeps` and test/dev-server.test.ts proves the race, but the production start used by the walkthrough does not go through it — wire `warmUp` (pre-request `/login`, `/portal/login`, and `/api/health` before reporting ready) into the `start` script in package.json and the deploy step in .github/workflows/deploy.yml so the process never announces readiness while routes are still compiling.
-- Add a Playwright smoke spec under e2e/ that asserts `GET /login` and `GET /portal/login` each return 200 with their form rendered, and run it in .github/workflows/ci.yml against a built server — the existing e2e specs (staff-journey, invite-flow) all presuppose an app that already loads, so the single defect that has blocked every round is the one thing CI never checks.
-- Split app/dashboard/members/actions.ts (26.5 KB): it currently imports and orchestrates member CRUD, invite token generation/email, GDPR export/anonymise, check-in PIN generation, photo sniffing, and member tasks in one 'use server' module — move invites into app/dashboard/invites/actions.ts, GDPR into app/dashboard/members/gdpr-actions.ts, and photo handling alongside app/api/members/[id]/photo/route.ts.
-- Add the missing `alt` attributes on the 2 flagged `<img>` elements (most likely in app/components/Avatar.tsx and app/dashboard/members/MemberPhotoPanel.tsx) — use the member's name, or `alt=""` where the image is decorative next to a visible name label.
-- Add a cookie-consent gate for the analytics path: app/WebVitals.tsx and lib/observability/report-client.ts post to /api/observability/report unconditionally, so add a consent banner component and have WebVitals no-op until consent is stored — required under GDPR for a Cyprus-market product that already ships docs/legal/PRIVACY.md and COOKIES.md.
-- Implement staff role separation in lib/auth/session.ts and lib/staff.ts: there is a single staff session with no owner/trainer distinction, so every logged-in staff member sees all members, all classes, and BillingPanel.tsx — add a `role` column and scope the members/classes queries (and ideally an RLS policy) so a trainer sees only their assigned members.
+- App works at runtime: 5 product gap(s) found by the walkthrough; first: Both /login and /portal/login time out (90s) and never load — fix the server routes or startup so both entry points respond before the app can be used at all.
+- /login and /portal/login have timed out in every runtime evaluation across all eight rounds — add an explicit ready-gate in scripts/start.mjs that polls /api/health until it returns 200 before the process reports ready, matching the startup probe already implemented and tested in scripts/lib/dev-server.mjs and test/dev-server.test.ts; without this fix no rubric dimension can improve because the product is unreachable.
+- Cookie consent is absent despite the automated WARN flagging analytics trackers present — add a consent banner in app/layout.tsx that gates analytics script loading behind user acceptance, consistent with the GDPR obligations already documented in docs/legal/COMPLIANCE.md.
+- Two <img> elements are missing alt text (automated WARN) — audit app/components/Avatar.tsx and app/dashboard/members/MemberPhotoPanel.tsx, which are the most likely sources given their image-rendering role, and add descriptive alt strings or aria-label attributes to clear the accessibility failure.
 
 ## Summary
 
-A deep, security-serious codebase — real RLS-enforced multi-tenancy proven by database-level tests, GDPR export/erasure, and feature coverage well past the spec — sitting behind a startup defect that makes the entire product unreachable: /login and /portal/login have timed out in the walkthrough for eight consecutive rounds, so nothing beyond the landing page can be used or verified. The build passes its own tests while failing the only check that matters to a user, and the fix is a readiness gate plus a CI smoke test that actually requests those two routes.
+The codebase is feature-complete and well-engineered — all eight spec features are implemented without stubs, 239 tests pass, and security fundamentals are solid — but the running application has failed the same runtime check in every round since the start, with both login routes timing out and the entire product surface unreachable; fixing the server startup race in scripts/start.mjs is the single change that unlocks every other dimension.
 
 ---
-_Scored 2026-08-20 16:51 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._
+_Scored 2026-08-20 04:13 by [nous](https://github.com/lordexishigh/nous) — an LLM judge anchored by deterministic readiness checks; regenerated on every re-score._

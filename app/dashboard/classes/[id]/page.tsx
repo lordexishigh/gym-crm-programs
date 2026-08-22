@@ -4,6 +4,7 @@ import { requireStaff } from "@/lib/auth/session";
 import { classRoster } from "@/lib/classes";
 import { staffCancelBookingAction } from "../actions";
 import { PromoteWaitlistButton } from "../PromoteWaitlistButton";
+import { hasCapability } from "@/lib/capabilities";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,7 @@ export default async function ClassDetailPage({
           classId={cls.id}
           openSpots={openSpots}
           waitlistCount={waitlisted.length}
+          emailConfigured={hasCapability("email")}
         />
       ) : null}
 

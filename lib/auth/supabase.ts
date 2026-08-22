@@ -50,9 +50,18 @@ export type AuthResult =
  * missing environment variable, and naming internal config to an anonymous
  * caller is a needless disclosure. The variable names go to the server log
  * instead (see `supabaseConfig`).
+ *
+ * It does NOT say "temporarily" or "try again in a moment", which is what it used
+ * to say. An absent configuration is not a blip: it will still be absent on the
+ * tenth retry, and inviting a retry is what made an unconfigured deployment look
+ * like a broken login rather than an unfinished one. It is also the same answer
+ * app/ReadinessNotice.tsx gives on the way in, and the two must not contradict
+ * each other — a banner saying "retrying will not change this" above a form
+ * saying "try again in a moment" is worse than either alone.
  */
 const NOT_CONFIGURED =
-  "Sign-in is temporarily unavailable. Please try again in a moment, or contact your gym if it persists.";
+  "Sign-in is not set up on this deployment, so no account can be used to sign in. " +
+  "Trying again will not help — please contact your gym.";
 
 /**
  * Read the auth service configuration, or `null` when it is absent.

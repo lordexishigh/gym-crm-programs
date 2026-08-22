@@ -156,15 +156,21 @@ async function handleWaitlistPromotionNotify(task: TaskRow): Promise<void> {
   if (pending.length === 0) return;
 
   requireEmailCapability(TASK_KINDS.waitlistPromotionNotify);
-  const notified = await notifyWaitlistPromotions(pending);
-  await markPromotionNotified(task.tenant_id, notified);
+  const result = await notifyWaitlistPromotions(pending);
+  await markPromotionNotified(task.tenant_id, result.notified);
 
   // A partial result is not a failure — `notifyWaitlistPromotions` never throws,
   // and the rows it could not deliver keep their null marker, so the next sweep
   // retries exactly those. Reported so a persistent partial is visible.
-  if (notified.length < pending.length) {
+  //
+  // `emailed` rather than `notified.length`, because the latter also counts
+  // members who have no address: a batch that is entirely address-less would
+  // otherwise log a clean 5/5 having sent nothing.
+  if (result.emailed < pending.length) {
     console.warn(
-      `[tasks] waitlist notify: ${notified.length}/${pending.length} delivered for tenant ${task.tenant_id}; the rest retry next sweep`,
+      `[tasks] waitlist notify: ${result.emailed}/${pending.length} emailed for tenant ${task.tenant_id}` +
+        (result.noAddress > 0 ? ` (${result.noAddress} have no address on file)` : "") +
+        "; the rest retry next sweep",
     );
   }
 }

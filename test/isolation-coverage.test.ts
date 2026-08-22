@@ -50,6 +50,9 @@ const EXPECTED_TENANTED_TABLES = [
   // its isolation is pinned explicitly rather than left to discovery alone.
   "member_photo",
   "member_task",
+  // Human-entered off-card payments (0026). Financial records naming a member,
+  // so its isolation is pinned explicitly rather than left to discovery alone.
+  "manual_payment",
 ] as const;
 
 type CatalogRow = {
