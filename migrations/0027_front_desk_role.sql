@@ -1,4 +1,4 @@
--- 0026_front_desk_role.sql
+-- 0027_front_desk_role.sql
 --
 -- Front Desk Staff: a third `users.role`, plus the DB-layer half of its
 -- permissions.

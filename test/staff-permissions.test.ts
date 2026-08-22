@@ -233,7 +233,7 @@ describe("dashboard routes are gated by capability, not by hand", () => {
  * The database-layer backstop.
  * ------------------------------------------------------------------------ */
 describe("0026 enforces the role below the application layer", () => {
-  const sql = source("migrations/0026_front_desk_role.sql");
+  const sql = source("migrations/0027_front_desk_role.sql");
 
   it("allows 'front_desk' in the users.role constraint", () => {
     expect(sql).toContain("users_role_check");

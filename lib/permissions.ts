@@ -20,7 +20,7 @@
  * a client bundle (see the `lib` modules note in lib/member-photo.ts) and can be
  * unit-tested as a plain table. Enforcement lives in `lib/auth/session.ts`
  * (`requireCapability`), with Postgres RLS as the backstop for the sensitive
- * tables (migrations/0026_front_desk_role.sql) — this module only says what the
+ * tables (migrations/0027_front_desk_role.sql) — this module only says what the
  * rules ARE.
  */
 

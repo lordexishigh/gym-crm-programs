@@ -150,7 +150,7 @@ session's audience comes from a verified JWT claim rather than the form.
 The three staff roles are real permission boundaries, not labels. Each dashboard
 route and Server Action asks for a named capability (`lib/permissions.ts`), and
 Postgres enforces the sensitive half again through RLS
-(`migrations/0026_front_desk_role.sql`) so a missed check in application code
+(`migrations/0027_front_desk_role.sql`) so a missed check in application code
 cannot open it:
 
 | Capability                      | Owner | Trainer | Front desk |
