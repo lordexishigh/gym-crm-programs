@@ -322,7 +322,7 @@ and also raises a critical alert.
 
 ### 3. Verifying deliverability against common inbox providers
 
-Use the dev send script to send to real inboxes and confirm authentication:
+Use the send script to send to real inboxes and confirm authentication:
 
 ```bash
 node scripts/send-test-email.mjs you@gmail.com
@@ -330,9 +330,25 @@ node scripts/send-test-email.mjs you@outlook.com
 node scripts/send-test-email.mjs you@yahoo.com
 ```
 
-In each inbox, open **Show original / View source** and confirm `SPF=pass`,
-`DKIM=pass`, and `DMARC=pass`. Gmail's *Show original* and
+It sends, then **polls `GET /emails/{id}` until Resend reports a terminal state**,
+and exits non-zero unless the message was `delivered`. That distinction is the
+point: a 200 from `POST /emails` only means Resend accepted the message, and a
+domain with a broken DKIM record, a suppressed recipient, or an IP the receiver
+rejects all produce a clean 200 and then fail silently. Add `--no-wait` for the
+old accept-only behaviour.
+
+For unattended runs (a cron, a deploy hook) set `VERIFY_EMAIL_TO` and use
+`npm run verify:email`; `VERIFY_EMAIL_TIMEOUT_MS` bounds the wait (default 60s).
+
+Delivery still does not prove authentication, so in each inbox open
+**Show original / View source** and confirm `SPF=pass`, `DKIM=pass`, and
+`DMARC=pass`. Gmail's *Show original* and
 [mail-tester.com](https://www.mail-tester.com) both report all three at a glance.
+
+`npm run verify:live` additionally asserts that the running deployment still
+reports every capability as configured (`e2e/live/capabilities.spec.ts`) — it
+catches a rotated or dropped `RESEND_API_KEY` without sending anything, but for
+the same reason cannot speak to deliverability.
 
 ## Observability (beta-hardening-001)
 

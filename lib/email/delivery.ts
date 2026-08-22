@@ -23,6 +23,18 @@ import {
 
 const POSITIVE_STATUSES = ["sent", "delivered", "delayed"];
 
+/**
+ * Positive states that precede delivery, and so must never replace a recorded
+ * `delivered`.
+ *
+ * Webhook events are not ordered. A `sent` event delayed behind its own
+ * `delivered` would otherwise walk the invite backwards to "sent" — showing
+ * staff an in-flight message that actually landed, which is the same class of
+ * lie as the negative-precedence guard below exists to prevent, just in the
+ * other direction.
+ */
+const PRE_DELIVERY_STATUSES = ["sent", "delayed"];
+
 export type RecordResult = {
   /** Whether an invite row was matched and updated. */
   matched: boolean;
@@ -43,13 +55,20 @@ export async function recordDeliveryEvent(
                 delivery_updated_at = now()
           where resend_message_id = $1
             -- Don't let a positive event overwrite a recorded failure.
-            and not (delivery_status = any($4) and $2 = any($5))`,
+            and not (delivery_status = any($4) and $2 = any($5))
+            -- Don't let a late pre-delivery event walk 'delivered' backwards.
+            and not (delivery_status = 'delivered' and $2 = any($6))`,
         [
           event.emailId,
           event.status,
           event.detail ?? null,
-          ["bounced", "complained", "failed"],
+          // Derived, not restated: a status added to NEGATIVE_DELIVERY must gain
+          // this guard automatically. Listing the three literally meant a new
+          // terminal state would be alert-worthy (via `isNegative`) yet still
+          // silently overwritable by a later `delivered`.
+          [...NEGATIVE_DELIVERY],
           POSITIVE_STATUSES,
+          PRE_DELIVERY_STATUSES,
         ],
       );
       return (res.rowCount ?? 0) > 0;

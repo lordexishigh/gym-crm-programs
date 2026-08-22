@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ReadinessNoticeBanner,
@@ -146,6 +146,37 @@ describe("ReadinessNoticeBanner", () => {
 });
 
 describe("the gap the notice reports matches lib/capabilities", () => {
+  /**
+   * Clear the auth variables rather than assuming they are absent.
+   *
+   * This suite used to rely on the AMBIENT environment having no
+   * `NEXT_PUBLIC_SUPABASE_*`. That holds in CI, which has no `.env` file, and is
+   * false on every developer machine: test/setup/db-safety.ts does
+   * `import "dotenv/config"`, so a populated `.env` makes `auth` report
+   * configured and the assertion below fails for a reason that has nothing to do
+   * with the banner. A test that only passes on CI is worse than no test — it
+   * reads as a real defect to whoever runs the suite locally.
+   */
+  const AUTH_ENV = [
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  ] as const;
+  const savedAuthEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of AUTH_ENV) {
+      savedAuthEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of AUTH_ENV) {
+      if (savedAuthEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedAuthEnv[key];
+    }
+  });
+
   it("auth is a required capability, so it reaches this banner", () => {
     // If someone downgrades `auth` to "degraded", the banner silently stops
     // warning about the one gap it exists for. Pin the two together.
@@ -154,7 +185,7 @@ describe("the gap the notice reports matches lib/capabilities", () => {
   });
 
   it("an unconfigured environment produces a required auth gap", () => {
-    // This suite runs with no NEXT_PUBLIC_SUPABASE_* set, i.e. exactly the
+    // The hooks above cleared NEXT_PUBLIC_SUPABASE_*, i.e. exactly the
     // deployment state being reported on.
     const ids = capabilityGaps()
       .filter((c) => c.severity === "required")

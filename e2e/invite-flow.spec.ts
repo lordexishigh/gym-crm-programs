@@ -197,6 +197,9 @@ test.describe("member onboarding journey", () => {
     // 6. Sign in with the just-created credentials → portal renders again.
     await page.getByLabel("Email").fill(memberEmail);
     await page.getByLabel("Password").fill(memberPassword);
+    // `exact`: the form's demo hint also renders a "Sign in as Member"
+    // one-click button (app/DemoSignInHint.tsx). This flow must submit the
+    // invited member's OWN credentials, not the seeded demo account's.
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page).toHaveURL(/\/portal$/, { timeout: 30_000 });
