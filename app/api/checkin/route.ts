@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withStaffRole } from "@/lib/staff";
 import { checkInByPin, checkInByQrToken } from "@/lib/checkin";
 import { reportHandledError } from "@/lib/observability/monitoring";
 
@@ -38,9 +39,14 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Resolve the job role so `app.staff_role` is stamped on the transaction and
+    // the role-scoped RLS policies (0026) apply here too. Every staff role may
+    // check members in, so this never refuses — it exists so this endpoint is
+    // not a context in which a front-desk session is unconstrained.
+    const identity = await withStaffRole(session.identity);
     const result = pin
-      ? await checkInByPin(session.identity, pin)
-      : await checkInByQrToken(session.identity, qrToken);
+      ? await checkInByPin(identity, pin)
+      : await checkInByQrToken(identity, qrToken);
 
     if (!result.ok) {
       return NextResponse.json({ ok: false, error: result.error }, { status: 404 });

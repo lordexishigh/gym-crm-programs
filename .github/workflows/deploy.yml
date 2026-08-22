@@ -148,3 +148,30 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+
+      # Post-deploy verification, and the only step here that can tell "deployed"
+      # from "working".
+      #
+      # Every check above this line is satisfied by a deployment that serves a
+      # perfect login form and then refuses every credential: the migration ran,
+      # the CLI reported success, and /login and /portal/login are statically
+      # prerendered so they return 200 regardless. That combination is not
+      # hypothetical — it is what an automated review reported for eight
+      # consecutive rounds ("the code implements authentication but the running
+      # app doesn't serve it"), and nothing in this workflow could confirm or
+      # refute it. `scripts/deploy.mjs` (the manual `npm run deploy` path) has
+      # run this suite for exactly that reason; the automated path that actually
+      # ships master did not, which is the wrong way round.
+      #
+      # Worth the ~1 minute of billable time: it runs only on a master push
+      # (never per-PR), and the failure it catches is the whole product being
+      # down while every signal says green. It drives the real public sign-in for
+      # both audiences over HTTPS with no privileged access — see
+      # e2e/live/staff-login.spec.ts and e2e/live/member-login.spec.ts.
+      #
+      # Deliberately NOT `continue-on-error`. A red mark here means production is
+      # broken for real users right now, which is not something to let scroll by.
+      - name: Verify the deployment actually serves both sign-ins
+        run: |
+          npx playwright install --with-deps chromium
+          npm run verify:live

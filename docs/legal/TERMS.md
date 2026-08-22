@@ -18,6 +18,10 @@ Don't misuse the service: no illegal activity, no attempts to breach security, n
 
 You are responsible for your account and for keeping your credentials secure. You must provide accurate information and be old enough to form a binding contract in your jurisdiction.
 
+## Payments & refunds
+
+Paid plans are billed through our payment provider. Fees, billing cycles, and any refund terms are shown at checkout. [DESCRIBE YOUR REFUND POLICY].
+
 ## Availability & changes
 
 We may update or discontinue features. We aim for high availability but provide the service "as is" without warranties to the extent allowed by law.

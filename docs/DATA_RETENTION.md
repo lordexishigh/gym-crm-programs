@@ -18,6 +18,11 @@ The behaviour described here is implemented by:
   RLS (covered by export/erasure above).
 - `migrations/0021_suggestions.sql` — the derived-claim ledger; its headline
   text is scrubbed on erasure (below).
+- `migrations/0017_payment_events.sql`, `migrations/0026_manual_payments.sql` —
+  card and off-card payment records. Exported, and scrubbed-but-retained on
+  erasure under the statutory-books exemption (below).
+- `lib/payments.ts` — off-card payment validation, the void path, and the
+  reconciliation query.
 
 ## Data subjects
 
@@ -42,7 +47,16 @@ A data subject's personal data can be exported as a portable JSON document
   (**Data & privacy → Export data (JSON)**). A member's own session can also
   export self-service via `exportMemberData` (the member RLS policies expose only
   their own rows). The export includes profile, assigned programs and exercises,
-  and — for staff-initiated exports — status history and invites.
+  workout logs, check-ins, class bookings, **payment history — both card
+  (`payment_events`) and off-card (`manual_payment`)** — and, for
+  staff-initiated exports, status history, invites and follow-up tasks.
+
+  Card payment history was **missing** from the export until migration 0026's
+  work: a member's payments are their personal data under Art. 15, and both
+  halves are now included. Voided off-card payments are included too, carrying
+  `voided_at` and `void_reason` — a void is a correction, not a deletion, and an
+  export that silently dropped it would be less complete than the controller's
+  own books.
 - **Staff** — `exportStaffData` returns the staff profile plus an activity
   summary (counts of programs/assignments/invites/status-changes they authored).
 
@@ -70,7 +84,7 @@ What is scrubbed on erasure:
 
 | Subject | Fields anonymised |
 | ------- | ----------------- |
-| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, the free-text `title` on every `member_task` → `"[erased]"`, and the free-text `headline` on every `suggestions` row about the member → `"[erased]"`. |
+| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, the free-text `title` on every `member_task` → `"[erased]"`, the free-text `headline` on every `suggestions` row about the member → `"[erased]"`, the member’s own `reason` on any `member_deletion_request` → null, and on every `manual_payment` the `note` and `reference` → null with `void_reason` → `"[erased]"` where the row was voided. |
 | Staff   | `email` → unique tombstone, `full_name` → null, `auth_user_id` → null. |
 
 Workout logs (`workout_log`, Phase GA) are the member's own data: they are
@@ -78,6 +92,24 @@ included in the member export (and member self-export), and on erasure their
 free-text notes are scrubbed while the (now anonymised) rows are kept — they
 carry only the tombstoned `member_id` plus aggregate effort/timing, preserving
 referential integrity exactly like assignments and status history.
+
+Payments (`payment_events`, migration 0017 — card, written by the Stripe
+webhook; and `manual_payment`, migration 0026 — off-card cash/bank/SEPA, entered
+by staff) are the **one category whose rows are deliberately NOT deletable on
+erasure**. They are the gym's statutory accounting records: the controller has a
+legal obligation to retain its books, and Art. 17(3)(b) exempts processing
+necessary to comply with it. So erasure keeps the amount, currency, method and
+date — which describe a transaction, not a person — and removes everything
+identifying.
+
+For `manual_payment` that means the staff-authored `note` and the bank
+`reference` (a SEPA reference can carry the payer's own name) are nulled, and
+`void_reason` is tombstoned rather than nulled where the row was voided, because
+the table's `manual_payment_void_complete` CHECK requires a voided row to keep a
+reason. `payment_events` holds no free text at all, so it needs no scrub — only
+its `member_id`, which points at an already-tombstoned member. Neither table has
+a member write path: `manual_payment_self_select` is SELECT-only, so a member can
+read their payment history but can never assert that they paid.
 
 Follow-up tasks (`member_task`, CRM-IDEAS "Apply now" #5) are a staff-internal
 controller record, not member-facing data — like status history and invites,
@@ -108,6 +140,57 @@ The audit trail (`gdpr_audit_event`) is intentionally **not** anonymised: its
 foreign keys to the subject are `ON DELETE SET NULL`, and it records *that* a
 request was fulfilled (by whom, when) without retaining the exported personal
 data itself.
+
+### Erased members disappear from staff-facing lists
+
+An erased member's row survives (see above) but holds no personal data, so it is
+filtered out of every staff-facing list rather than shown as a tombstone: the
+roster and its count (`memberRosterWhere`, `lib/members.ts` — unconditional, not
+a UI filter the dashboard can switch off), the overview member counts
+(`lib/dashboard.ts`), the program assignment picker and assigned-members list,
+the "needs review" suggestion queue, the check-in desk feed, and the invitable
+list on `/dashboard/invites`.
+
+The record stays reachable at `/dashboard/members/[id]`, which is where the
+erasure is evidenced — and there it is **read-only**. Every write path that
+would put personal data back into it refuses an erased member server-side
+(`updateMemberAction`, `uploadMemberPhotoAction`, `regeneratePinAction`,
+`sendInviteAction`), and the corresponding controls are withheld from the page.
+UI-only denial would leave the Server Actions reachable, so both halves exist.
+
+## Member-initiated erasure requests
+
+A member does not have to ask out of band. The portal's **Your data** card
+(`app/portal/DataPrivacy.tsx`) lets the data subject file a request themselves;
+it lands in `member_deletion_request` (migration 0026) and appears for staff at
+**/dashboard/deletion-requests**, oldest first — the one-month response deadline
+(Art. 12(3)) runs from the request date — and as a quick action on the overview
+whenever the queue is non-empty.
+
+Two outcomes, both recorded to `gdpr_audit_event` with the deciding user:
+
+- **Confirm** → `anonymiseMember` runs, the request is marked `completed`, and
+  the member is emailed a confirmation. The contact address is read **before**
+  the erasure and used after it commits — reading it afterwards would find a
+  tombstone and the subject would never be told. This is also why migration 0026
+  stores no copy of the address: it only has to survive one function call.
+  Whether the send landed is recorded in `confirmation_email`
+  (`sent` / `failed` / `skipped`), which is the controller's evidence of having
+  notified them; on a deployment with no mail provider the page warns staff up
+  front that they must tell the member themselves.
+- **Decline** → a reason is **required** (a refusal the subject is given no
+  reason for is not a lawful refusal) and is shown back to them in the portal.
+  Art. 17(3) leaves lawful grounds to refuse, e.g. a statutory retention period.
+
+Isolation is RLS, not application code: a member may insert only a `pending`
+request for `app_current_member()` with no decision pre-filled, may read only
+their own, and has **no** UPDATE/DELETE policy — once filed, the request is the
+controller's record. A partial unique index allows one `pending` row per member,
+so a double tap reports the existing request instead of queuing duplicate work.
+
+The request row deliberately **outlives** the erasure it triggers: it is the
+evidence that a subject request was received and answered inside the statutory
+window. Only the member's own `reason` prose is scrubbed.
 
 ## Retention (storage limitation) — configurable
 

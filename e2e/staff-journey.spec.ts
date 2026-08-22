@@ -117,7 +117,11 @@ async function signInAsStaff(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Email").fill(staffEmail);
   await page.getByLabel("Password").fill(staffPassword);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  // `exact`: the demo hint under the form also offers "Sign in as Owner" /
+  // "Sign in as Trainer" one-click buttons (app/DemoSignInHint.tsx), which a
+  // substring match resolves to alongside the submit button. This journey signs
+  // in with the credentials IT seeded, so it must press the form's own button.
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
 }
 
@@ -346,7 +350,9 @@ test.describe("staff journey", () => {
     await page.goto("/portal/login");
     await page.getByLabel("Email").fill(staffEmail);
     await page.getByLabel("Password").fill(staffPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    // Exact, for the same reason as `signInAsStaff`: the portal form's demo hint
+    // carries its own "Sign in as Member" button.
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(
       page.getByText("This is a staff account — please use the staff sign-in page."),

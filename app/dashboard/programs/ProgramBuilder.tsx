@@ -3,6 +3,7 @@
 import { useActionState, useRef, useState } from "react";
 import Link from "next/link";
 import type { ProgramFormState } from "./actions";
+import { StuckPendingNotice } from "../../components/StuckPendingNotice";
 import {
   inputClass,
   toDraft,
@@ -217,6 +218,8 @@ export function ProgramBuilder({
           </Link>
         )}
       </div>
+
+      <StuckPendingNotice pending={pending} message="Still saving?" />
     </form>
   );
 }

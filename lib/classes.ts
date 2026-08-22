@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withAdminContext, withTenantContext, type Identity } from "@/lib/db";
 
 /**
@@ -134,33 +135,48 @@ export async function listUpcomingClasses(identity: Identity): Promise<ClassWith
   });
 }
 
+/** Shared read query — kept in one place so the page and tests cannot drift. */
+const UPCOMING_CLASSES_FOR_MEMBER_SQL = `select cl.id, cl.tenant_id, cl.name, cl.instructor_name, cl.starts_at,
+        cl.duration_minutes, cl.capacity, cl.created_at, cl.updated_at,
+        mine.id as booking_id, mine.status as booking_status,
+        mine.promoted_at as booking_promoted_at,
+        coalesce(b.booked_count, 0)::int as booked_count
+   from classes cl
+   left join class_bookings mine
+     on mine.class_id = cl.id and mine.member_id = $1 and mine.status <> 'cancelled'
+   left join (
+     select class_id, count(*) as booked_count
+       from class_bookings
+      where status = 'booked'
+      group by class_id
+   ) b on b.class_id = cl.id
+  where cl.starts_at >= now()
+  order by cl.starts_at asc`;
+
+/**
+ * Runs the member schedule query on an already-open tenant-scoped client.
+ * Exported so `lib/portal.ts` can fold this into a single portal-page
+ * transaction (see `loadPortalHome`) instead of opening its own connection.
+ */
+export async function listUpcomingClassesForMemberQuery(
+  client: PoolClient,
+  memberId: string,
+): Promise<MemberClassView[]> {
+  return (
+    await client.query<MemberClassView>(UPCOMING_CLASSES_FOR_MEMBER_SQL, [
+      memberId,
+    ])
+  ).rows;
+}
+
 /** The member-facing upcoming schedule, with the member's own booking status joined in. */
 export async function listUpcomingClassesForMember(
   identity: Identity,
   memberId: string,
 ): Promise<MemberClassView[]> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<MemberClassView>(
-      `select cl.id, cl.tenant_id, cl.name, cl.instructor_name, cl.starts_at,
-              cl.duration_minutes, cl.capacity, cl.created_at, cl.updated_at,
-              mine.id as booking_id, mine.status as booking_status,
-              mine.promoted_at as booking_promoted_at,
-              coalesce(b.booked_count, 0)::int as booked_count
-         from classes cl
-         left join class_bookings mine
-           on mine.class_id = cl.id and mine.member_id = $1 and mine.status <> 'cancelled'
-         left join (
-           select class_id, count(*) as booked_count
-             from class_bookings
-            where status = 'booked'
-            group by class_id
-         ) b on b.class_id = cl.id
-        where cl.starts_at >= now()
-        order by cl.starts_at asc`,
-      [memberId],
-    );
-    return rows;
-  });
+  return withTenantContext(identity, (c) =>
+    listUpcomingClassesForMemberQuery(c, memberId),
+  );
 }
 
 /** The member's confirmed upcoming bookings (portal "upcoming bookings" section). */
@@ -245,8 +261,37 @@ export type BookResult =
   | { ok: false; error: string };
 
 /**
+ * Why a non-'active' membership cannot book a class.
+ *
+ * Migration 0013 deliberately splits the two states this product needs to keep
+ * apart: `member.status` is the portal/roster flag, `member.membership_status`
+ * is the BILLING lifecycle. Class booking consumes a paid entitlement, so it
+ * gates on the billing one — while the portal (programs, workout logging)
+ * gates on neither and stays open. That asymmetry is the point: a member who
+ * pauses for the summer keeps their rehab programme and keeps logging
+ * sessions, and simply cannot take a class slot they are not paying for.
+ *
+ * Worded per status because "you can't book" is actively misleading for a
+ * freeze — the member still has a portal, and telling them otherwise is what
+ * makes them leave.
+ */
+const BOOKING_BLOCKED_GENERIC =
+  "Your membership is not active, so class booking is unavailable. Speak to your gym.";
+
+const BOOKING_BLOCKED_REASON: Record<string, string> = {
+  frozen:
+    "Your membership is paused, so class booking is unavailable. Your training programs are still here, and you can keep logging workouts.",
+  expired:
+    "Your membership has expired, so class booking is unavailable. Speak to your gym to renew.",
+  cancelled:
+    "Your membership is cancelled, so class booking is unavailable. Speak to your gym to restart it.",
+};
+
+/**
  * Book a member into a class: confirmed if under capacity, waitlisted
- * otherwise.
+ * otherwise — and only if their membership is billing-active at all (see
+ * `BOOKING_BLOCKED_REASON`; until this gate existed, an expired or cancelled
+ * member could take class slots indefinitely).
  *
  * **Admin context, and why the count has to run there.** The previous version
  * ran everything under the member's own `withTenantContext` session. That
@@ -280,6 +325,26 @@ export async function bookClass(
   }
 
   return withAdminContext(async (c) => {
+    // Billing gate, before the class row is locked — a blocked member should
+    // never hold a lock other bookers of the same class are queued behind.
+    // `tenant_id` is matched explicitly because admin context bypasses RLS.
+    const mem = (
+      await c.query<{ membership_status: "active" | "expired" | "frozen" | "cancelled" }>(
+        "select membership_status from member where id = $1 and tenant_id = $2",
+        [memberId, identity.tenantId],
+      )
+    ).rows[0];
+    if (!mem) return { ok: false, error: "Member not found." };
+    // Allowlist, not a blocklist: a fifth status added to 0013's CHECK must
+    // block booking by default rather than silently become bookable, and must
+    // still produce a real message rather than `undefined`.
+    if (mem.membership_status !== "active") {
+      return {
+        ok: false,
+        error: BOOKING_BLOCKED_REASON[mem.membership_status] ?? BOOKING_BLOCKED_GENERIC,
+      };
+    }
+
     const cls = (
       await c.query<{ capacity: number }>(
         "select capacity from classes where id = $1 and tenant_id = $2 for update",

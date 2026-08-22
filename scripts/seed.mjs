@@ -288,6 +288,13 @@ const TRAINER_EMAIL = process.env.SEED_TRAINER_EMAIL || "trainer@demo.local";
 const TRAINER_PASSWORD = process.env.SEED_TRAINER_PASSWORD || "DemoTrainer!2026";
 const TRAINER_NAME = process.env.SEED_TRAINER_NAME || "Demo Trainer";
 
+// The third staff persona (0026). Seeded so the role's boundaries can actually
+// be walked: signing in as this account is what shows the dashboard without the
+// program builder, plans or invites.
+const FRONT_DESK_EMAIL = process.env.SEED_FRONT_DESK_EMAIL || "frontdesk@demo.local";
+const FRONT_DESK_PASSWORD = process.env.SEED_FRONT_DESK_PASSWORD || "DemoDesk!2026";
+const FRONT_DESK_NAME = process.env.SEED_FRONT_DESK_NAME || "Demo Front Desk";
+
 const MEMBER_EMAIL = process.env.SEED_MEMBER_EMAIL || "member@demo.local";
 const MEMBER_PASSWORD = process.env.SEED_MEMBER_PASSWORD || "DemoMember!2026";
 const MEMBER_NAME = process.env.SEED_MEMBER_NAME || "Demo Member";
@@ -521,6 +528,29 @@ export async function seedDemoWalkthrough(
   const trainerId = trainer.rows[0].id;
   console.log(`+ staff trainer row for ${TRAINER_EMAIL}`);
 
+  // 1b. Front-desk staff row + auth user. Same staff claims as the trainer —
+  //     the job role lives in `users.role`, not in the token — so the only
+  //     difference between these two sign-ins is what the role permits.
+  const frontDeskAuthId = await provisionAuthUser({
+    email: FRONT_DESK_EMAIL,
+    password: FRONT_DESK_PASSWORD,
+    appMetadata: { app_role: "staff", tenant_id: tenantId },
+  });
+  const frontDesk = await client.query(
+    `insert into users (tenant_id, email, full_name, role, auth_user_id)
+       values ($1, $2, $3, 'front_desk', $4)
+       on conflict (auth_user_id) do update
+         set tenant_id = excluded.tenant_id,
+             email     = excluded.email,
+             full_name = excluded.full_name,
+             role      = 'front_desk',
+             updated_at = now()
+       returning id`,
+    [tenantId, FRONT_DESK_EMAIL, FRONT_DESK_NAME, frontDeskAuthId],
+  );
+  const frontDeskId = frontDesk.rows[0].id;
+  console.log(`+ staff front-desk row for ${FRONT_DESK_EMAIL}`);
+
   // 2. Member row, with the safety/status fields (0013) populated so the member
   //    profile demonstrates them rather than rendering empty. There is no unique
   //    constraint on member (tenant_id, email) — email is nullable and a gym may
@@ -699,10 +729,12 @@ export async function seedDemoWalkthrough(
 
   return {
     trainerId,
+    frontDeskId,
     memberId,
     programId,
     planIds,
     trainerEmail: TRAINER_EMAIL,
+    frontDeskEmail: FRONT_DESK_EMAIL,
     memberEmail: MEMBER_EMAIL,
   };
 }
@@ -763,6 +795,7 @@ async function main() {
     console.log(`    owner:    ${EMAIL} / ${PASSWORD}`);
     if (withDemo) {
       console.log(`    trainer:  ${TRAINER_EMAIL} / ${TRAINER_PASSWORD}`);
+      console.log(`    desk:     ${FRONT_DESK_EMAIL} / ${FRONT_DESK_PASSWORD}`);
       console.log(`\n  Member portal    /portal/login`);
       console.log(`    member:   ${MEMBER_EMAIL} / ${MEMBER_PASSWORD}`);
       console.log(

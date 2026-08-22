@@ -36,6 +36,18 @@ import { decideBuild } from "../scripts/postinstall.mjs";
  *
  * The env cast is needed because `NodeJS.ProcessEnv` requires NODE_ENV, which no
  * case here cares about; every other input is a plain boolean.
+ *
+ * `defects` is defaulted for the same reason `built` and `locked` are, and it is
+ * the one that was missed. Omitting it does NOT mean "no defects": `decideBuild`
+ * falls back to `buildDefects(ROOT)`, which reads the developer's real `.next`,
+ * so the reason string — and therefore whether these cases pass — depended on
+ * whatever the last local `next build`/`next dev` happened to leave there. That
+ * broke the header's promise that this matrix never touches a real `.next`, and
+ * it broke concretely: after the ordinary `npm run build` then `npm run dev`
+ * sequence, `.next` keeps BUILD_ID but gets a dev-shaped routes-manifest.json,
+ * so the fresh-clone case below reported `dataRoutes` instead of `BUILD_ID` and
+ * failed on a working tree with nothing wrong with it. Pinning the default keeps
+ * the fixture in the test rather than in the checkout.
  */
 function decide(
   over: {
@@ -50,6 +62,7 @@ function decide(
     built: false,
     toolchain: true,
     locked: false,
+    defects: [".next/BUILD_ID is missing"],
     ...over,
     env: (over.env ?? {}) as unknown as NodeJS.ProcessEnv,
   });

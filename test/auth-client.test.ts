@@ -194,7 +194,14 @@ describe("lib/auth/supabase — bounded auth calls", () => {
       // Readable and non-technical: the visitor cannot fix an env var, and the
       // form renders this string verbatim.
       expect(result).toMatchObject({
-        error: expect.stringMatching(/temporarily unavailable/i),
+        error: expect.stringMatching(/not set up on this deployment/i),
+      });
+      // And it must not invite a retry. A missing configuration is still missing
+      // on the tenth attempt, so "try again in a moment" sent testers round a
+      // loop and made an unfinished deployment read as a broken login. This is
+      // the same answer app/ReadinessNotice.tsx gives before the form is used.
+      expect(result).not.toMatchObject({
+        error: expect.stringMatching(/temporarily|try again|in a moment/i),
       });
       expect(result).not.toMatchObject({
         error: expect.stringMatching(/SUPABASE|env/i),

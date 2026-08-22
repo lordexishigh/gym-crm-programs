@@ -1,12 +1,15 @@
 import { Pool, type PoolClient } from "pg";
+// Type-only: `lib/permissions` is pure (no DB), so this cannot cycle back.
+import type { StaffRole } from "./permissions";
 
 /**
  * Database access with tenant/member isolation enforced at the Postgres layer.
  *
  * The connection itself is a privileged (migration/admin) role. Tenant-scoped
  * work runs inside a transaction that:
- *   1. sets transaction-local GUCs (`app.tenant_id`, `app.role`, `app.user_id`,
- *      `app.member_id`) from the *server-verified* identity, and
+ *   1. sets transaction-local GUCs (`app.tenant_id`, `app.role`,
+ *      `app.staff_role`, `app.user_id`, `app.member_id`) from the
+ *      *server-verified* identity, and
  *   2. drops to the non-owner `app_user` role via `SET LOCAL ROLE`.
  *
  * Because `app_user` neither owns the tables nor is a superuser, Row Level
@@ -22,6 +25,18 @@ export type Identity = {
   tenantId: string;
   /** Which audience the session belongs to. */
   role: "staff" | "member";
+  /**
+   * The staff member's job role ("owner" | "trainer" | "front_desk"), resolved
+   * server-side from their `users` row by `requireStaff` (see lib/staff.ts).
+   *
+   * Unlike `role`, this does NOT come from the JWT — the token only carries the
+   * staff/member audience — so it is absent on any path that has not looked it
+   * up. Absent means "unrestricted staff": the role-scoped RLS policies added in
+   * 0026 only bite when it is present and equal to 'front_desk', so forgetting
+   * it can never silently WIDEN a front-desk session's reach beyond what the
+   * application guard already allowed it to reach.
+   */
+  staffRole?: StaffRole | null;
   /** Staff user id (present for staff sessions). */
   userId?: string | null;
   /** Member id (present for member sessions; enables per-member row scoping). */
@@ -191,6 +206,59 @@ export async function closePool(): Promise<void> {
   }
 }
 
+/** Raised when a `withTenantContext`/`withAdminContext` call outruns its deadline. */
+export class TransactionDeadlineError extends Error {
+  constructor(public readonly ms: number) {
+    super(`Database transaction exceeded its ${ms}ms deadline`);
+    this.name = "TransactionDeadlineError";
+  }
+}
+
+/**
+ * Race `promise` against a `ms` timer. `promise` is never cancelled by
+ * losing — it keeps running to whatever completion it was already headed for
+ * (a transaction still commits/rolls back and its client is still released),
+ * only the *caller* stops waiting on it. That is exactly what is wanted here:
+ * the caller gets back control on a bounded schedule without this helper
+ * having to know how to safely abort an in-flight `pg` transaction.
+ */
+export function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TransactionDeadlineError(ms)), ms);
+    // Don't hold the process open just for this timer (matters for short-lived
+    // scripts/tests; irrelevant on a request-serving server).
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Overall ceiling on a `withTenantContext`/`withAdminContext` call, in
+ * addition to (not instead of) the per-connect and per-query bounds above.
+ *
+ * Those bounds cap each individual step, but a Server Action commonly runs
+ * several queries in one transaction (e.g. `createMemberAction`: insert
+ * member, insert its status event, allocate a check-in PIN), and nothing
+ * previously capped their *sum*. A caller stuck waiting past all of them —
+ * whichever step it turns out to be — reads as the exact silent hang
+ * reported in issue #26: a submit button stuck on "Assigning…"/"Creating…"
+ * forever, no error, no way back. This mirrors `AUTH_FETCH_TIMEOUT_MS` in
+ * `lib/auth/supabase.ts` — same failure mode, same remedy, applied to this
+ * app's other external dependency on the request path.
+ */
+function transactionDeadlineMs(): number {
+  return envInt("DB_TRANSACTION_DEADLINE_MS", 25_000);
+}
+
 /**
  * Run `fn` inside a transaction scoped to `identity`, as the RLS-bound
  * `app_user` role. All reads/writes are constrained by RLS policies to the
@@ -204,6 +272,13 @@ export async function withTenantContext<T>(
     throw new Error("withTenantContext requires a tenantId.");
   }
 
+  return withDeadline(runTenantTransaction(identity, fn), transactionDeadlineMs());
+}
+
+async function runTenantTransaction<T>(
+  identity: Identity,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await connectWithRetry();
   try {
     await client.query("BEGIN");
@@ -214,6 +289,11 @@ export async function withTenantContext<T>(
     ]);
     await client.query("SELECT set_config('app.role', $1, true)", [
       identity.role,
+    ]);
+    // Empty when unresolved — 0026's restrictive policies test for the literal
+    // 'front_desk', so '' behaves exactly like owner/trainer.
+    await client.query("SELECT set_config('app.staff_role', $1, true)", [
+      identity.staffRole ?? "",
     ]);
     await client.query("SELECT set_config('app.user_id', $1, true)", [
       identity.userId ?? "",
@@ -243,6 +323,12 @@ export async function withTenantContext<T>(
  * scoped and audited; never route normal request handling through it.
  */
 export async function withAdminContext<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withDeadline(runAdminTransaction(fn), transactionDeadlineMs());
+}
+
+async function runAdminTransaction<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await connectWithRetry();

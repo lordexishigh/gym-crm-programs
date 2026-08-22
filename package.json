@@ -20,10 +20,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "verify:live": "playwright test --config playwright.live.config.ts"
+    "verify:live": "playwright test --config playwright.live.config.ts",
+    "verify:live:staff": "playwright test --config playwright.live.config.ts e2e/live/staff-login.spec.ts",
+    "verify:live:member": "playwright test --config playwright.live.config.ts e2e/live/member-login.spec.ts",
+    "verify:email": "node scripts/send-test-email.mjs"
   },
   "dependencies": {
-    "jose": "^6.2.8",
+    "jose": "^6.2.9",
     "next": "^15.5.23",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
@@ -34,7 +37,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^20.17.12",
-    "@types/pg": "^8.21.0",
+    "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
@@ -45,7 +48,7 @@
     "postcss": "^8.5.23",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "next": {

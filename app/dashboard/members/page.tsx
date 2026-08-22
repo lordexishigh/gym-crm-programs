@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { AddMemberButton } from "./AddMemberButton";
 import { createMemberAction } from "./actions";
@@ -42,7 +42,7 @@ export default async function MembersPage({
 }: {
   searchParams: Promise<{ q?: string; status?: string; page?: string }>;
 }) {
-  const session = await requireStaff();
+  const session = await requireCapability("members.read");
   const filters = parseRosterFilters(await searchParams);
 
   const { members, total } = await withTenantContext(

@@ -67,19 +67,48 @@ export const NEGATIVE_DELIVERY: ReadonlySet<DeliveryStatus> = new Set<DeliverySt
 ]);
 
 /**
+ * How stale a signed event may be before it is refused.
+ *
+ * A correct HMAC proves the payload came from Resend; it says nothing about
+ * WHEN. Without this bound a single captured event stays valid forever, and
+ * replaying a `bounced` one re-fires its `critical` alert (lib/email/delivery.ts)
+ * on every replay — turning one intercepted request into an unbounded alert
+ * channel, which is worse than the missing signal it warns about.
+ *
+ * Five minutes is our own bound, not a value Resend documents: their guide
+ * names replay attacks as the reason to check the timestamp but specifies no
+ * window. It is generous enough for a retry after a cold start and short enough
+ * that a captured event is useless by the time it could be replayed by hand.
+ */
+const SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
  * Verify the Svix signature on a Resend webhook. `rawBody` MUST be the exact
  * bytes received (re-serialising parsed JSON would change them and break the
- * HMAC). Constant-time comparison; returns false on any missing input or
- * mismatch rather than throwing.
+ * HMAC). Constant-time comparison; returns false on any missing input, a
+ * timestamp outside `SIGNATURE_TOLERANCE_MS`, or a mismatch — rather than
+ * throwing.
+ *
+ * `nowMs` is injectable so the replay window can be tested against a fixed
+ * clock rather than by generating timestamps at test time.
  */
 export function verifyResendSignature(
   secret: string | undefined,
   headers: ResendHeaders,
   rawBody: string,
+  nowMs: number = Date.now(),
 ): boolean {
   if (!secret) return false;
   const { svixId, svixTimestamp, svixSignature } = headers;
   if (!svixId || !svixTimestamp || !svixSignature) return false;
+
+  // Checked before the HMAC: it is far cheaper, and a stale event is refused on
+  // the same terms whether or not its signature would have verified.
+  // `svix-timestamp` is unix SECONDS. Rejected symmetrically — a timestamp far
+  // in the future is as much a forgery signal as one far in the past.
+  const tsSeconds = Number(svixTimestamp);
+  if (!Number.isFinite(tsSeconds)) return false;
+  if (Math.abs(nowMs - tsSeconds * 1000) > SIGNATURE_TOLERANCE_MS) return false;
 
   // Secret is `whsec_<base64>`; the HMAC key is the decoded payload after it.
   const secretKey = secret.startsWith("whsec_") ? secret.slice(6) : secret;

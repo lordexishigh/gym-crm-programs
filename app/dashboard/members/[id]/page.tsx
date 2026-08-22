@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
+import { hasCapability } from "@/lib/capabilities";
 import { getStaffRole } from "@/lib/staff";
+import { staffCan } from "@/lib/permissions";
+import { memberAttendance } from "@/lib/checkin";
 import type { MemberRow, MembershipStatus } from "@/lib/members";
 import {
   effectiveInviteStatus,
@@ -24,6 +27,7 @@ import { memberTasks } from "@/lib/member-tasks";
 import { Avatar } from "@/app/components/Avatar";
 import { MemberForm } from "../MemberForm";
 import { MemberPhotoPanel } from "../MemberPhotoPanel";
+import { Attendance } from "../Attendance";
 import { Timeline } from "../Timeline";
 import { WorkoutAdherence } from "../WorkoutAdherence";
 import { MemberTasks } from "../MemberTasks";
@@ -47,7 +51,7 @@ export default async function MemberDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("members.read");
 
   const data = await withTenantContext(session.identity, async (c) => {
     const member = (
@@ -122,19 +126,32 @@ export default async function MemberDetailPage({
     photo_url: member.photo_url,
   });
 
+  // An erased member's record is a TOMBSTONE, and this page is the only place it
+  // is still reachable (the roster and every other staff list filter it out).
+  // Every control that would write personal data back into it is withheld —
+  // the edit form, the photo uploader, the PIN, the invite panel and follow-up
+  // tasks — leaving the read-only record, its history, and the erasure notice.
+  // The Server Actions behind those controls refuse an erased member too (see
+  // ../actions.ts); this is the UI half of the same rule, not the whole of it.
+  const erased = Boolean(member.erased_at);
+
   // Training-adherence signal (ga-trainer-insights-001): read-only for staff,
-  // tenant-scoped by the `workout_log_staff_select` RLS policy.
-  const [adherence, workouts, staffRole, tasks] = await Promise.all([
+  // tenant-scoped by the `workout_log_staff_select` RLS policy. Attendance
+  // joins it here because it is the same question asked of a different table —
+  // and it is the lookup the Front Desk role exists to perform.
+  const [adherence, workouts, attendance, tasks] = await Promise.all([
     memberAdherence(session.identity, member.id),
     recentWorkoutLogs(session.identity, member.id),
-    getStaffRole(session.identity),
+    memberAttendance(session.identity, member.id),
     memberTasks(session.identity, member.id),
   ]);
 
-  // Billing data is owner-only (issue: staff role separation) — a trainer
-  // never even queries plans/subscriptions, let alone sees them rendered.
+  // Billing data is owner-only (issue: staff role separation) — a trainer or
+  // front-desk session never even queries plans/subscriptions, let alone sees
+  // them rendered. RLS denies the front desk those tables outright (0026), so
+  // this is the guard, not the only one.
   const billing =
-    staffRole === "owner"
+    staffCan(session.staffRole, "payments.read")
       ? await withTenantContext(session.identity, async (c) => {
           const plans = (
             await c.query<MembershipPlanRow>(
@@ -186,6 +203,18 @@ export default async function MemberDetailPage({
           <h1 className="text-2xl font-bold">{member.full_name}</h1>
         </div>
       </div>
+
+      {erased ? (
+        <p className="rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <strong className="font-semibold">Erased.</strong> This member
+          exercised their right to erasure on{" "}
+          {new Date(member.erased_at as string).toLocaleDateString("en-GB", {
+            dateStyle: "long",
+          })}
+          . The record is kept as a tombstone so their training history stays
+          valid; it holds no personal data and cannot be edited or re-invited.
+        </p>
+      ) : null}
 
       <dl className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
         <div className="flex flex-col gap-0.5">
@@ -244,49 +273,55 @@ export default async function MemberDetailPage({
         </div>
       </dl>
 
-      <MemberPhotoPanel
-        memberId={member.id}
-        memberName={member.full_name}
-        photoSrc={avatarSrc}
-        hasUpload={photoUpdatedAt !== null}
-      />
+      {erased ? null : (
+        <>
+          <MemberPhotoPanel
+            memberId={member.id}
+            memberName={member.full_name}
+            photoSrc={avatarSrc}
+            hasUpload={photoUpdatedAt !== null}
+          />
 
-      <MemberForm
-        action={updateMemberAction}
-        submitLabel="Save changes"
-        defaults={{
-          id: member.id,
-          fullName: member.full_name,
-          email: member.email ?? "",
-          phone: member.phone ?? "",
-          status: member.status,
-          notes: member.notes ?? "",
-          photoUrl: member.photo_url ?? "",
-          emergencyContactName: member.emergency_contact_name ?? "",
-          emergencyContactPhone: member.emergency_contact_phone ?? "",
-          membershipStatus: member.membership_status,
-        }}
-      />
+          <MemberForm
+            action={updateMemberAction}
+            submitLabel="Save changes"
+            defaults={{
+              id: member.id,
+              fullName: member.full_name,
+              email: member.email ?? "",
+              phone: member.phone ?? "",
+              status: member.status,
+              notes: member.notes ?? "",
+              photoUrl: member.photo_url ?? "",
+              emergencyContactName: member.emergency_contact_name ?? "",
+              emergencyContactPhone: member.emergency_contact_phone ?? "",
+              membershipStatus: member.membership_status,
+            }}
+          />
 
-      <section className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-slate-400">
-            Check-in PIN
-          </h2>
-          <p className="font-mono text-2xl font-bold tracking-widest text-slate-900">
-            {member.pin_code ?? "—"}
-          </p>
-        </div>
-        <form action={regeneratePinAction}>
-          <input type="hidden" name="memberId" value={member.id} />
-          <button
-            type="submit"
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            {member.pin_code ? "Regenerate" : "Generate PIN"}
-          </button>
-        </form>
-      </section>
+          <section className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-0.5">
+              <h2 className="text-sm font-medium uppercase tracking-wide text-slate-400">
+                Check-in PIN
+              </h2>
+              <p className="font-mono text-2xl font-bold tracking-widest text-slate-900">
+                {member.pin_code ?? "—"}
+              </p>
+            </div>
+            <form action={regeneratePinAction}>
+              <input type="hidden" name="memberId" value={member.id} />
+              <button
+                type="submit"
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                {member.pin_code ? "Regenerate" : "Generate PIN"}
+              </button>
+            </form>
+          </section>
+        </>
+      )}
+
+      <Attendance attendance={attendance} />
 
       <WorkoutAdherence adherence={adherence} logs={workouts} />
 
@@ -295,40 +330,51 @@ export default async function MemberDetailPage({
           memberId={member.id}
           plans={billing.plans}
           subscriptions={billing.subscriptions}
+          paymentsConfigured={hasCapability("payments")}
         />
       ) : null}
 
       {/* Follow-ups sit above the timeline: they are the outstanding work on
           this member, where the timeline is the record of what already
           happened. */}
-      <MemberTasks memberId={member.id} tasks={tasks} />
+      {erased ? null : <MemberTasks memberId={member.id} tasks={tasks} />}
 
       {/* Replaces the standalone StatusHistory panel: status changes,
           assignments, invites and workouts are one chronology, and reading
           them as four separate lists made the order between them invisible. */}
       <Timeline entries={timeline} />
 
-      <InvitePanel
-        memberId={member.id}
-        hasEmail={Boolean(member.email)}
-        alreadyActive={Boolean(member.auth_user_id)}
-        lastInvite={
-          lastInvite
-            ? {
-                id: lastInvite.id,
-                // Show the effective status so a just-expired pending invite
-                // reads as "expired", matching the invites dashboard.
-                status: effectiveInviteStatus(
-                  lastInvite.status,
-                  lastInvite.expires_at,
-                ),
-                expiresAt: lastInvite.expires_at,
-              }
-            : null
-        }
-      />
+      {/* Portal access and data-subject rights are administrative, not desk
+          work: both are hidden from a front-desk session, and their Server
+          Actions refuse it independently of what is rendered here. Also hidden
+          once the member is erased — there is no subject left to invite, nor
+          any erasure request left to file. Both conditions are independent, so
+          both are applied. */}
+      {!erased && staffCan(session.staffRole, "invites.manage") ? (
+        <InvitePanel
+          memberId={member.id}
+          hasEmail={Boolean(member.email)}
+          alreadyActive={Boolean(member.auth_user_id)}
+          lastInvite={
+            lastInvite
+              ? {
+                  id: lastInvite.id,
+                  // Show the effective status so a just-expired pending invite
+                  // reads as "expired", matching the invites dashboard.
+                  status: effectiveInviteStatus(
+                    lastInvite.status,
+                    lastInvite.expires_at,
+                  ),
+                  expiresAt: lastInvite.expires_at,
+                }
+              : null
+          }
+        />
+      ) : null}
 
-      <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
+      {staffCan(session.staffRole, "gdpr.manage") ? (
+        <GdprPanel memberId={member.id} erased={Boolean(member.erased_at)} />
+      ) : null}
     </div>
   );
 }
