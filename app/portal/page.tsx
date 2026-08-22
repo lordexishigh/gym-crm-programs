@@ -1,10 +1,7 @@
 import { requireMember } from "@/lib/auth/session";
 import { logoutAction } from "@/lib/auth/actions";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
-import { archivedPrograms, loadMemberPortal } from "@/lib/portal";
-import { recentWorkoutLogs, workoutStreakDays } from "@/lib/workout-logs";
-import { listUpcomingClassesForMember } from "@/lib/classes";
-import { memberMembershipStatus, memberPlansFor, paymentHistoryForMember } from "@/lib/billing";
+import { loadPortalHome } from "@/lib/portal";
 import { ProgramView } from "./ProgramView";
 import { ProgramHistory } from "./ProgramHistory";
 import { LogWorkout } from "./LogWorkout";
@@ -42,8 +39,9 @@ export default async function PortalPage() {
   // the member's recent logged workout sessions (Phase GA), their current
   // logging streak (engagement layer), the bookable class schedule, and the
   // billing/membership data (market gap #8: bookings, membership status,
-  // payment history).
-  const [
+  // payment history) — all fetched in one tenant transaction (see
+  // `loadPortalHome`) rather than 8 separate connections (#32).
+  const {
     programs,
     history,
     workouts,
@@ -52,16 +50,7 @@ export default async function PortalPage() {
     membershipStatus,
     plans,
     paymentHistory,
-  ] = await Promise.all([
-    loadMemberPortal(session.identity, memberId),
-    archivedPrograms(session.identity, memberId),
-    recentWorkoutLogs(session.identity, memberId),
-    workoutStreakDays(session.identity, memberId),
-    listUpcomingClassesForMember(session.identity, memberId),
-    memberMembershipStatus(session.identity, memberId),
-    memberPlansFor(session.identity, memberId),
-    paymentHistoryForMember(session.identity, memberId),
-  ]);
+  } = await loadPortalHome(session.identity, memberId);
 
   // The active programs a member can log a session against (id + name only).
   const activePrograms = programs.map(({ program }) => ({

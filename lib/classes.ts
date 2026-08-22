@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withAdminContext, withTenantContext, type Identity } from "@/lib/db";
 
 /**
@@ -134,33 +135,48 @@ export async function listUpcomingClasses(identity: Identity): Promise<ClassWith
   });
 }
 
+/** Shared read query — kept in one place so the page and tests cannot drift. */
+const UPCOMING_CLASSES_FOR_MEMBER_SQL = `select cl.id, cl.tenant_id, cl.name, cl.instructor_name, cl.starts_at,
+        cl.duration_minutes, cl.capacity, cl.created_at, cl.updated_at,
+        mine.id as booking_id, mine.status as booking_status,
+        mine.promoted_at as booking_promoted_at,
+        coalesce(b.booked_count, 0)::int as booked_count
+   from classes cl
+   left join class_bookings mine
+     on mine.class_id = cl.id and mine.member_id = $1 and mine.status <> 'cancelled'
+   left join (
+     select class_id, count(*) as booked_count
+       from class_bookings
+      where status = 'booked'
+      group by class_id
+   ) b on b.class_id = cl.id
+  where cl.starts_at >= now()
+  order by cl.starts_at asc`;
+
+/**
+ * Runs the member schedule query on an already-open tenant-scoped client.
+ * Exported so `lib/portal.ts` can fold this into a single portal-page
+ * transaction (see `loadPortalHome`) instead of opening its own connection.
+ */
+export async function listUpcomingClassesForMemberQuery(
+  client: PoolClient,
+  memberId: string,
+): Promise<MemberClassView[]> {
+  return (
+    await client.query<MemberClassView>(UPCOMING_CLASSES_FOR_MEMBER_SQL, [
+      memberId,
+    ])
+  ).rows;
+}
+
 /** The member-facing upcoming schedule, with the member's own booking status joined in. */
 export async function listUpcomingClassesForMember(
   identity: Identity,
   memberId: string,
 ): Promise<MemberClassView[]> {
-  return withTenantContext(identity, async (c) => {
-    const { rows } = await c.query<MemberClassView>(
-      `select cl.id, cl.tenant_id, cl.name, cl.instructor_name, cl.starts_at,
-              cl.duration_minutes, cl.capacity, cl.created_at, cl.updated_at,
-              mine.id as booking_id, mine.status as booking_status,
-              mine.promoted_at as booking_promoted_at,
-              coalesce(b.booked_count, 0)::int as booked_count
-         from classes cl
-         left join class_bookings mine
-           on mine.class_id = cl.id and mine.member_id = $1 and mine.status <> 'cancelled'
-         left join (
-           select class_id, count(*) as booked_count
-             from class_bookings
-            where status = 'booked'
-            group by class_id
-         ) b on b.class_id = cl.id
-        where cl.starts_at >= now()
-        order by cl.starts_at asc`,
-      [memberId],
-    );
-    return rows;
-  });
+  return withTenantContext(identity, (c) =>
+    listUpcomingClassesForMemberQuery(c, memberId),
+  );
 }
 
 /** The member's confirmed upcoming bookings (portal "upcoming bookings" section). */
