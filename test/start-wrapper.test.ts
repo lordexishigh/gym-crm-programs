@@ -396,6 +396,34 @@ describe("scripts/lib/build-lock.mjs — the artifact list matches a real build"
       return;
     }
 
+    // BUILD_ID's presence does NOT mean `.next` currently holds a production
+    // build, and assuming it did made this case fail on a perfectly good working
+    // tree. `next build` and `next dev` write the same directory: after the
+    // ordinary `npm run build` then `npm run dev` sequence, BUILD_ID survives
+    // from the build while routes-manifest.json has been REPLACED with the
+    // dev-shaped one. `buildDefects` is right to reject that — it is exactly the
+    // state that kills `next start` — so what it returns there is a true
+    // positive, not the over-requiring this case exists to catch.
+    //
+    // Discriminate on the manifest shape rather than on BUILD_ID, so the
+    // assertion below runs against a genuine build and a dev-contaminated
+    // checkout is skipped instead of failing an unrelated change. Verified
+    // against Next 15.5.23: `next build` emits dataRoutes/staticRoutes/
+    // dynamicRoutes, and dev-bundler's routes-manifest.json has none of them.
+    const manifestPath = path.join(ROOT, ".next", "routes-manifest.json");
+    if (!existsSync(manifestPath)) return;
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      return;
+    }
+    if (!Array.isArray((manifest as { dataRoutes?: unknown })?.dataRoutes)) {
+      // A dev server has written over the build in this checkout. Re-run after
+      // `npm run build` to exercise this guard.
+      return;
+    }
+
     expect(buildDefects(ROOT)).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import {
   submitDeletionRequest,
 } from "@/lib/gdpr/deletion-requests";
 import { reportHandledError } from "@/lib/observability/monitoring";
+import { hasCapability } from "@/lib/capabilities";
 
 /**
  * Member portal Server Actions (Phase GA — ga-engagement-001).
@@ -107,10 +108,17 @@ export async function bookClassAction(
   }
 
   revalidatePath("/portal");
+  // Only promise the email on a deployment that can actually send one. A member
+  // told "we'll email you" then waits on an inbox instead of checking the
+  // portal — and the promotion, when it comes, is real and visible here. So the
+  // fallback points them at the place that always works rather than dropping
+  // the reassurance entirely.
   return {
     success:
       result.status === "waitlisted"
-        ? "You're on the waitlist — we'll email you if a spot opens up."
+        ? hasCapability("email")
+          ? "You're on the waitlist — we'll email you if a spot opens up."
+          : "You're on the waitlist — check back here, your booking updates as soon as a spot opens up."
         : "You're booked in!",
   };
 }
@@ -140,8 +148,8 @@ export async function cancelClassBookingAction(
 
   if (result.promoted.length > 0) {
     try {
-      const notified = await notifyWaitlistPromotions(result.promoted);
-      await markPromotionNotified(session.identity.tenantId, notified);
+      const notify = await notifyWaitlistPromotions(result.promoted);
+      await markPromotionNotified(session.identity.tenantId, notify.notified);
     } catch (err) {
       await reportHandledError(err, "waitlist-promotion-notify", {
         tenantId: session.identity.tenantId,

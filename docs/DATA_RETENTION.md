@@ -18,6 +18,11 @@ The behaviour described here is implemented by:
   RLS (covered by export/erasure above).
 - `migrations/0021_suggestions.sql` — the derived-claim ledger; its headline
   text is scrubbed on erasure (below).
+- `migrations/0017_payment_events.sql`, `migrations/0026_manual_payments.sql` —
+  card and off-card payment records. Exported, and scrubbed-but-retained on
+  erasure under the statutory-books exemption (below).
+- `lib/payments.ts` — off-card payment validation, the void path, and the
+  reconciliation query.
 
 ## Data subjects
 
@@ -42,7 +47,16 @@ A data subject's personal data can be exported as a portable JSON document
   (**Data & privacy → Export data (JSON)**). A member's own session can also
   export self-service via `exportMemberData` (the member RLS policies expose only
   their own rows). The export includes profile, assigned programs and exercises,
-  and — for staff-initiated exports — status history and invites.
+  workout logs, check-ins, class bookings, **payment history — both card
+  (`payment_events`) and off-card (`manual_payment`)** — and, for
+  staff-initiated exports, status history, invites and follow-up tasks.
+
+  Card payment history was **missing** from the export until migration 0026's
+  work: a member's payments are their personal data under Art. 15, and both
+  halves are now included. Voided off-card payments are included too, carrying
+  `voided_at` and `void_reason` — a void is a correction, not a deletion, and an
+  export that silently dropped it would be less complete than the controller's
+  own books.
 - **Staff** — `exportStaffData` returns the staff profile plus an activity
   summary (counts of programs/assignments/invites/status-changes they authored).
 
@@ -70,7 +84,7 @@ What is scrubbed on erasure:
 
 | Subject | Fields anonymised |
 | ------- | ----------------- |
-| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, the free-text `title` on every `member_task` → `"[erased]"`, the free-text `headline` on every `suggestions` row about the member → `"[erased]"`, and the member's own `reason` on any `member_deletion_request` → null. |
+| Member  | `full_name` → `"Erased member"`, `email`/`phone`/`notes` → null, `status` → `inactive`, `auth_user_id` → null (portal access severed), pending invites revoked and invite `email` tombstoned, the free-text `note` on every `workout_log` → null, the free-text `title` on every `member_task` → `"[erased]"`, the free-text `headline` on every `suggestions` row about the member → `"[erased]"`, the member’s own `reason` on any `member_deletion_request` → null, and on every `manual_payment` the `note` and `reference` → null with `void_reason` → `"[erased]"` where the row was voided. |
 | Staff   | `email` → unique tombstone, `full_name` → null, `auth_user_id` → null. |
 
 Workout logs (`workout_log`, Phase GA) are the member's own data: they are
@@ -78,6 +92,24 @@ included in the member export (and member self-export), and on erasure their
 free-text notes are scrubbed while the (now anonymised) rows are kept — they
 carry only the tombstoned `member_id` plus aggregate effort/timing, preserving
 referential integrity exactly like assignments and status history.
+
+Payments (`payment_events`, migration 0017 — card, written by the Stripe
+webhook; and `manual_payment`, migration 0026 — off-card cash/bank/SEPA, entered
+by staff) are the **one category whose rows are deliberately NOT deletable on
+erasure**. They are the gym's statutory accounting records: the controller has a
+legal obligation to retain its books, and Art. 17(3)(b) exempts processing
+necessary to comply with it. So erasure keeps the amount, currency, method and
+date — which describe a transaction, not a person — and removes everything
+identifying.
+
+For `manual_payment` that means the staff-authored `note` and the bank
+`reference` (a SEPA reference can carry the payer's own name) are nulled, and
+`void_reason` is tombstoned rather than nulled where the row was voided, because
+the table's `manual_payment_void_complete` CHECK requires a voided row to keep a
+reason. `payment_events` holds no free text at all, so it needs no scrub — only
+its `member_id`, which points at an already-tombstoned member. Neither table has
+a member write path: `manual_payment_self_select` is SELECT-only, so a member can
+read their payment history but can never assert that they paid.
 
 Follow-up tasks (`member_task`, CRM-IDEAS "Apply now" #5) are a staff-internal
 controller record, not member-facing data — like status history and invites,

@@ -53,6 +53,9 @@ const EXPECTED_TENANTED_TABLES = [
   // Member-filed right-to-erasure requests — a member may file and read their
   // OWN only, so its isolation is pinned explicitly (see 0026).
   "member_deletion_request",
+  // Human-entered off-card payments (0026). Financial records naming a member,
+  // so its isolation is pinned explicitly rather than left to discovery alone.
+  "manual_payment",
 ] as const;
 
 type CatalogRow = {

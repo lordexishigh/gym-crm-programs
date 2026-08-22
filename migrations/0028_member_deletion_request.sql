@@ -1,4 +1,4 @@
--- 0026_member_deletion_request.sql
+-- 0028_member_deletion_request.sql
 -- Member-initiated right-to-erasure requests (beta-gdpr-002 — "Member PII
 -- erasure workflow").
 --
