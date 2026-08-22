@@ -167,7 +167,7 @@ jobs:
       # (never per-PR), and the failure it catches is the whole product being
       # down while every signal says green. It drives the real public sign-in for
       # both audiences over HTTPS with no privileged access — see
-      # e2e/live/staff-login.spec.ts and e2e/live/member-portal.spec.ts.
+      # e2e/live/staff-login.spec.ts and e2e/live/member-login.spec.ts.
       #
       # Deliberately NOT `continue-on-error`. A red mark here means production is
       # broken for real users right now, which is not something to let scroll by.
