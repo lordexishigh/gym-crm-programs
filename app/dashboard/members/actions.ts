@@ -3,7 +3,7 @@
 import type { PoolClient } from "pg";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { validateMemberInput } from "@/lib/members";
 import {
@@ -55,7 +55,7 @@ export async function createMemberAction(
   _prev: MemberFormState,
   formData: FormData,
 ): Promise<MemberFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const parsed = validateMemberInput({
     fullName: formData.get("fullName"),
@@ -132,7 +132,7 @@ export async function updateMemberAction(
   _prev: MemberFormState,
   formData: FormData,
 ): Promise<MemberFormState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing member id." };
@@ -252,7 +252,7 @@ export async function sendInviteAction(
   _prev: InviteState,
   formData: FormData,
 ): Promise<InviteState> {
-  const session = await requireStaff();
+  const session = await requireCapability("invites.manage");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return { error: "Missing member id." };
@@ -408,7 +408,7 @@ export async function revokeInviteAction(
   _prev: InviteState,
   formData: FormData,
 ): Promise<InviteState> {
-  const session = await requireStaff();
+  const session = await requireCapability("invites.manage");
 
   const inviteId = String(formData.get("inviteId") ?? "");
   const memberId = String(formData.get("memberId") ?? "");
@@ -449,7 +449,9 @@ export async function revokeInviteAction(
  * theirs and asks for a new one.
  */
 export async function regeneratePinAction(formData: FormData): Promise<void> {
-  const session = await requireStaff();
+  // The PIN is a check-in credential, so this belongs to whoever runs the desk
+  // — including a front-desk account, which is usually the one being asked.
+  const session = await requireCapability("checkin");
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return;
 
@@ -478,7 +480,7 @@ export type PhotoActionState = { error?: string; success?: string };
 export async function uploadMemberPhotoAction(
   formData: FormData,
 ): Promise<PhotoActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
@@ -545,7 +547,7 @@ export async function uploadMemberPhotoAction(
 export async function removeMemberPhotoAction(
   formData: FormData,
 ): Promise<PhotoActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId || !isUuid(memberId)) return { error: "Member not found." };
@@ -568,9 +570,10 @@ export async function removeMemberPhotoAction(
 }
 
 // ---------------------------------------------------------------------------
-// GDPR data-subject rights (beta-gdpr-001/002). Both actions are staff-gated via
-// requireStaff() and run through the RLS-scoped client, so a cross-tenant id is
-// invisible — the export/erasure simply finds no subject.
+// GDPR data-subject rights (beta-gdpr-001/002). Both actions require the
+// `gdpr.manage` capability — owner and trainer, never front desk — and run
+// through the RLS-scoped client, so a cross-tenant id is invisible: the
+// export/erasure simply finds no subject.
 
 export type ExportActionResult =
   | { ok: true; filename: string; json: string }
@@ -585,7 +588,7 @@ export type ExportActionResult =
 export async function exportMemberAction(
   memberId: string,
 ): Promise<ExportActionResult> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
   if (!memberId) return { ok: false, error: "Missing member id." };
 
   let json: string;
@@ -619,7 +622,7 @@ export async function eraseMemberAction(
   _prev: EraseActionState,
   formData: FormData,
 ): Promise<EraseActionState> {
-  const session = await requireStaff();
+  const session = await requireCapability("gdpr.manage");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return { error: "Missing member id." };
@@ -651,7 +654,7 @@ export async function eraseMemberAction(
 
 // ---------------------------------------------------------------------------
 // Trainer follow-up tasks / reminders (CRM-IDEAS "Apply now" #5). Staff-only —
-// enforced by requireStaff() and, as the real boundary, the staff-only
+// enforced by the `members.write` capability and, as the real boundary, the
 // `member_task_staff_all` RLS policy (migration 0013): a member session cannot
 // read or write this table at all, and a cross-tenant memberId/taskId resolves
 // to no row.
@@ -663,7 +666,7 @@ export async function createMemberTaskAction(
   _prev: MemberTaskState,
   formData: FormData,
 ): Promise<MemberTaskState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const memberId = String(formData.get("memberId") ?? "");
   if (!memberId) return { error: "Missing member id." };
@@ -697,7 +700,7 @@ export async function completeMemberTaskAction(
   _prev: MemberTaskState,
   formData: FormData,
 ): Promise<MemberTaskState> {
-  const session = await requireStaff();
+  const session = await requireCapability("members.write");
 
   const taskId = String(formData.get("taskId") ?? "");
   const memberId = String(formData.get("memberId") ?? "");

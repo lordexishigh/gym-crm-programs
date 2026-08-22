@@ -316,6 +316,62 @@ export async function todaysCheckIns(identity: Identity): Promise<CheckInLogRow[
   });
 }
 
+export type MemberAttendance = {
+  /** Most recent visits first, capped at `MEMBER_ATTENDANCE_LIMIT`. */
+  visits: CheckInLogRow[];
+  /** Every recorded visit, not just the ones listed. */
+  totalVisits: number;
+  /** Start of the most recent visit, or null for a member who has never come in. */
+  lastVisitAt: string | null;
+};
+
+/** How many individual visits the member's attendance panel lists. */
+export const MEMBER_ATTENDANCE_LIMIT = 20;
+
+/**
+ * One member's attendance history — the lookup the front desk is asked for
+ * ("when were they last in?", "have they used the ten visits they paid for?").
+ *
+ * Returns the recent visits AND the lifetime count, because the two answer
+ * different questions and computing the count from a truncated list would
+ * quietly understate it. RLS scopes both to the caller's own gym, so a foreign
+ * `memberId` resolves to an empty history rather than to someone else's.
+ */
+export async function memberAttendance(
+  identity: Identity,
+  memberId: string,
+): Promise<MemberAttendance> {
+  return withTenantContext(identity, async (c) => {
+    const visits = (
+      await c.query<CheckInLogRow>(
+        `select ci.id, ci.member_id, m.full_name as member_name, ci.method,
+                ci.checked_in_at, ci.checked_out_at,
+                (ci.checked_out_at is null
+                 and ci.checked_in_at > now() - ($2 || ' hours')::interval) as is_present
+           from check_ins ci
+           join member m on m.id = ci.member_id
+          where ci.member_id = $1
+          order by ci.checked_in_at desc
+          limit ${MEMBER_ATTENDANCE_LIMIT}`,
+        [memberId, String(STALE_VISIT_HOURS)],
+      )
+    ).rows;
+
+    const total = (
+      await c.query<{ count: string }>(
+        "select count(*) as count from check_ins where member_id = $1",
+        [memberId],
+      )
+    ).rows[0];
+
+    return {
+      visits,
+      totalVisits: Number(total?.count ?? 0),
+      lastVisitAt: visits[0]?.checked_in_at ?? null,
+    };
+  });
+}
+
 /**
  * How many members are in the building right now (feedback-2026-08: "showcase
  * live checked in number of members in the dashboard").

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireStaff } from "@/lib/auth/session";
+import { requireCapability } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import type { ExerciseRow, ProgramRow } from "@/lib/programs";
 import type { LibraryExerciseRow } from "@/lib/exercise-library";
@@ -30,7 +30,7 @@ export default async function ProgramDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireStaff();
+  const session = await requireCapability("programs.read");
 
   const data = await withTenantContext(session.identity, async (c) => {
     const program = (

@@ -2,7 +2,11 @@ import Link from "next/link";
 import { requireStaff } from "@/lib/auth/session";
 import { withTenantContext } from "@/lib/db";
 import { logoutAction } from "@/lib/auth/actions";
-import { getStaffRole } from "@/lib/staff";
+import {
+  STAFF_ROLE_LABELS,
+  staffCan,
+  type StaffCapability,
+} from "@/lib/permissions";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { NavLink } from "./NavLink";
 
@@ -16,25 +20,32 @@ export const dynamic = "force-dynamic";
  * The gym name is resolved through `withTenantContext` so RLS confirms the
  * session resolves to exactly one tenant — the staff member's own gym.
  */
-const BASE_NAV = [
-  { href: "/dashboard", label: "Overview" },
+/**
+ * Every dashboard section, each tagged with the capability that opens it.
+ *
+ * The nav is COSMETIC — the real gate is `requireCapability` on each route and
+ * its Server Actions, plus the RLS policies in 0026. It is filtered anyway
+ * because a nav full of links that bounce you back to the overview is a worse
+ * experience than a nav that shows the job you actually have. `null` means
+ * every staff role sees it.
+ */
+const NAV: { href: string; label: string; needs: StaffCapability | null }[] = [
+  { href: "/dashboard", label: "Overview", needs: null },
   // Sits second, beside the roster it draws from: the review queue is only ever
   // read in reference to a member, and burying it behind Templates would make a
   // time-sensitive list (a member who stopped training three weeks ago) the
   // least discoverable thing in the nav.
-  { href: "/dashboard/suggestions", label: "Needs review" },
-  { href: "/dashboard/members", label: "Members" },
-  { href: "/dashboard/invites", label: "Invites" },
-  { href: "/dashboard/classes", label: "Classes" },
-  { href: "/dashboard/checkin", label: "Check-in" },
-  { href: "/dashboard/programs", label: "Programs" },
-  { href: "/dashboard/exercises", label: "Exercises" },
-  { href: "/dashboard/templates", label: "Templates" },
+  { href: "/dashboard/suggestions", label: "Needs review", needs: "programs.read" },
+  { href: "/dashboard/members", label: "Members", needs: "members.read" },
+  { href: "/dashboard/invites", label: "Invites", needs: "invites.manage" },
+  { href: "/dashboard/classes", label: "Classes", needs: "classes.read" },
+  { href: "/dashboard/checkin", label: "Check-in", needs: "checkin" },
+  { href: "/dashboard/programs", label: "Programs", needs: "programs.read" },
+  { href: "/dashboard/exercises", label: "Exercises", needs: "programs.read" },
+  { href: "/dashboard/templates", label: "Templates", needs: "programs.read" },
+  // Owner-only: billing/revenue data.
+  { href: "/dashboard/plans", label: "Plans", needs: "payments.read" },
 ];
-
-// Owner-only: billing/revenue data, hidden from trainers server-side (the nav
-// is cosmetic — the actual gate is `requireOwner` on the /plans route itself).
-const OWNER_NAV = [{ href: "/dashboard/plans", label: "Plans" }];
 
 export default async function DashboardLayout({
   children,
@@ -43,25 +54,18 @@ export default async function DashboardLayout({
 }) {
   const session = await requireStaff();
 
-  // Resolve the tenant name + owner/trainer role under RLS in one round trip.
-  const { gymName, staffRole } = await withTenantContext(session.identity, async (c) => {
+  // `requireStaff` has already resolved the job role (and pinned it onto the
+  // identity so RLS sees it), so this only needs the gym name.
+  const { staffRole } = session;
+  const gymName = await withTenantContext(session.identity, async (c) => {
     const gym = await c.query<{ name: string }>(
       "select name from gym where id = $1",
       [session.identity.tenantId],
     );
-    const role = session.identity.userId
-      ? await c.query<{ role: "owner" | "trainer" }>(
-          "select role from users where auth_user_id = $1",
-          [session.identity.userId],
-        )
-      : { rows: [] };
-    return {
-      gymName: gym.rows[0]?.name ?? "Your gym",
-      staffRole: role.rows[0]?.role ?? "trainer",
-    };
+    return gym.rows[0]?.name ?? "Your gym";
   });
 
-  const NAV = staffRole === "owner" ? [...BASE_NAV, ...OWNER_NAV] : BASE_NAV;
+  const nav = NAV.filter((item) => !item.needs || staffCan(staffRole, item.needs));
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -89,6 +93,12 @@ export default async function DashboardLayout({
             <span className="hidden truncate text-sm text-slate-500 sm:inline">
               · {gymName}
             </span>
+            {/* Which hat the signed-in staff member is wearing. Front desk and
+                trainer see a narrower dashboard than the owner does, and saying
+                so is cheaper than letting them wonder where a section went. */}
+            <span className="hidden shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 md:inline">
+              {STAFF_ROLE_LABELS[staffRole]}
+            </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <ThemeToggle />
@@ -107,7 +117,7 @@ export default async function DashboardLayout({
           aria-label="Primary"
           className="mx-auto flex w-full max-w-5xl gap-1 overflow-x-auto px-3 pb-2"
         >
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <NavLink key={item.href} href={item.href} label={item.label} />
           ))}
         </nav>
